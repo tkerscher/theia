@@ -1,12 +1,12 @@
 #ifndef _LOOKUP_INCLUDE
 #define _LOOKUP_INCLUDE
 
-layout(buffer_reference, scalar) readonly buffer Table1D {
+layout(buffer_reference, scalar, buffer_reference_align=4) readonly buffer Table1D {
     float nx; //Number of samples - 1; float to save casting
     float samples[];
 };
 
-layout(buffer_reference, scalar) readonly buffer Table2D {
+layout(buffer_reference, scalar, buffer_reference_align=4) readonly buffer Table2D {
     float nu, nv; //Number of samples per dim - 1; float to save casting
     float samples[];
 };
