@@ -1,11 +1,26 @@
 import numpy as np
-from numpy.typing import NDArray
+from numpy.typing import ArrayLike, NDArray
 from scipy.interpolate import (
     CloughTocher2DInterpolator,
     CubicSpline,
     LinearNDInterpolator,
 )
-from typing import Literal
+from typing import Literal, Union
+
+
+def getTableSize(a: Union[ArrayLike, tuple[int, ...], None]) -> int:
+    """
+    Calculates the size in bytes needed to store a table of given shape on the
+    GPU. Returns zero if a is None.
+    """
+    if a is None:
+        return 0
+    if type(a) != tuple:
+        a = np.shape(a)
+    if len(a) == 0:
+        raise RuntimeError("table cannot have zero shape!")
+    # header + data
+    return (len(a) + sum(a)) * 4  # 4 bytes per float
 
 
 def createTable(data):
@@ -26,12 +41,10 @@ def createTable(data):
     if data.ndim > 2:
         raise RuntimeError("data must be one or two dimensional!")
 
-    if data.dtype != np.float32:
-        data = data.astype(np.float32)
-
     # header is a list with the size of each dimension minus one
     header = np.array(data.shape) - 1.0
-    return np.concatenate([header, data.flatten()])
+    data = np.concatenate([header, data.flatten()])
+    return np.ascontiguousarray(data, np.float32)
 
 
 def _parseBoundary(data, boundary, n):

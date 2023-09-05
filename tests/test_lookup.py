@@ -162,3 +162,14 @@ def test_lookup2D(sampleData2D, shaderUtil):
     p = np.stack((x.flatten(), y.flatten()), axis=-1)
     z = interp(p)
     assert np.abs(z - buffer.numpy()).max() < 1e-6
+
+
+def test_getTableSize(sampleData1D, sampleData2D):
+    assert (
+        theia.lookup.getTableSize(sampleData1D[:, 1])
+        == theia.lookup.createTable(sampleData1D[:, 1]).nbytes
+    )
+    assert (
+        theia.lookup.getTableSize(sampleData2D[:, 2])
+        == theia.lookup.createTable(sampleData2D[:, 2]).nbytes
+    )
