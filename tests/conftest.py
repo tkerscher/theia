@@ -1,3 +1,4 @@
+import numpy as np
 import hephaistos as hp
 import importlib.resources
 import os.path
@@ -41,3 +42,19 @@ class ShaderUtil:
 @pytest.fixture(scope="session")
 def shaderUtil():
     return ShaderUtil()
+
+
+@pytest.fixture(scope="session")
+def testDataDir():
+    return os.path.join(os.path.dirname(__file__), "data")
+
+
+@pytest.fixture(scope="session")
+def dataDir():
+    return importlib.resources.files("theia").joinpath("data")
+
+
+@pytest.fixture(scope="function")
+def rng():
+    # create a fresh generator so each test is reproducible and independent
+    return np.random.default_rng(0xC0FFEE)
