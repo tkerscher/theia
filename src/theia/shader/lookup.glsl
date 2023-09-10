@@ -23,7 +23,9 @@ float lookUp(const Table1D table, float u, float nullValue) {
     int hi = int(ceil(u));
     float l = fract(u);
 
-    return mix(table.samples[lo], table.samples[hi], l);
+    // for whatever reason mix() can't handle inf...
+    return table.samples[lo] * (1.0 - l) + table.samples[hi] * l;
+    //return mix(table.samples[lo], table.samples[hi], l);
 }
 float lookUp(const Table1D table, float u) {
     return lookUp(table, u, 0.0);
@@ -58,8 +60,12 @@ vec2 lookUpDx(const Table1D table, float u, vec2 nullValue) {
     float dxLo = (vHi - vLoLo) / float(max(hi - lolo, 1));
     float dxHi = (vHiHi - vLo) / float(max(hihi - lo, 1));
 
-    float value = mix(vLo, vHi, l);
-    float dx = mix(dxLo, dxHi, l) * table.nx;
+    // for whatever reason mix() can't handle inf...
+    // float value = mix(vLo, vHi, l);
+    // float dx = mix(dxLo, dxHi, l) * table.nx;
+    float value = vLo * (1.0 - l) + vHi * l;
+    float dx = dxLo * (1.0 - l) + dxHi * l;
+    dx *= table.nx; // compensate parameter change
 
     return vec2(value, dx);
 }
@@ -91,10 +97,14 @@ float lookUp2D(const Table2D table, float u, float v, float nullValue) {
     int Q21 = v_hi * stride + u_lo;
     int Q22 = v_hi * stride + u_hi;
 
-    float lo = mix(table.samples[Q11], table.samples[Q12], ul);
-    float hi = mix(table.samples[Q21], table.samples[Q22], ul);
+    // for whatever reason mix() can't handle inf...
+    // float lo = mix(table.samples[Q11], table.samples[Q12], ul);
+    // float hi = mix(table.samples[Q21], table.samples[Q22], ul);
+    float lo = table.samples[Q11] * (1.0 - ul) + table.samples[Q12] * ul;
+    float hi = table.samples[Q21] * (1.0 - ul) + table.samples[Q22] * ul;
 
-    return mix(lo, hi, vl);
+    return lo * (1.0 - vl) + hi * vl;
+    // return mix(lo, hi, vl);
 }
 float lookUp2D(const Table2D table, float u, float v) {
     return lookUp2D(table, u, v, 0.0);
