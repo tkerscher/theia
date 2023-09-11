@@ -53,7 +53,7 @@ def test_lookup1D(sampleData1D, shaderUtil):
         hp.beginSequence()
         .And(program.dispatchPush(bytes(push), N // 32))
         .Then(hp.retrieveTensor(tensor, buffer))
-        .Submit()
+        .Submit().wait()
     )
 
     # recreate expected linear interpolation
@@ -83,7 +83,7 @@ def test_lookup1Ddx(sampleData1D, shaderUtil):
         .And(program.dispatchPush(bytes(push), N // 32))
         .Then(hp.retrieveTensor(valueTensor, value))
         .Then(hp.retrieveTensor(derivTensor, deriv))
-        .Submit()
+        .Submit().wait()
     )
 
     # recreated expected values
@@ -150,7 +150,7 @@ def test_lookup2D(sampleData2D, shaderUtil):
         hp.beginSequence()
         .And(program.dispatchPush(bytes(push), N // 4, N // 4))
         .Then(hp.retrieveImage(image, buffer))
-        .Submit()
+        .Submit().wait()
     )
 
     # recreate expected linear interpolation

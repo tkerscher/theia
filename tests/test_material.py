@@ -182,7 +182,7 @@ def test_MediumShader(shaderUtil, rng):
         .And(hp.updateTensor(query_buffer, query_tensor))
         .Then(program.dispatchPush(bytes(push), N // 32))
         .Then(hp.retrieveTensor(result_tensor, result_buffer))
-        .Submit()
+        .Submit().wait()
     )
 
     # recreate expected result
@@ -268,7 +268,7 @@ def test_MaterialShader(shaderUtil, rng):
         .And(hp.updateTensor(query_buffer, query_tensor))
         .Then(program.dispatch(N // 32))
         .Then(hp.retrieveTensor(result_tensor, result_buffer))
-        .Submit()
+        .Submit().wait()
     )
 
     # recreate expected result

@@ -17,7 +17,7 @@ def test_philox(shaderUtil):
         hp.beginSequence()
         .And(program.dispatch(Streams // 32))
         .And(hp.retrieveTensor(tensor, buffer))
-        .Submit()
+        .Submit().wait()
     )
 
     # checking randomness is a bit much for a unit test
