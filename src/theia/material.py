@@ -561,7 +561,7 @@ class MediumModel:
         Returns None if not defined.
         """
         return None
-    
+
     def scattering_coef(self, wavelength: npt.ArrayLike) -> Union[npt.NDArray, None]:
         """
         Returns the scattering coefficient in units 1/m for the given
