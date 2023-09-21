@@ -14,21 +14,14 @@ layout(buffer_reference, scalar, buffer_reference_align=4) readonly buffer Index
     ivec3 idx;
 };
 
-layout(buffer_reference, scalar, buffer_reference_align=8) readonly buffer Geometry {
+struct Geometry{
     Vertex vertices;    // &vertices[0]
     Index indices;      // &indices[0]
     Material material;
 };
+layout(scalar) buffer Geometries{ Geometry geometries[]; };
 
 uniform accelerationStructureEXT tlas;
-
-layout(scalar) uniform Scene {
-    Geometry geometries;    // &geometries[0]
-    Medium medium;          // medium of environment
-    // vec3 lowerBound;        // first corner of bounding box
-    // vec3 upperBound;        // second corner of bounding box
-    // float maxRayLength;     // max ray length
-} scene;
 
 bool traverseScene(inout Ray ray, float dist, rayQueryEXT query) {
     //NOTE: while query is a "in" parameter and thus copied it's actually sort

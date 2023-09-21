@@ -54,7 +54,7 @@ void main() {
         vec2 _bar = rayQueryGetIntersectionBarycentricsEXT(rayQuery, true);
         vec3 bar = vec3(1.0 - _bar.x - _bar.y, _bar.x, _bar.y);
         //get vertices
-        Geometry geom = scene.geometries[geoIdx];
+        Geometry geom = geometries[geoIdx];
         ivec3 index = geom.indices[trIdx].idx;
         Vertex v0 = geom.vertices[index.x];
         Vertex v1 = geom.vertices[index.y];

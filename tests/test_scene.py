@@ -89,12 +89,8 @@ def test_traverseScene(rng, shaderUtil):
 
     # create and run test
     program = shaderUtil.createTestProgram("scene.traverse.test.glsl")
-    program.bindParams(
-        tlas=scene.tlas,
-        Scene=scene.scene,
-        QueryBuffer=query_tensor,
-        ResultBuffer=result_tensor,
-    )
+    scene.bindParams(program)
+    program.bindParams(QueryBuffer=query_tensor, ResultBuffer=result_tensor)
     (
         hp.beginSequence()
         .And(hp.updateTensor(query_buffer, query_tensor))

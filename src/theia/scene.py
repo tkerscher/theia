@@ -232,15 +232,6 @@ class Scene:
             ("material", c_uint64),
         ]
 
-    class GLSLScene(Structure):
-        """Equivalent structure for the Scene type used in the shader"""
-
-        _fields_ = [
-            ("geometries", c_uint64),
-            ("medium", c_uint64),
-            # ("maxRayLength", c_float)
-        ]
-
     def __init__(
         self, instances: Iterable[MeshInstance], materials: dict[str, int], medium: int
     ) -> None:
@@ -272,26 +263,23 @@ class Scene:
         self._geometries = hp.ArrayTensor(Scene.GLSLGeometry, len(instances))
         hp.execute(hp.updateTensor(geometries, self._geometries))
 
-        # build scene ubo
-        sceneBuffer = hp.StructureBuffer(Scene.GLSLScene)
-        sceneBuffer.medium = medium
-        sceneBuffer.geometries = self._geometries.address
-        self._scene = hp.StructureTensor(Scene.GLSLScene)
-        hp.execute(hp.updateTensor(sceneBuffer, self._scene))
-
         # in order to pass to hephaistos.AccelerationStructure, we need to
         # extract the hephaistos.GeometryInstance from the MeshInstance
         self._tlas = hp.AccelerationStructure([i.instance for i in instances])
 
     @property
-    def scene(self) -> hp.ByteTensor:
-        """The tensor holding the scene UBO"""
-        return self._scene
+    def geometries(self) -> hp.ByteTensor:
+        """The tensor holding the array of geometries in the scene"""
+        return self._geometries
 
     @property
     def tlas(self) -> hp.AccelerationStructure:
         """The acceleration structure describing the scene's geometry"""
         return self._tlas
+
+    def bindParams(self, program: hp.Program) -> None:
+        """Binds the parameters describing the scene in the given program"""
+        program.bindParams(tlas=self.tlas, Geometries=self.geometries)
 
 
 class SceneRender:
@@ -480,9 +468,8 @@ class SceneRender:
             self.maxDistance = maxDistance
 
         # bind parameters
-        self._program.bindParams(
-            tlas=scene.tlas, Scene=scene.scene, outImage=self._image
-        )
+        scene.bindParams(self._program)
+        self._program.bindParams(outImage=self._image)
         # run shader
         hp.beginSequence().And(
             self._program.dispatchPush(
