@@ -7,8 +7,8 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 #extension GL_EXT_ray_query : require
 
-#include "scene.glsl"
 #include "philox.glsl"
+#include "scene.glsl"
 
 layout(local_size_x = 32) in;
 
@@ -31,8 +31,6 @@ struct Result {
 layout(scalar) readonly buffer QueryBuffer{ Query query[]; };
 layout(scalar) writeonly buffer ResultBuffer{ Result result[]; };
 
-layout(scalar) buffer Debug{ uint64_t d[]; };
-
 layout(scalar, push_constant) uniform Push{
     Medium medium;
     //float wavelength;
@@ -41,12 +39,9 @@ layout(scalar, push_constant) uniform Push{
 void main() {
     uint i = gl_GlobalInvocationID.x;
     Query q = query[i];
-
-    if (i == 0) {
-        d[0] = uint64_t(push.medium);
-        d[1] = uint64_t(push.medium.mu_s);
-        d[2] = uint64_t(0);
-    }
+    //init philox
+    uvec2 key = uvec2(0xDEADBEEF, 0x00C0FFEE + i);
+    philox_init(key, uvec4(0));
 
     //init ray
     Ray ray = initRay(

@@ -91,24 +91,19 @@ def test_traverseScene(rng, shaderUtil):
     # create push constants
     push = Push(medium=media["water"])
 
-    debug_buf = hp.LongBuffer(3)
-    debug_ten = hp.LongTensor(3)
-
     # create and run test
     program = shaderUtil.createTestProgram("scene.traverse.test.glsl")
     program.bindParams(
         tlas=scene.tlas,
         Scene=scene.scene,
         QueryBuffer=query_tensor,
-        ResultBuffer=result_tensor,
-        Debug=debug_ten,
+        ResultBuffer=result_tensor
     )
     (
         hp.beginSequence()
         .And(hp.updateTensor(query_buffer, query_tensor))
         .Then(program.dispatchPush(bytes(push), N // 32))
         .Then(hp.retrieveTensor(result_tensor, result_buffer))
-        .And(hp.retrieveTensor(debug_ten, debug_buf))
         .Submit()
         .wait()
     )
