@@ -1,7 +1,5 @@
 import numpy as np
 import hephaistos as hp
-import importlib.resources
-import os.path
 import theia.material
 import theia.scene
 from ctypes import *
@@ -32,9 +30,7 @@ def test_traverseScene(rng, shaderUtil):
         ]
 
     class Push(Structure):
-        # TODO: For whatever reason I can't add another field without corrupting
-        #      the first one !?
-        _fields_ = [("medium", c_uint64)]
+        _fields_ = [("medium", c_uint64), ("wavelength", c_float)]
 
     # build material
     class WaterModel(
@@ -89,7 +85,7 @@ def test_traverseScene(rng, shaderUtil):
     queries["log_prob"] = rng.random(N)
     queries["t0"] = 50.0 * rng.random(N)
     # create push constants
-    push = Push(medium=media["water"])
+    push = Push(medium=media["water"], wavelength=wavelength)
 
     # create and run test
     program = shaderUtil.createTestProgram("scene.traverse.test.glsl")
@@ -97,7 +93,7 @@ def test_traverseScene(rng, shaderUtil):
         tlas=scene.tlas,
         Scene=scene.scene,
         QueryBuffer=query_tensor,
-        ResultBuffer=result_tensor
+        ResultBuffer=result_tensor,
     )
     (
         hp.beginSequence()

@@ -33,7 +33,7 @@ layout(scalar) writeonly buffer ResultBuffer{ Result result[]; };
 
 layout(scalar, push_constant) uniform Push{
     Medium medium;
-    //float wavelength;
+    float wavelength;
 } push;
 
 void main() {
@@ -47,7 +47,7 @@ void main() {
     Ray ray = initRay(
         q.position,
         q.direction,
-        500.0, //push.wavelength, //for whatever reason adding the wavelength corrups the medium pointer !?
+        push.wavelength,
         push.medium,
         q.log_trans,
         q.t0);
