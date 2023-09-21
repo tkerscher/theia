@@ -13,8 +13,8 @@ struct Ray {
     vec3 direction;
     float wavelength;
 
-    float radiance;
-    float probability;
+    float log_trans;    //log(transmission)
+    float log_prob;     //log(probability)
     float travelTime;
 
     Medium medium;
@@ -26,15 +26,15 @@ Ray initRay(
     vec3 direction,
     float wavelength,
     const Medium medium,
-    float radiance,
+    float log_transmission,
     float delta_time
 ) {
     return Ray(
         position,
         direction,
         wavelength,
-        radiance,
-        1.0,
+        log_transmission,
+        0.0, //log(p) = log(1.0) = 0.0
         delta_time,
         medium,
         lookUpMedium(medium, wavelength)
@@ -46,7 +46,14 @@ Ray initRay(
     float wavelength,
     const Medium medium
 ) {
-    return initRay(position, direction, wavelength, medium, 1.0, 0.0);
+    return initRay(
+        position,
+        direction,
+        wavelength,
+        medium,
+        0.0,        // log_transmission
+        0.0         // log_prob
+    );
 }
 
 //////////////////////////////// MEDIUM SCATTER ////////////////////////////////
@@ -91,7 +98,7 @@ void scatterMedium(inout Ray ray, float cos_theta, float phi) {
     //calculate transmission
     //note, that calling this function is only valid if ray.medium is not null
     //since null means a vacuum, this should never happen
-    ray.radiance *= lookUp(ray.medium.phase, cos_theta, INV_4PI);
+    ray.log_trans += lookUp(ray.medium.log_phase, cos_theta, INV_4PI);
 }
 
 // // Importance sampling using the phase function
@@ -148,7 +155,7 @@ float reflectance(const Ray ray, const Material material, vec3 normal) {
 void reflectMaterial(inout Ray ray, const Material mat, vec3 normal) {
     //decision made elsewhere, just update ray
 
-    ray.radiance *= reflectance(ray, mat, normal);
+    ray.log_trans += log(reflectance(ray, mat, normal));
     ray.direction = normalize(reflect(ray.direction, normal));
 }
 
@@ -165,7 +172,7 @@ void transmitMaterial(inout Ray ray, const Material mat, vec3 normal) {
     //update ray
     float n_i = ray.constants.n;
     float n_t = const_t.n;
-    ray.radiance *= 1.0 - reflectance(ray, mat, normal);
+    ray.log_trans += log(1.0 - reflectance(ray, mat, normal));
     ray.medium = med_t;
     ray.constants = const_t;
     //flip the normal if we go outside

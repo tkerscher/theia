@@ -36,8 +36,8 @@ float checkMedium(const Ray ray) {
     //check if values match
     if (abs(consts.n - ray.constants.n) >= 5e-7) { return -1.0; }
     if (abs(consts.vg - ray.constants.vg) >= 5e-7) { return -1.0; }
-    if (abs(consts.mu_a - ray.constants.mu_a) >= 5e-7) { return -1.0; }
     if (abs(consts.mu_s - ray.constants.mu_s) >= 5e-7) { return -1.0; }
+    if (abs(consts.mu_e - ray.constants.mu_e) >= 5e-7) { return -1.0; }
     //everything matches
     return 1.0;
 }
@@ -54,7 +54,7 @@ void main() {
 
     //save result
     r[i].direction = ray.direction;
-    r[i].transmission = ray.radiance;
+    r[i].transmission = exp(ray.log_trans);
     r[i].refractive_index = ray.constants.n;
     //check here if the media and constants match
     //checking this in python would be unnecessary hard

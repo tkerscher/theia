@@ -22,9 +22,9 @@ struct Query {
 struct Result {
     float n;
     float vg;
-    float mu_a;
     float mu_s;
-    float phase;
+    float mu_e;
+    float log_phase;
     float angle; //cos theta
 };
 
@@ -39,9 +39,9 @@ Result sampleMedium(const Medium medium, float lambda, float theta, float eta) {
     return Result(
         constants.n,
         constants.vg,
-        constants.mu_a,
         constants.mu_s,
-        hasMedium ? lookUp(medium.phase, 0.5 * (theta + 1.0)) : 0.0,
+        constants.mu_e,
+        hasMedium ? lookUp(medium.log_phase, 0.5 * (theta + 1.0)) : 0.0,
         hasMedium ? lookUp(medium.phase_sampling, eta) : 0.0
     );
 }
@@ -52,18 +52,6 @@ void main() {
     float theta = queries[i].theta;
     float eta = queries[i].eta;
     Material mat = queries[i].material;
-    //Medium med = queries[i].medium;
-    //results[2*i + 0] = sampleMedium(med, wavelength, theta, eta);
-
-    // if (i == 0) {
-    //     d[0] = uint64_t(med);
-    //     d[1] = uint64_t(med.n);
-    //     d[2] = uint64_t(med.vg);
-    //     d[3] = uint64_t(med.mu_a);
-    //     d[4] = uint64_t(med.mu_s);
-    //     d[5] = uint64_t(med.phase);
-    //     d[6] = uint64_t(med.phase_sampling);
-    // }
 
     // sample both inside and outside medium
     results[2*i + 0] = sampleMedium(mat.inside, wavelength, theta, eta);

@@ -40,5 +40,5 @@ void main() {
 
     //save result
     r[i].direction = ray.direction;
-    r[i].transmission = ray.radiance;
+    r[i].transmission = exp(ray.log_trans);
 }

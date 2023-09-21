@@ -6,12 +6,15 @@ import theia.lookup
 import warnings
 from collections.abc import Iterable
 from ctypes import Structure, c_float, c_uint64, addressof, memmove, sizeof
-from scipy.constants import speed_of_light
 from scipy.interpolate import CubicSpline
-from typing import Union
+from typing import Final, Union
 
 
 #################################### COMMON ####################################
+
+
+speed_of_light: Final[float] = 0.299_792_458  # m / ns
+"""speed of light in meter per nanosecond"""
 
 
 class Medium:
@@ -41,9 +44,10 @@ class Medium:
     scattering_coef: ArrayLike | None, default = None
         Table of scattering coefficient in units of 1/m as function of wavelength.
         None defaults to a constant value of 0.0.
-    phase_function: ArrayLike | None, default = None
-        Table of scattering phase function as a function of the cosine of the
-        angle between incoming and outgoing ray in radians over the range [0,1].
+    log_phase_function: ArrayLike | None, default = None
+        Table of logarithmic scattering phase function as a function of the
+        cosine of the angle between incoming and outgoing ray in radians over
+        the range [0,1].
         None defaults to a constant value of 1, i.e. uniform scattering.
     phase_sampling: ArrayLike | None, default = None
         Table containing values of the inverse cumulative density function of
@@ -61,7 +65,7 @@ class Medium:
             ("vg", c_uint64),  # Table1D
             ("mu_a", c_uint64),  # Table1D
             ("mu_s", c_uint64),  # Table1D
-            ("phase", c_uint64),  # Table1D
+            ("log_phase", c_uint64),  # Table1D
             ("phase_sampling", c_uint64),  # Table1D
         ]
 
@@ -75,7 +79,7 @@ class Medium:
         group_velocity: Union[npt.ArrayLike, None] = None,
         absorption_coef: Union[npt.ArrayLike, None] = None,
         scattering_coef: Union[npt.ArrayLike, None] = None,
-        phase_function: Union[npt.ArrayLike, None] = None,
+        log_phase_function: Union[npt.ArrayLike, None] = None,
         phase_sampling: Union[npt.ArrayLike, None] = None,
     ) -> None:
         # store properties
@@ -86,7 +90,7 @@ class Medium:
         self.group_velocity = group_velocity
         self.absorption_coef = absorption_coef
         self.scattering_coef = scattering_coef
-        self.phase_function = phase_function
+        self.log_phase_function = log_phase_function
         self.phase_sampling = phase_sampling
 
     @property
@@ -191,20 +195,21 @@ class Medium:
         self._scattering_coef = None
 
     @property
-    def phase_function(self) -> Union[npt.ArrayLike, None]:
+    def log_phase_function(self) -> Union[npt.ArrayLike, None]:
         """
-        Table of scattering phase function as a function of the cosine of the
-        angle between incoming and outgoing ray in radians over the range [0,1].
+        Table of logarithmic scattering phase function as a function of the
+        cosine of the angle between incoming and outgoing ray in radians over
+        the range [0,1].
         None defaults to a constant value of 1, i.e. uniform scattering.
         """
         return self._phase_function
 
-    @phase_function.setter
-    def phase_function(self, value: Union[npt.ArrayLike, None]) -> None:
+    @log_phase_function.setter
+    def log_phase_function(self, value: Union[npt.ArrayLike, None]) -> None:
         self._phase_function = value
 
-    @phase_function.deleter
-    def phase_function(self) -> None:
+    @log_phase_function.deleter
+    def log_phase_function(self) -> None:
         self._phase_function = None
 
     @property
@@ -236,7 +241,7 @@ class Medium:
         size += theia.lookup.getTableSize(self.group_velocity)
         size += theia.lookup.getTableSize(self.absorption_coef)
         size += theia.lookup.getTableSize(self.scattering_coef)
-        size += theia.lookup.getTableSize(self.phase_function)
+        size += theia.lookup.getTableSize(self.log_phase_function)
         size += theia.lookup.getTableSize(self.phase_sampling)
         # check if we need some padding bytes to comply with the
         # 8 byte alignment of the Medium struct
@@ -389,7 +394,7 @@ def serializeMedium(medium: Medium, dst: int, gpu_dst: int) -> tuple[int, int, i
     glsl.vg = processTable(medium.group_velocity)
     glsl.mu_a = processTable(medium.absorption_coef)
     glsl.mu_s = processTable(medium.scattering_coef)
-    glsl.phase = processTable(medium.phase_function)
+    glsl.log_phase = processTable(medium.log_phase_function)
     glsl.phase_sampling = processTable(medium.phase_sampling)
     # sanity check
     assert p - dst == nbytes_written
@@ -549,7 +554,7 @@ class MediumModel:
 
     def group_velocity(self, wavelength: npt.ArrayLike) -> Union[npt.NDArray, None]:
         """
-        Calculates the group velocity in m/s for the given wavelengths in nm.
+        Calculates the group velocity in m/ns for the given wavelengths in nm.
         Returns None if not defined.
         """
         return None
@@ -570,9 +575,9 @@ class MediumModel:
         """
         return None
 
-    def phase_function(self, cos_theta: npt.ArrayLike) -> Union[npt.NDArray, None]:
+    def log_phase_function(self, cos_theta: npt.ArrayLike) -> Union[npt.NDArray, None]:
         """
-        Evaluates the phase functions for the given values of cos theta
+        Evaluates the log phase functions for the given values of cos theta
         with theta being the angle between incoming and outgoing ray after
         scattering.
         Returns None if not defined.
@@ -624,7 +629,7 @@ class MediumModel:
             group_velocity=self.group_velocity(l),
             absorption_coef=self.absorption_coef(l),
             scattering_coef=self.scattering_coef(l),
-            phase_function=self.phase_function(t),
+            log_phase_function=self.log_phase_function(t),
             phase_sampling=self.phase_sampling(e),
         )
 
@@ -661,7 +666,7 @@ class SellmeierEquation:
 
     def group_velocity(self, wavelength: npt.ArrayLike) -> npt.NDArray:
         """
-        Calculates the group velocity in m/s for the given wavelengths in nm
+        Calculates the group velocity in m/ns for the given wavelengths in nm
         """
         n = self.refractive_index(wavelength)
         L = wavelength
@@ -759,12 +764,12 @@ class HenyeyGreensteinPhaseFunction:
                 "Asymmetry parameter outside the valid range (-1,1)!", RuntimeWarning
             )
 
-    def phase_function(self, cos_theta: npt.ArrayLike) -> npt.NDArray:
+    def log_phase_function(self, cos_theta: npt.ArrayLike) -> npt.NDArray:
         """
-        Evaluates the phase function for the given angles as cos(theta).
+        Evaluates the log phase function for the given angles as cos(theta).
         Normalized with respect to unit sphere.
         """
-        return (
+        return np.log(
             (1.0 - self.g ** 2)
             / np.power(1.0 + self.g ** 2 - 2 * self.g * cos_theta, 1.5)
             / (4.0 * np.pi)
@@ -844,8 +849,8 @@ class FournierForandPhaseFunction:
     def mu(self, value: float) -> None:
         self._mu = value
 
-    def phase_function(self, cos_theta: npt.ArrayLike) -> npt.NDArray:
-        """Evaluates the phase function for the given angles mu = cos(theta)"""
+    def log_phase_function(self, cos_theta: npt.ArrayLike) -> npt.NDArray:
+        """Evaluates the log phase function for the given angles mu = cos(theta)"""
         # constants
         nu = 0.5 * (3.0 - self.mu)
         d = 2.0 * (1.0 - cos_theta) / (3.0 * (self.n - 1.0) ** 2)
@@ -858,7 +863,7 @@ class FournierForandPhaseFunction:
         B = 4 * np.pi * (1 - d) ** 2 * d_nu
         C = (1 - d_180_nu) * (3 * x ** 2 - 1)
         D = 16 * np.pi * (d_180 - 1) * d_180_nu
-        return A / B + C / D
+        return np.log(A / B + C / D)
 
     def phase_sampling(self, eta: npt.ArrayLike) -> npt.NDArray:
         """
@@ -1018,7 +1023,9 @@ class WaterBaseModel:
         return N1 + N2 + N3 + N4
 
     def group_velocity(self, wavelength: npt.ArrayLike) -> npt.NDArray:
-        """Calculates the group velocity"""
+        """
+        Calculates the group velocity in m/ns for the given wavelengths in nm
+        """
         # formula expects wavelengths in micrometers -> convert
         L = wavelength / 1000.0
         T = self.temperature

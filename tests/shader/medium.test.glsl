@@ -19,9 +19,9 @@ struct Query {
 struct Result {
     float n;
     float vg;
-    float mu_a;
     float mu_s;
-    float phase;
+    float mu_e;
+    float log_phase;
     float angle; //cos theta
 };
 
@@ -45,9 +45,9 @@ void main() {
     results[i] = Result(
         consts.n,
         consts.vg,
-        consts.mu_a,
         consts.mu_s,
-        lookUp(push.medium.phase, 0.5 * (theta + 1.0)),
+        consts.mu_e,
+        lookUp(push.medium.log_phase, 0.5 * (theta + 1.0)),
         lookUp(push.medium.phase_sampling, eta)
     );
 }

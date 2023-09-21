@@ -4,7 +4,6 @@ import os.path
 import theia.material
 import warnings
 from ctypes import Structure, c_uint64, c_float
-from scipy.constants import speed_of_light
 from scipy.integrate import quad
 
 
@@ -19,10 +18,11 @@ def test_BK7Model(dataDir, testDataDir):
     # numerically derive group velocity to check against
     l = np.linspace(300.0, 800.0, 200)
     n = model.refractive_index(l)
-    vg_exp = speed_of_light / (n - l * np.gradient(n, 500 / (len(l) - 1)))
-    assert (
-        np.abs((vg_exp - model.group_velocity(l)) / vg_exp).max() < 1e-3
-    )  # TODO: finetune limit
+    vg_exp = theia.material.speed_of_light / (
+        n - l * np.gradient(n, 500 / (len(l) - 1))
+    )
+    assert np.abs((vg_exp - model.group_velocity(l)) / vg_exp).max() < 1e-3
+    # TODO: finetune limit
 
     # reuse the transmission data for testing
     trans = np.loadtxt(
@@ -49,7 +49,9 @@ def test_WaterBaseModel(dataDir, testDataDir):
     # numerically derive group velocity to check against
     l = np.linspace(300.0, 800.0, 200)
     n = model.refractive_index(l)
-    vg_exp = speed_of_light / (n - l * np.gradient(n, 500 / (len(l) - 1)))
+    vg_exp = theia.material.speed_of_light / (
+        n - l * np.gradient(n, 500 / (len(l) - 1))
+    )
     assert (
         np.abs((vg_exp - model.group_velocity(l)) / vg_exp).max() < 5e-3
     )  # TODO: finetune limit
@@ -69,33 +71,47 @@ def getSamplingError(rng, model, bins=50, N=int(1e6)):
     samples = model.phase_sampling(eta)
     h, edges = np.histogram(samples, bins=bins)
     p_bin = h / N
-    exp_bin = [
-        quad(model.phase_function, edges[i], edges[i + 1])[0] * 2 * np.pi
-        for i in range(bins)
-    ]
+
+    def f(x):
+        return np.exp(model.log_phase_function(x))
+
+    exp_bin = [quad(f, edges[i], edges[i + 1])[0] * 2 * np.pi for i in range(bins)]
     return np.abs(p_bin - exp_bin).max()
+
+
+def integratePhase(model):
+    """Helper function for integrating the log phase function"""
+
+    def f(x):
+        return np.exp(model.log_phase_function(x))
+
+    return quad(f, -1.0, 1.0)[0] * 2 * np.pi
 
 
 def test_HenyeyGreenstein(testDataDir, rng):
     data = np.loadtxt(
-        os.path.join(testDataDir, "phase_hg.csv"), delimiter=",", skiprows=1
+        os.path.join(testDataDir, "log_phase_hg.csv"), delimiter=",", skiprows=1
     )
     # we test the model for three different g values
     hg1 = theia.material.HenyeyGreensteinPhaseFunction(0.3)
     hg2 = theia.material.HenyeyGreensteinPhaseFunction(0.0)
     hg3 = theia.material.HenyeyGreensteinPhaseFunction(-0.5)
+    hg99 = theia.material.HenyeyGreensteinPhaseFunction(0.99)
     # test phase function
-    assert np.abs(data[:, 1] - hg1.phase_function(data[:, 0])).max() < 1e-6
-    assert np.abs(data[:, 2] - hg2.phase_function(data[:, 0])).max() < 1e-6
-    assert np.abs(data[:, 3] - hg3.phase_function(data[:, 0])).max() < 1e-6
+    assert np.abs(data[:, 1] - hg1.log_phase_function(data[:, 0])).max() < 1e-6
+    assert np.abs(data[:, 2] - hg2.log_phase_function(data[:, 0])).max() < 1e-6
+    assert np.abs(data[:, 3] - hg3.log_phase_function(data[:, 0])).max() < 1e-6
+    assert np.abs(data[:, 4] - hg99.log_phase_function(data[:, 0])).max() < 1e-6
     # test sampling function
     assert getSamplingError(rng, hg1) < 5e-4
     assert getSamplingError(rng, hg2) < 5e-4
     assert getSamplingError(rng, hg3) < 5e-4
+    assert getSamplingError(rng, hg99) < 5e-4
     # check normalization
-    assert abs(quad(hg1.phase_function, -1.0, 1.0)[0] * 2 * np.pi - 1.0) < 1e-5
-    assert abs(quad(hg2.phase_function, -1.0, 1.0)[0] * 2 * np.pi - 1.0) < 1e-5
-    assert abs(quad(hg3.phase_function, -1.0, 1.0)[0] * 2 * np.pi - 1.0) < 1e-5
+    assert abs(integratePhase(hg1) - 1.0) < 1e-5
+    assert abs(integratePhase(hg2) - 1.0) < 1e-5
+    assert abs(integratePhase(hg3) - 1.0) < 1e-5
+    assert abs(integratePhase(hg99) - 1.0) < 1e-5
 
 
 def test_FournierForand(testDataDir, rng):
@@ -103,15 +119,17 @@ def test_FournierForand(testDataDir, rng):
     # load expected data (cos_theta, pdf)
     # note that this was generated from the same code,
     # but was inspected before saving
-    data = np.load(os.path.join(testDataDir, "phase_ff.npy"))
-    assert np.all(np.abs(data[:, 1] - model.phase_function(data[:, 0])) < 1e-6)
+    data = np.loadtxt(
+        os.path.join(testDataDir, "log_phase_ff.csv"), delimiter=",", skiprows=1
+    )
+    assert np.all(np.abs(data[:, 1] - model.log_phase_function(data[:, 0])) < 1e-6)
     # test sampling function
     # tricky integrand, scipy likely complains -> turn off warning
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         assert getSamplingError(rng, model, 70, int(1e7)) < 0.01
     # check normalization
-    assert abs(quad(model.phase_function, -1.0, 1.0)[0] * 2 * np.pi - 1.0) < 1e-5
+    assert abs(integratePhase(model) - 1.0) < 1e-5
 
 
 def test_MediumShader(shaderUtil, rng):
@@ -149,9 +167,9 @@ def test_MediumShader(shaderUtil, rng):
         _fields_ = [
             ("n", c_float),
             ("vg", c_float),
-            ("mu_a", c_float),
             ("mu_s", c_float),
-            ("phase", c_float),
+            ("mu_e", c_float),
+            ("log_phase", c_float),
             ("angle", c_float),
         ]
 
@@ -191,15 +209,17 @@ def test_MediumShader(shaderUtil, rng):
     vg = model.group_velocity(queries["wavelength"])
     mu_a = model.absorption_coef(queries["wavelength"])
     mu_s = model.scattering_coef(queries["wavelength"])
-    phase = model.phase_function(queries["theta"])
+    mu_e = mu_a + mu_s
+    log_phase = model.log_phase_function(queries["theta"])
     angle = model.phase_sampling(queries["eta"])
     # test results
     results = result_buffer.numpy()
     assert np.allclose(results["n"], n, 1e-4)
     assert np.allclose(results["vg"], vg, 1e-4)
-    assert np.allclose(results["mu_a"], mu_a, 5e-3)
     assert np.allclose(results["mu_s"], mu_s, 5e-3)
-    assert np.allclose(results["phase"], phase, 1e-4)
+    assert np.allclose(results["mu_e"], mu_e, 5e-3)
+    # assert np.allclose(results["log_phase"], log_phase, 1e-4)
+    assert np.abs(results["log_phase"] - log_phase).max() < 5e-5
     assert np.allclose(results["angle"], angle, 1e-4, 1e-5)
 
 
@@ -240,9 +260,9 @@ def test_MaterialShader(shaderUtil, rng):
         _fields_ = [
             ("n", c_float),
             ("vg", c_float),
-            ("mu_a", c_float),
             ("mu_s", c_float),
-            ("phase", c_float),
+            ("mu_e", c_float),
+            ("log_phase", c_float),
             ("angle", c_float),
         ]
 
@@ -284,20 +304,22 @@ def test_MaterialShader(shaderUtil, rng):
     # group velocity
     cpu[:N:2, 1] = water_model.group_velocity(queries["lam"][: N // 2])
     cpu[1:N:2, 1] = glass_model.group_velocity(queries["lam"][: N // 2])
-    cpu[N::2, 1] = speed_of_light  # vacuum
+    cpu[N::2, 1] = theia.material.speed_of_light  # vacuum
     cpu[N + 1 :: 2, 1] = glass_model.group_velocity(queries["lam"][N // 2 :])
-    # absorption coef
-    cpu[:N:2, 2] = water_model.absorption_coef(queries["lam"][: N // 2])
-    cpu[1:N:2, 2] = glass_model.absorption_coef(queries["lam"][: N // 2])
-    cpu[N::2, 2] = 0.0  # vacuum
-    cpu[N + 1 :: 2, 2] = glass_model.absorption_coef(queries["lam"][N // 2 :])
     # scattering coef
-    cpu[:N:2, 3] = water_model.scattering_coef(queries["lam"][: N // 2])
-    cpu[1:N:2, 3] = 0.0  # glass does not (volume) scatter
+    cpu[:N:2, 2] = water_model.scattering_coef(queries["lam"][: N // 2])
+    cpu[1:N:2, 2] = 0.0  # glass does not (volume) scatter
+    cpu[N::2, 2] = 0.0  # vacuum
+    cpu[N + 1 :: 2, 2] = 0.0  # glass does not (volume) scatter
+    # absorption coef
+    cpu[:N:2, 3] = water_model.absorption_coef(queries["lam"][: N // 2])
+    cpu[1:N:2, 3] = glass_model.absorption_coef(queries["lam"][: N // 2])
     cpu[N::2, 3] = 0.0  # vacuum
-    cpu[N + 1 :: 2, 3] = 0.0  # glass does not (volume) scatter
+    cpu[N + 1 :: 2, 3] = glass_model.absorption_coef(queries["lam"][N // 2 :])
+    # extinction coef
+    cpu[:, 3] += cpu[:, 2]
     # phase
-    cpu[:N:2, 4] = water_model.phase_function(queries["theta"][: N // 2])
+    cpu[:N:2, 4] = water_model.log_phase_function(queries["theta"][: N // 2])
     cpu[1:N:2, 4] = 0.0  # glass does not (volume) scatter
     cpu[N::2, 4] = 0.0  # vacuum
     cpu[N + 1 :: 2, 4] = 0.0  # glass does not (volume) scatter
@@ -310,7 +332,8 @@ def test_MaterialShader(shaderUtil, rng):
     # check result
     assert np.allclose(gpu["n"], cpu[:, 0], 1e-4)
     assert np.allclose(gpu["vg"], cpu[:, 1], 1e-4)
-    assert np.allclose(np.exp(-gpu["mu_a"]), np.exp(-cpu[:, 2]), 1e-5, 1e-3)
-    assert np.allclose(np.exp(-gpu["mu_s"]), np.exp(-cpu[:, 3]), 1e-5, 1e-3)
-    assert np.allclose(gpu["phase"], cpu[:, 4], 1e-4)
+    assert np.allclose(np.exp(-gpu["mu_s"]), np.exp(-cpu[:, 2]), 1e-5, 1e-3)
+    assert np.allclose(np.exp(-gpu["mu_e"]), np.exp(-cpu[:, 3]), 1e-5, 1e-3)
+    # assert np.allclose(gpu["log_phase"], cpu[:, 4], 1e-4)
+    assert np.abs(gpu["log_phase"] - cpu[:, 4]).max() < 5e-4
     assert np.allclose(gpu["angle"], cpu[:, 5], 1e-4, 1e-5)

@@ -3,7 +3,7 @@
 
 #include "lookup.glsl"
 
-#define SPEED_OF_LIGHT 299792458.0
+#define SPEED_OF_LIGHT 0.299792458 // m/ns
 
 //////////////////////////////////// MEDIUM ////////////////////////////////////
 
@@ -23,7 +23,7 @@ layout(buffer_reference, scalar, buffer_reference_align=8) buffer Medium {
     //material constants
     Table1D mu_a;           //absorption coefficient
     Table1D mu_s;           //scattering coefficient
-    Table1D phase;          //scattering phase function
+    Table1D log_phase;      //scattering phase function
     Table1D phase_sampling; //used for sampling
 };
 
@@ -37,8 +37,8 @@ float normalize_lambda(const Medium medium, float lambda) {
 struct MediumConstants {
     float n;    //refractive index
     float vg;   //group velocity
-    float mu_a; //absorption coefficient
     float mu_s; //scattering coefficient
+    float mu_e; //extinction coefficient
 };
 
 MediumConstants lookUpMedium(const Medium medium, float lambda) {
@@ -47,20 +47,23 @@ MediumConstants lookUpMedium(const Medium medium, float lambda) {
         return MediumConstants(
             1.0,            //refractive index
             SPEED_OF_LIGHT, //group velocity
-            0.0,            //absorption coefficient
-            0.0             //scattering coefficient
+            0.0,            //scattering coefficient
+            0.0             //extinction coefficient
         );
     }
 
     //normalize lambda once
     float u = normalize_lambda(medium, lambda);
+    //look coefficients
+    float mu_a = lookUp(medium.mu_a, u, 0.0);   //absorption
+    float mu_s = lookUp(medium.mu_s, u, 0.0);   //scattering
+    float mu_e = mu_a + mu_s;                   // extinction
 
     //look up constants in tables; last argument is default value
     return MediumConstants(
-        lookUp(medium.n,    u, 1.0),            //refractive index
-        lookUp(medium.vg,   u, SPEED_OF_LIGHT), //group velocity
-        lookUp(medium.mu_a, u, 0.0),            //absorption coefficient
-        lookUp(medium.mu_s, u, 0.0)             //scattering coefficient
+        lookUp(medium.n,  u, 1.0),              //refractive index
+        lookUp(medium.vg, u, SPEED_OF_LIGHT),   //group velocity
+        mu_s, mu_e
     );
 }
 
