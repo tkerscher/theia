@@ -31,7 +31,7 @@ struct Result {
 // TODO: Figure out how I can apply readonly here...
 layout(scalar) buffer QueryBuffer{ Query queries[]; };
 layout(scalar) writeonly buffer Results{ Result results[]; };
-layout(scalar) writeonly buffer Debug{ uint64_t d[]; };
+layout(scalar) writeonly buffer Flags{ uint32_t flags[]; };
 
 Result sampleMedium(const Medium medium, float lambda, float theta, float eta) {
     MediumConstants constants = lookUpMedium(medium, lambda);
@@ -56,4 +56,9 @@ void main() {
     // sample both inside and outside medium
     results[2*i + 0] = sampleMedium(mat.inside, wavelength, theta, eta);
     results[2*i + 1] = sampleMedium(mat.outside, wavelength, theta, eta);
+
+    //storing flags once is enough
+    if (i == 0) {
+        flags[0] = mat.flags;
+    }
 }

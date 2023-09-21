@@ -5,7 +5,7 @@ import hephaistos as hp
 import theia.lookup
 import warnings
 from collections.abc import Iterable
-from ctypes import Structure, c_float, c_uint64, addressof, memmove, sizeof
+from ctypes import Structure, c_float, c_uint32, c_uint64, addressof, memmove, sizeof
 from scipy.interpolate import CubicSpline
 from typing import Final, Union
 
@@ -272,7 +272,18 @@ class Material:
         Medium in the outside of a geometry. Can also be specified by its name
         which will get resolved during baking/serialization.
         None defaults to vacuum.
+    flags: int, default = 0
+        Material flags specifying its behavior while interacting with simulated
+        rays.
     """
+
+    # FLAGS
+    ABSORBER_BIT: Final[int] = 1 << 0
+    """Material absorbs all light hitting it"""
+    TARGET_BIT: Final[int] = 1 << 1
+    """Material is a target, i.e. detector"""
+    REFLECT_BIT: Final[int] = 1 << 3
+    """Material only reflects, never transmits"""
 
     class GLSL(Structure):
         """The corresponding structure used in shaders"""
@@ -280,6 +291,8 @@ class Material:
         _fields_ = [
             ("inside", c_uint64),  # buffer reference
             ("outside", c_uint64),  # buffer reference
+            ("flags", c_uint32),
+            ("padding", c_uint32),
         ]
 
     def __init__(
@@ -287,11 +300,14 @@ class Material:
         name: str,
         inside: Union[Medium, str, None],
         outside: Union[Medium, str, None],
+        *,
+        flags: int = 0,
     ) -> None:
         # store properties
         self.name = name
         self.inside = inside
         self.outside = outside
+        self.flags = flags
 
     @property
     def name(self) -> str:
@@ -330,6 +346,22 @@ class Material:
     @outside.setter
     def outside(self, value: Union[Medium, str, None]) -> None:
         self._outside = value
+
+    @property
+    def flags(self) -> int:
+        """
+        Material flags specifying its behavior while interacting with simulated
+        rays.
+        """
+        return self._flags
+
+    @flags.setter
+    def flags(self, value: int) -> None:
+        self._flags = value
+
+    @flags.deleter
+    def flags(self) -> None:
+        self._flags = 0
 
     @property
     def byte_size(self) -> int:
@@ -513,6 +545,8 @@ def bakeMaterials(
         glsl = Material.GLSL(
             inside=getMedAdr(material.inside, f"{material.name}.inside"),
             outside=getMedAdr(material.outside, f"{material.name}.outside"),
+            flags=material.flags,
+            padding=0,
         )
         # copy to buffer
         memmove(dst, addressof(glsl), sizeof(Material.GLSL))

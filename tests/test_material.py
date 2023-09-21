@@ -3,7 +3,7 @@ import hephaistos as hp
 import os.path
 import theia.material
 import warnings
-from ctypes import Structure, c_uint64, c_float
+from ctypes import Structure, c_uint32, c_uint64, c_float
 from scipy.integrate import quad
 
 
@@ -241,7 +241,8 @@ def test_MaterialShader(shaderUtil, rng):
     water = water_model.createMedium()
     glass_model = theia.material.BK7Model()
     glass = glass_model.createMedium(name="glass", num_lambda=4096)
-    mat_water_glass = theia.material.Material("water_glass", water, glass)
+    flags = theia.material.Material.ABSORBER_BIT | theia.material.Material.TARGET_BIT
+    mat_water_glass = theia.material.Material("water_glass", water, glass, flags=flags)
     mat_vac_glass = theia.material.Material("vac_glass", None, glass)
     # bake materials
     tensor, mats, media = theia.material.bakeMaterials(mat_water_glass, mat_vac_glass)
@@ -271,6 +272,8 @@ def test_MaterialShader(shaderUtil, rng):
     query_buffer = hp.ArrayBuffer(Query, N)
     result_tensor = hp.ArrayTensor(Result, 2 * N)  # both inside and outside
     result_buffer = hp.ArrayBuffer(Result, 2 * N)
+    flag_tensor = hp.UnsignedIntTensor(1)
+    flag_buffer = hp.UnsignedIntBuffer(1)
     # fill query structures with random parameters
     queries = query_buffer.numpy()
     queries["material"] = [mats["water_glass"],] * (N // 2) + [
@@ -282,13 +285,16 @@ def test_MaterialShader(shaderUtil, rng):
 
     # create program
     program = shaderUtil.createTestProgram("material.test.glsl")
-    program.bindParams(QueryBuffer=query_tensor, Results=result_tensor)
+    program.bindParams(
+        QueryBuffer=query_tensor, Results=result_tensor, Flags=flag_tensor
+    )
     # run it
     (
         hp.beginSequence()
         .And(hp.updateTensor(query_buffer, query_tensor))
         .Then(program.dispatch(N // 32))
         .Then(hp.retrieveTensor(result_tensor, result_buffer))
+        .And(hp.retrieveTensor(flag_tensor, flag_buffer))
         .Submit()
         .wait()
     )
@@ -337,3 +343,4 @@ def test_MaterialShader(shaderUtil, rng):
     # assert np.allclose(gpu["log_phase"], cpu[:, 4], 1e-4)
     assert np.abs(gpu["log_phase"] - cpu[:, 4]).max() < 5e-4
     assert np.allclose(gpu["angle"], cpu[:, 5], 1e-4, 1e-5)
+    assert flag_buffer.numpy()[0] == flags

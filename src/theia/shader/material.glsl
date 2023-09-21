@@ -69,10 +69,10 @@ MediumConstants lookUpMedium(const Medium medium, float lambda) {
 
 /////////////////////////////////// MATERIAL ///////////////////////////////////
 
-const uint32_t MATERIAL_ABSORBER_BIT        = 0x00000001; //Rays gets absorped
-const uint32_t MATERIAL_TARGET_BIT          = 0x00000002; //Rays reached a target
-const uint32_t MATERIAL_SOURCE_BIT          = 0x00000004; //Rays reached a light source
-const uint32_t MATERIAL_METALLIC_BIT        = 0x00000008; //Consider reflections only
+const uint32_t MATERIAL_ABSORBER_BIT    = 0x00000001; //Rays gets absorped
+const uint32_t MATERIAL_TARGET_BIT      = 0x00000002; //Rays reached a target
+// const uint32_t MATERIAL_SOURCE_BIT      = 0x00000004; //Rays reached a light source
+const uint32_t MATERIAL_REFLECT_BIT     = 0x00000008; //Consider reflections only
 
 //Materials are assigned to geometries, which with their polygon faces define
 //an inside and an outside using their winding order
@@ -80,8 +80,8 @@ layout(buffer_reference, scalar, buffer_reference_align=8) buffer Material {
     Medium inside;
     Medium outside;
 
-    // uint32_t flags;
-    // uint32_t padding; //to fit the 8 byte alignment
+    uint32_t flags;
+    uint32_t padding; //to fit the 8 byte alignment
 };
 
 #endif
