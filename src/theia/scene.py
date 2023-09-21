@@ -178,7 +178,11 @@ class MeshStore:
         self._store = hp.GeometryStore(values)
 
     def createInstance(
-        self, key: str, material: Union[str, None] = None
+        self,
+        key: str,
+        material: Union[str, None] = None,
+        *,
+        transform: Union[Transform, None] = None
     ) -> MeshInstance:
         """
         Creates and returns a new MeshInstance of a mesh specified via its name.
@@ -191,6 +195,9 @@ class MeshStore:
         material: Optional[str], default = None
             Name of the assigned material. The actual material will get resolved
             during compilation of the scene.
+        transform: Optional[Transform], default = None
+            The transformation to apply on the instance.
+            If None, identity transformation is applied.
 
         Returns
         -------
@@ -199,12 +206,15 @@ class MeshStore:
         """
         idx = self._keys.index(key)
         geo = self._store.geometries[idx]
-        return MeshInstance(
+        instance = MeshInstance(
             self._store.createInstance(idx),
             geo.vertices_address,
             geo.indices_address,
             material,
         )
+        if transform is not None:
+            instance.transform = transform.numpy()
+        return instance
 
 
 class Scene:
@@ -225,7 +235,11 @@ class Scene:
     class GLSLScene(Structure):
         """Equivalent structure for the Scene type used in the shader"""
 
-        _fields_ = [("geometries", c_uint64), ("medium", c_uint64)]
+        _fields_ = [
+            ("geometries", c_uint64),
+            ("medium", c_uint64),
+            # ("maxRayLength", c_float)
+        ]
 
     def __init__(
         self, instances: Iterable[MeshInstance], materials: dict[str, int], medium: int
@@ -254,8 +268,6 @@ class Scene:
                 geometries[i].material = materials.get(inst.material)
             else:
                 geometries[i].material = 0
-            # DEBUG: TODO:
-            inst._instance.customIndex = i
         # upload geometries to gpu
         self._geometries = hp.ArrayTensor(Scene.GLSLGeometry, len(instances))
         hp.execute(hp.updateTensor(geometries, self._geometries))
