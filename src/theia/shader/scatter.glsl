@@ -1,6 +1,7 @@
 #ifndef _SCATTER_INCLUDE
 #define _SCATTER_INCLUDE
 
+#include "cosy.glsl"
 #include "material.glsl"
 
 #define TWO_PI 6.283185307179586477
@@ -73,19 +74,7 @@ vec3 scatterDir(vec3 prevDir, float cos_theta, float phi) {
     localScattered = normalize(localScattered);
 
     //build local coordinate system
-    vec3 z = prevDir;
-    //edge case: prevDir points in z
-    vec3 x = prevDir.z >= 0.999 ?
-        cross(vec3(0.0,1.0,0.0), z) :
-        cross(vec3(0.0,1.0,0.0), z);
-    vec3 y = cross(x, z);
-
-    //normalize again (this might be paranoid)
-    x = normalize(x);
-    y = normalize(y);
-
-    //build transformation matrix (each vec is a column)
-    mat3 trafo = mat3(x, y, z);
+    mat3 trafo = createLocalCOSY(prevDir);
 
     //transform to global coordinates and return
     return normalize(trafo * localScattered);
