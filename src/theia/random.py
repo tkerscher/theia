@@ -1,27 +1,9 @@
 import hephaistos as hp
-import importlib.resources
-import numpy as np
-from ctypes import Structure, c_float, c_uint32, sizeof
-from hephaistos.glsl import uvec2, uvec4, vec3
-from math import ceil
+from ctypes import Structure, c_uint32
+from hephaistos.glsl import uvec2, uvec4
 from os import urandom
 from typing import Optional
-from .util import compileShader
-
-
-def uvec4ToInt(value: uvec4) -> int:
-    """Transforms a uvec4 value to int"""
-    return value.x + (value.y << 32) + (value.z << 64) + (value.w << 96)
-
-
-def intToUvec4(value: int) -> uvec4:
-    """Transforms an int to an uvec4"""
-    return uvec4(
-        x=c_uint32(value & 0xFFFFFFFF),
-        y=c_uint32(value >> 32 & 0xFFFFFFFF),
-        z=c_uint32(value >> 64 & 0xFFFFFFFF),
-        w=c_uint32(value >> 96 & 0xFFFFFFFF),
-    )
+from .util import compileShader, intToUvec4, uvec4ToInt
 
 
 class PhiloxRNG:

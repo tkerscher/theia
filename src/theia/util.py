@@ -1,5 +1,7 @@
 import importlib.resources
 import hephaistos as hp
+from ctypes import c_uint32
+from hephaistos.glsl import uvec4
 from os.path import join
 
 
@@ -20,3 +22,18 @@ def compileShader(file: str) -> bytes:
     with open(path, "r") as file:
         source = file.read()
     return getCompiler().compile(source)
+
+
+def uvec4ToInt(value: uvec4) -> int:
+    """Transforms a uvec4 value to int"""
+    return value.x + (value.y << 32) + (value.z << 64) + (value.w << 96)
+
+
+def intToUvec4(value: int) -> uvec4:
+    """Transforms an int to an uvec4"""
+    return uvec4(
+        x=c_uint32(value & 0xFFFFFFFF),
+        y=c_uint32(value >> 32 & 0xFFFFFFFF),
+        z=c_uint32(value >> 64 & 0xFFFFFFFF),
+        w=c_uint32(value >> 96 & 0xFFFFFFFF),
+    )

@@ -1,6 +1,7 @@
 import numpy as np
 import hephaistos as hp
-import theia.tracer
+import theia.random
+import theia.util
 
 
 def test_philox(shaderUtil):
@@ -34,11 +35,11 @@ def test_philox(shaderUtil):
 # helper test to make debugging easier
 def test_uvec4_conversion():
     i = 0xC0110FFC0FFEE
-    assert theia.tracer.uvec4ToInt(theia.tracer.intToUvec4(i)) == i
+    assert theia.util.uvec4ToInt(theia.util.intToUvec4(i)) == i
 
 
 def test_philox_buffer():
-    philox = theia.tracer.PhiloxRNG(32 * 256, 4 * 64, key=0xC0110FFC0FFEE)
+    philox = theia.random.PhiloxRNG(32 * 256, 4 * 64, key=0xC0110FFC0FFEE)
     buffer1 = hp.FloatBuffer(philox.tensor.size)
     buffer2 = hp.FloatBuffer(philox.tensor.size)
 
