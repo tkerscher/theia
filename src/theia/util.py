@@ -1,7 +1,7 @@
 import importlib.resources
 import hephaistos as hp
-from ctypes import c_uint32
-from hephaistos.glsl import uvec4
+from ctypes import c_uint32, c_uint64
+from hephaistos.glsl import uvec4, uvec2
 from os.path import join
 
 
@@ -37,3 +37,16 @@ def intToUvec4(value: int) -> uvec4:
         z=c_uint32(value >> 64 & 0xFFFFFFFF),
         w=c_uint32(value >> 96 & 0xFFFFFFFF),
     )
+
+
+def packUint64(value: int) -> uvec2:
+    """Packs a 64bit unsigned integer into a 2D 32bit unsigned integer vector"""
+    return uvec2(
+        x = c_uint32(value & 0xFFFFFFFF),
+        y = c_uint32(value >> 32 & 0xFFFFFFFF)
+    )
+
+
+def unpackUint64(value: uvec2) -> int:
+    """Unpacks a packed 64 bit unsigned integer"""
+    return value.x + (value.y << 32)
