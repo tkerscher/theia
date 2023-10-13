@@ -29,7 +29,7 @@ layout(scalar) readonly buffer RNGBuffer{ float u[]; };
 
 layout(scalar) uniform TraceParams{
     // for transient rendering, we won't importance sample the media
-    float sampleScatteringLength;
+    float scatterCoefficient;
 
     float maxTime;
     vec3 lowerBBoxCorner;
@@ -54,7 +54,7 @@ void main() {
     }
 
     //update photons
-    float lambda = params.sampleScatteringLength;
+    float lambda = params.scatterCoefficient;
     bool anyBelowMaxTime = false;
     for (int i = 0; i < N_PHOTONS; ++i) {
         //update throughput, i.e. transmission/probability, for all wavelengths
@@ -86,10 +86,6 @@ void main() {
     //TODO: Multiple importance sample shadow ray to detector
     //      Or should I do it the other way round?
     //      (but then I need to be able to sample arbitrary lights on the GPU...)
-
-    //create item on the tracing queue
-    // uint n = atomicAdd(rayCount, 1);
-    // rayItems[n] = RayItem(ray, item.targetIdx);
 
     //count how many items we will be adding in this subgroup
     uint n = subgroupAdd(1);

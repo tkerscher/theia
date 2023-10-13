@@ -2,8 +2,9 @@ import numpy as np
 import hephaistos as hp
 import theia.material
 import theia.random
+import theia.scene
 from ctypes import *
-from hephaistos.glsl import vec3, uvec2, stackVector
+from hephaistos.glsl import mat4x3, vec2, vec3, uvec2, stackVector
 from numpy.ctypeslib import as_array
 from numpy.lib.recfunctions import structured_to_unstructured
 from theia.util import compileShader, packUint64
@@ -70,6 +71,15 @@ class Photon(Structure):
     ]
 
 
+class PhotonHit(Structure):
+    _fields_ = [
+        ("wavelength", c_float),
+        ("travelTime", c_float),
+        ("log_radiance", c_float),
+        ("throughput", c_float)
+    ]
+
+
 class Ray(Structure):
     _fields_ = [
         ("position", vec3),
@@ -107,6 +117,29 @@ class InitParams(Structure):
     ]
 
 
+class IntersectionItem(Structure):
+    _fields_ = [
+        ("ray", Ray),
+        ("targetIdx", c_int32),
+        ("geometryIdx", c_int32),
+        ("customIdx", c_int32),
+        ("triangleIdx", c_int32),
+        ("barys", vec2),
+        ("obj2World", mat4x3),
+        ("world2Obj", mat4x3)
+    ]
+
+
+class ResponseItem(Structure):
+    _fields_ = [
+        ("position", vec3),
+        ("direction", vec3),
+        ("normal", vec3),
+        ("detectorIdx", c_int32),
+        ("hits", PhotonHit * N_PHOTONS)
+    ]
+
+
 class RayItem(Structure):
     _fields_ = [("ray", Ray), ("targetIdx", c_int32)]
 
@@ -117,7 +150,7 @@ class VolumeScatterItem(Structure):
 
 class TraceParams(Structure):
     _fields_ = [
-        ("sampleScatteringLength", c_float),
+        ("scatterCoefficient", c_float),
         ("maxTime", c_float),
         ("lowerBBoxCorner", vec3),
         ("upperBBoxCorner", vec3),
@@ -169,7 +202,6 @@ def test_wavefront_init(rng):
     (
         hp.beginSequence()
         .And(hp.updateTensor(inputBuffer, inputTensor))
-        # .And(hp.updateTensor(paramBuffer, paramTensor))
         .Then(program.dispatchPush(bytes(push), N // 32))
         .Then(hp.retrieveTensor(outputTensor, outputBuffer))
         .Submit()
@@ -198,6 +230,193 @@ def test_wavefront_init(rng):
     assert np.abs(photons["mu_s"] - model.scattering_coef(lam)).max() < 5e-5
     mu_e = model.scattering_coef(lam) + model.absorption_coef(lam)
     assert np.abs((photons["mu_e"] - mu_e) / mu_e).max() < 4e-3
+
+
+def test_wavefront_trace(rng):
+    N = 32 * 256
+    RNG_BATCH = 4 * 16
+    # create programs
+    philox = theia.random.PhiloxRNG(N, RNG_BATCH, key=0xC0110FFC0FFEE)
+    wavefront_init = hp.Program(compileShader("wavefront.init.glsl"))
+    wavefront_trace = hp.Program(compileShader("wavefront.trace.glsl"))
+    wavefront_intersect = hp.Program(compileShader("wavefront.intersection.glsl"))
+
+    # create material
+    water = WaterModel().createMedium()
+    glass = theia.material.BK7Model().createMedium()
+    mat = theia.material.Material("mat", glass, water, flags=theia.material.Material.TARGET_BIT)
+    tensor, material, media = theia.material.bakeMaterials(mat)
+
+    # create scene
+    store = theia.scene.MeshStore({
+        "cube" : "assets/cone.stl",
+        "sphere" : "assets/sphere.stl"
+    })
+    r, d = 50.0, 3.0
+    r_insc = r * 0.99547149974733 # radius of inscribed sphere (icosphere)
+    x, y, z = 10., 5.0, 0.0
+    t1 = theia.scene.Transform.Scale(r, r, r).translate(x, y, z + r + d)
+    c1 = store.createInstance("sphere", "mat", transform=t1, detectorId=0)
+    t2 = theia.scene.Transform.Scale(r, r, r).translate(x, y , z - r - d)
+    c2 = store.createInstance("sphere", "mat", transform=t2, detectorId=1)
+    scene = theia.scene.Scene([c1,c2], material, media["water"])
+
+    # reserve memory
+    inputBuffer = hp.ArrayBuffer(RayQuery, N)
+    inputTensor = hp.ArrayTensor(RayQuery, N)
+    rayBufferIn = QueueBuffer(RayItem, N)
+    rayBufferOut = QueueBuffer(RayItem, N)
+    rayTensor = QueueTensor(RayItem, N)
+    intBuffer = QueueBuffer(IntersectionItem, N)
+    intTensor = QueueTensor(IntersectionItem, N)
+    volBuffer = QueueBuffer(VolumeScatterItem, N)
+    volTensor = QueueTensor(VolumeScatterItem, N)
+    responseBuffer = QueueBuffer(ResponseItem, N)
+    responseTensor = QueueTensor(ResponseItem, N)
+    paramsBuffer = hp.StructureBuffer(TraceParams)
+    paramsTensor = hp.StructureTensor(TraceParams)
+    # bind memory
+    wavefront_init.bindParams(QueryInput=inputTensor, RayQueue=rayTensor)
+    wavefront_trace.bindParams(
+        RayQueue=rayTensor,
+        IntersectionQueue=intTensor,
+        VolumeScatterQueue=volTensor,
+        RNGBuffer=philox.tensor,
+        tlas=scene.tlas,
+        TraceParams=paramsTensor
+    )
+    wavefront_intersect.bindParams(
+        IntersectionQueue=intTensor,
+        RayQueue=rayTensor,
+        ResponseQueue=responseTensor,
+        Geometries=scene.geometries,
+        TraceParams=paramsTensor
+    )
+
+    # fill input buffer
+    queries = inputBuffer.numpy()
+    theta = rng.random(N) * np.pi
+    phi = rng.random(N) * 2.0 * np.pi
+    queries["direction"] = stackVector(
+        (np.sin(theta) * np.cos(phi), np.sin(theta) * np.sin(phi), np.cos(theta)), vec3
+    )
+    queries["targetIdx"] = 1
+    queries["position"]["x"] = 10.0
+    queries["position"]["y"] = 5.0
+    queries["position"]["z"] = 0.0
+    pos = np.array([10., 5., 0.])
+    queries["photons"]["wavelength"] = rng.random((N, N_PHOTONS)) * 600.0 + 200.0
+    # Use first wavelength as constant for reordering results
+    queries["photons"]["wavelength"][:,0] = np.linspace(200., 800., N)
+    queries["photons"]["log_radiance"] = rng.random((N, N_PHOTONS)) * 5.0 - 4.0
+    queries["photons"]["startTime"] = rng.random((N, N_PHOTONS)) * 50.0
+    queries["photons"]["probability"] = rng.random((N, N_PHOTONS))
+    # create params
+    lambda_sc = 1.0 / 100.0
+    t_max = 500.0
+    paramsBuffer.scatterCoefficient = lambda_sc
+    paramsBuffer.maxTime = t_max
+    paramsBuffer.lowerBBoxCorner = vec3(x=-100.,y=-100.,z=-100.)
+    paramsBuffer.upperBBoxCorner = vec3(x=100.,y=100.,z=100.)
+    # create push descriptor
+    push = InitParams(count=N, medium=packUint64(media["water"]), rngStride=RNG_BATCH)
+
+    # run program
+    (
+        hp.beginSequence()
+        .And(hp.updateTensor(inputBuffer, inputTensor))
+        .And(hp.updateTensor(paramsBuffer, paramsTensor))
+        .Then(philox.dispatchNext())
+        .Then(wavefront_init.dispatchPush(bytes(push), N // 32))
+        .Then(hp.retrieveTensor(rayTensor, rayBufferIn))
+        .Then(wavefront_trace.dispatch(N // 32))
+        .Then(hp.retrieveTensor(intTensor, intBuffer))
+        .And(hp.retrieveTensor(volTensor, volBuffer))
+        .And(hp.fillTensor(rayTensor))
+        .Then(wavefront_intersect.dispatch(N // 32))
+        .Then(hp.retrieveTensor(responseTensor, responseBuffer))
+        .And(hp.retrieveTensor(rayTensor, rayBufferOut))
+        .Submit()
+        .wait()
+    )
+
+    # check result
+    r_in = rayBufferIn.numpy()
+    assert intBuffer.count + volBuffer.count == N # all items processed?
+    assert rayBufferOut.count <= intBuffer.count
+
+    # check volume items did not pass through geometry
+    v = volBuffer.numpy()[:volBuffer.count]
+    v_pos = structured_to_unstructured(v["ray"]["position"])
+    v_dir = structured_to_unstructured(v["ray"]["direction"])
+    cos_theta = np.abs(v_dir[:,2]) # dot with +/- e_z
+    cos_theta_min = np.sqrt(1.0 - (r_insc/(r_insc+d))**2) # tangent angle
+    may_hit = cos_theta >= cos_theta_min + 0.01 # acount for err in geometry too
+    cos_theta = cos_theta[may_hit]
+    t0 = (r_insc+d)*cos_theta-np.sqrt((r_insc+d)**2*cos_theta**2 - (2*r_insc*d+d**2))
+    # bit tricky to test, since our sphere is approximated with triangles
+    assert (v["dist"][may_hit] < t0).sum() / may_hit.sum() > 0.95
+    # limit outliers
+    assert ((v["dist"][may_hit] - t0)/t0).max() < 0.1
+
+    # check intersections
+    i = rayBufferOut.numpy()[:rayBufferOut.count]
+    # reconstruct input queries
+    i_idx = (i["ray"]["photons"]["wavelength"][:,0] - 200.0) / (600.0 / (N - 1))
+    i_in = r_in[np.round(i_idx).astype(np.int32)]
+    # check position: direction match
+    i_pos = structured_to_unstructured(i["ray"]["position"])
+    i_dir = i_pos - structured_to_unstructured(i_in["ray"]["position"])
+    i_dir /= np.sqrt(np.square(i_dir).sum(-1))[:,None]
+    r_dir = structured_to_unstructured(i_in["ray"]["direction"])
+    assert np.abs(i_dir - r_dir).max() < 1e-4
+    # check positions: on sphere
+    center = np.array([x, y, r + d])
+    i_dup = np.square(i_pos - center[None,:]).sum(-1)
+    center[2] = -(r + d)
+    i_d = np.square(i_pos - center[None,:]).sum(-1)
+    mask = i_in["ray"]["direction"]["z"] > 0.0
+    i_d[mask] = i_dup[mask]
+    i_d = np.sqrt(i_d)
+    assert np.all((i_d <= r + 5e-5) & (i_d >= r_insc + 5e-5))
+    # check distance & throughput
+    i_dist = np.sqrt(np.square(i_pos - pos[None,:]).sum(-1))
+    i_t = i_dist[:,None] / i_in["ray"]["photons"]["vg"] + i_in["ray"]["photons"]["travelTime"]
+    assert np.allclose(i_t, i["ray"]["photons"]["travelTime"])
+    i_thr = (lambda_sc - i_in["ray"]["photons"]["mu_e"]) * i_dist[:,None]
+    assert np.allclose(i_thr, i["ray"]["photons"]["T_log"])
+    # TODO: check reflectance
+    # check direction
+    i_normal = (i_pos - center[None,:]) / i_d[:,None]
+    center[2] = r + d
+    i_normal_up = (i_pos - center[None,:]) / i_d[:,None]
+    i_normal[mask] = i_normal_up[mask]
+    i_din = structured_to_unstructured(i_in["ray"]["direction"])
+    i_dout = i_din - 2.0 * np.multiply(i_din, i_normal).sum(-1)[:,None] * i_normal # reflect
+    n_err = np.abs(i_dout - structured_to_unstructured(i["ray"]["direction"]))
+    assert n_err.max() < 0.01 # TODO: error a bit hight
+
+    # check detector hits
+    hits = responseBuffer.numpy()[:responseBuffer.count]
+    assert np.all(hits["detectorIdx"] == 1)
+    # reconstruct input queries
+    hits_idx = (hits["hits"]["wavelength"][:,0] - 200.0) / (600.0 / (N - 1))
+    hits_in = r_in[np.round(hits_idx).astype(np.int32)]
+    # check positions (note: unit icosphere)
+    hits_pos = structured_to_unstructured(hits["position"])
+    hits_d = np.sqrt(np.square(hits_pos).sum(-1))
+    assert np.all((hits_d <= 1.0 + 5e-5) & (hits_d >= 0.99547149974733 + 5e-5))
+    # TODO: check distance & throughput
+    # TODO: Calc linear throughput and final throughput
+    # check normal (note: unit icosphere)
+    hits_normal = hits_pos / hits_d[:,None]
+    n_err = np.abs(hits_normal - structured_to_unstructured(hits["normal"]))
+    assert n_err.max() < 0.01
+    # test direction
+    hits_din = structured_to_unstructured(hits_in["ray"]["direction"])
+    hits_dir = structured_to_unstructured(hits["direction"])
+    n_err = np.abs(hits_din - hits_dir)
+    assert n_err.max() < 1e-5
 
 
 def test_wavefront_volume(rng):
@@ -234,7 +453,7 @@ def test_wavefront_volume(rng):
     _lam = 10.0
     mu_s = 0.6
     mu_e = 0.9
-    paramsBuffer.sampleScatteringLength = _lam
+    paramsBuffer.scatterCoefficient = _lam
     paramsBuffer.maxTime = t_max
     paramsBuffer.lowerBBoxCorner = vec3(x=-50.0, y=-50.0, z=-50.0)
     paramsBuffer.upperBBoxCorner = vec3(x=50.0, y=50.0, z=50.0)
