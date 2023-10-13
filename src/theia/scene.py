@@ -85,7 +85,7 @@ class Transform:
     def __imatmul__(self, other: Transform) -> Transform:
         if type(other) != Transform:
             raise TypeError(other)
-        self._arr = self._arr @ other._arr
+        self._arr = other._arr @ self._arr 
         return self
 
 
@@ -102,7 +102,7 @@ def loadMesh(filepath: str) -> hp.Mesh:
     return result
 
 
-class MeshInstance(hp.GeometryInstance):
+class MeshInstance:
     """ "
     Instance of a mesh by referencing the corresponding one stored in a
     MeshStore. It can also be assigned a material by name, which will get
@@ -182,7 +182,8 @@ class MeshStore:
         key: str,
         material: Union[str, None] = None,
         *,
-        transform: Union[Transform, None] = None
+        transform: Union[Transform, None] = None,
+        detectorId: int = 0
     ) -> MeshInstance:
         """
         Creates and returns a new MeshInstance of a mesh specified via its name.
@@ -198,6 +199,8 @@ class MeshStore:
         transform: Optional[Transform], default = None
             The transformation to apply on the instance.
             If None, identity transformation is applied.
+        detectorId: int, default = 0
+            Id of the instance if used as a detector/target.
 
         Returns
         -------
@@ -212,6 +215,7 @@ class MeshStore:
             geo.indices_address,
             material,
         )
+        instance.instance.customIndex = detectorId
         if transform is not None:
             instance.transform = transform.numpy()
         return instance
