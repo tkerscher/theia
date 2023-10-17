@@ -17,6 +17,7 @@ vec3 sampleSphere(
     const Sphere sphere,
     const vec3 observer,
     const vec2 rng,
+    out float dist,
     out float p
 ) {
     //calculate visible cone
@@ -31,11 +32,11 @@ vec3 sampleSphere(
     float cos_theta = (1.0 - rng.y) + rng.y * cos_max;
     float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
     //calc sample point in local space (need only to guarentee it hit the disk)
-    float dist = d + sphere.radius; //ensure we will "always" hit something
+    dist = d + sphere.radius; //ensure we will "always" hit something
     vec3 pos = vec3(
-        dist * sin_theta * sin(phi),
-        dist * sin_theta * cos(phi),
-        dist * cos_theta
+        sin_theta * sin(phi),
+        sin_theta * cos(phi),
+        cos_theta
     );
 
     //calculate sample probability
@@ -44,7 +45,7 @@ vec3 sampleSphere(
     //create trafo for local -> observer
     mat3 trafo = createLocalCOSY(delta / d);
     //transform p to observer space, than world space
-    return trafo * pos + observer;
+    return normalize(trafo * pos);
 }  
 
 float sampleSphereProb(

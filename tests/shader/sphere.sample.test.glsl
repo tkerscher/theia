@@ -29,8 +29,10 @@ layout(push_constant, scalar) uniform Push{
 void main() {
     uint idx = gl_GlobalInvocationID.x;
     vec2 rng = vec2(u[2*idx], u[2*idx + 1]);
-    
-    float p;
-    vec3 pos = sampleSphere(push.sphere, observer[idx], rng, p);
+    vec3 o = observer[idx];
+
+    float p, d;
+    vec3 dir = sampleSphere(push.sphere, o, rng, d, p);
+    vec3 pos = dir * d + o;
     result[idx] = Result(pos, p);
 }
