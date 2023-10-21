@@ -1,9 +1,11 @@
 import numpy as np
 import hephaistos as hp
 import theia.material
+import theia.random
 from ctypes import *
-from hephaistos.glsl import vec3, stackVector
+from hephaistos.glsl import vec3, uvec2, stackVector
 from numpy.lib.recfunctions import structured_to_unstructured
+from theia.util import packUint64
 
 
 def test_scatterDir(rng, shaderUtil):
@@ -301,3 +303,193 @@ def test_transmitMaterial(rng, shaderUtil):
 
     # check if the material lookup is correct (happened in shader)
     assert np.all(results["match_consts"] >= 0.0)
+
+
+class Photon(Structure):
+    _fields_ = [
+        ("wavelength", c_float),
+        ("travelTime", c_float),
+        ("log_radiance", c_float),
+        ("T_lin", c_float),
+        ("T_log", c_float),
+        # medium constants
+        ("n", c_float),
+        ("vg", c_float),
+        ("mu_s", c_float),
+        ("mu_e", c_float),
+    ]
+
+
+class Ray(Structure):
+    _fields_ = [
+        ("position", vec3),
+        ("direction", vec3),
+        ("rngIdx", c_uint32),
+        ("medium", uvec2),  # uint64
+        ("photons", Photon * 4),
+    ]
+
+
+class WaterModel(
+    theia.material.WaterBaseModel,
+    theia.material.HenyeyGreensteinPhaseFunction,
+    theia.material.MediumModel,
+):
+    def __init__(self) -> None:
+        theia.material.WaterBaseModel.__init__(self, 5.0, 1000.0, 35.0)
+        theia.material.HenyeyGreensteinPhaseFunction.__init__(self, 0.6)
+
+    ModelName = "water"
+
+
+def test_volumeScatter(rng, shaderUtil):
+    N = 32 * 2048
+    N_EMPTY = 32 * 64
+
+    # create medium
+    model = WaterModel()
+    water = model.createMedium()
+    empty = theia.material.MediumModel().createMedium(name="empty")
+    tensor, _, media = theia.material.bakeMaterials(media=[water, empty])
+
+    # define types
+    class Result(Structure):
+        _fields_ = [
+            ("position", vec3),
+            ("direction", vec3),
+            ("rngIdx", c_uint32),
+            ("medium", uvec2),  # uint64
+            ("photons", Photon * 4),
+            ("prob", c_float),
+        ]
+
+    # allocate memory
+    inputBuffer = hp.ArrayBuffer(Ray, N)
+    inputTensor = hp.ArrayTensor(Ray, N)
+    outputBuffer = hp.ArrayBuffer(Result, N)
+    outputTensor = hp.ArrayTensor(Result, N)
+    # create rng
+    philox = theia.random.PhiloxRNG(N // 2, 4, key=0xC0110FFC0FFEE)
+
+    # create program
+    program = shaderUtil.createTestProgram("scatter.volume.scatter.test.glsl")
+    # bind params
+    program.bindParams(Input=inputTensor, Output=outputTensor, RNG=philox.tensor)
+
+    # fill input
+    queries = inputBuffer.numpy()
+    phi = rng.random(N) * 2.0 * np.pi
+    cos_theta_in = rng.random(N) * 2.0 - 1.0
+    sin_theta_in = np.sqrt(1.0 - cos_theta_in ** 2)
+    queries["direction"] = stackVector([
+        sin_theta_in * np.cos(phi),
+        sin_theta_in * np.sin(phi),
+        cos_theta_in
+    ], vec3)
+    queries["medium"][N_EMPTY:] = packUint64(media["water"])
+    queries["medium"][:N_EMPTY] = packUint64(media["empty"])
+    queries["photons"]["T_lin"] = rng.random(N * 4).reshape((N, -1))
+    queries["photons"]["mu_s"] = rng.random(N * 4).reshape((N, -1))
+
+    # run program
+    (
+        hp.beginSequence()
+        .And(hp.updateTensor(inputBuffer, inputTensor))
+        .And(philox.dispatchNext())
+        .Then(program.dispatch(N // 32))
+        .Then(hp.retrieveTensor(outputTensor, outputBuffer))
+        .Submit()
+        .wait()
+    )
+
+    # test result
+    result = outputBuffer.numpy()
+    tlin_exp = queries["photons"]["mu_s"] * queries["photons"]["T_lin"]
+    dir_in = structured_to_unstructured(queries["direction"])
+    dir_out = structured_to_unstructured(result["direction"])
+    cos_theta = np.multiply(dir_in, dir_out).sum(-1)
+    assert np.allclose(result["photons"]["T_lin"], tlin_exp)
+    # test lambertian disitribution
+    bins = np.histogram(cos_theta[:N_EMPTY], bins=10, range=(-1,1))[0]
+    assert np.abs(bins / N_EMPTY - 0.1).max() < 0.1 #low statistic
+    assert np.allclose(result["prob"][:N_EMPTY], 1. / (4.0 * np.pi))
+    # test henyey greenstein via E[cos_theta] = g
+    assert np.abs(cos_theta[N_EMPTY:].mean() - model.g) < 5e-3
+    p_exp = np.exp(model.log_phase_function(cos_theta[N_EMPTY:]))
+    assert np.abs(p_exp - result["prob"][N_EMPTY:]).max() < 5e-5
+
+
+def test_volumeScatterProb(rng, shaderUtil):
+    N = 32 * 256
+
+    # create medium
+    model = WaterModel()
+    water = model.createMedium()
+    empty = theia.material.MediumModel().createMedium(name="empty")
+    tensor, _, media = theia.material.bakeMaterials(media=[water, empty])
+
+    # define type
+    class Query(Structure):
+        _fields_ = [
+            ("position", vec3),
+            ("direction", vec3),
+            ("rngIdx", c_uint32),
+            ("medium", uvec2),  # uint64
+            ("photons", Photon * 4),
+            ("dir", vec3),
+        ]
+
+    # allocate memory
+    inputBuffer = hp.ArrayBuffer(Query, N)
+    inputTensor = hp.ArrayTensor(Query, N)
+    outputBuffer = hp.FloatBuffer(N)
+    outputTensor = hp.FloatTensor(N)
+
+    # create program
+    program = shaderUtil.createTestProgram("scatter.volume.prob.test.glsl")
+    # bind params
+    program.bindParams(Input=inputTensor, Output=outputTensor)
+
+    # fill input
+    queries = inputBuffer.numpy()
+    phi_in = rng.random(N) * 2.0 * np.pi
+    cos_theta_in = rng.random(N) * 2.0 - 1.0
+    sin_theta_in = np.sqrt(1.0 - cos_theta_in ** 2)
+    queries["direction"] = stackVector(
+        [sin_theta_in * np.cos(phi_in), sin_theta_in * np.sin(phi_in), cos_theta_in],
+        vec3,
+    )
+    queries["medium"][: (N // 2)] = packUint64(media["water"])
+    queries["medium"][(N // 2) :] = packUint64(media["empty"])
+    phi_out = rng.random(N) * 2.0 * np.pi
+    cos_theta_out = rng.random(N) * 2.0 - 1.0
+    sin_theta_out = np.sqrt(1.0 - cos_theta_out ** 2)
+    queries["dir"] = stackVector(
+        [
+            sin_theta_out * np.cos(phi_out),
+            sin_theta_out * np.sin(phi_out),
+            cos_theta_out,
+        ],
+        vec3,
+    )
+
+    # run program
+    (
+        hp.beginSequence()
+        .And(hp.updateTensor(inputBuffer, inputTensor))
+        .Then(program.dispatch(N // 32))
+        .Then(hp.retrieveTensor(outputTensor, outputBuffer))
+        .Submit()
+        .wait()
+    )
+
+    # calc expected prob using models
+    dir_in = structured_to_unstructured(queries["direction"])
+    dir_out = structured_to_unstructured(queries["dir"])
+    cos_theta = np.multiply(dir_in, dir_out).sum(-1)
+    p = np.empty(N)
+    p[: (N // 2)] = np.exp(model.log_phase_function(cos_theta[: (N // 2)]))
+    p[(N // 2) :] = 1.0 / (4.0 * np.pi)  # lambertian / empty model
+    # check result
+    result = outputBuffer.numpy()
+    assert np.abs(result - p).max() < 5e-5  # extra error from interpolation <-> model
