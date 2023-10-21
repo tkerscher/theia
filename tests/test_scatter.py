@@ -418,6 +418,28 @@ def test_volumeScatter(rng, shaderUtil):
     p_exp = np.exp(model.log_phase_function(cos_theta[N_EMPTY:]))
     assert np.abs(p_exp - result["prob"][N_EMPTY:]).max() < 5e-5
 
+    # check if scattered phi is truly random
+    # create a local euclidean cosy from input direction as one axis
+    # the ratio of the projection onto the other two axis is the tan
+    # since we expect uniform, we are free to rotate around the input direction
+    # See prbt v4: chapter 3.3.3
+    s = np.copysign(1.0, dir_in[:, 2])
+    a = -1.0 / (s + dir_in[:, 2])
+    b = a * dir_in[:, 0] * dir_in[:, 1]
+    x_ax = np.stack([1.0 + s * dir_in[:, 0] ** 2 * a, s * b, -s * dir_in[:, 0]], -1)
+    y_ax = np.stack([b, s + dir_in[:, 1] ** 2 * a, -dir_in[:, 1]], -1)
+    # normalize to be safe
+    x_ax = x_ax / np.sqrt(np.square(x_ax).sum(-1))[:, None]
+    y_ax = y_ax / np.sqrt(np.square(y_ax).sum(-1))[:, None]
+    # project onto axis
+    x = np.multiply(x_ax, dir_out).sum(-1)
+    y = np.multiply(y_ax, dir_out).sum(-1)
+    phi = np.arctan2(y, x)
+    # check if phi is uniform
+    hist = np.histogram(phi, bins=10, range=(-np.pi, np.pi))[0]
+    # check for uniform
+    assert np.abs((hist / N) - (1.0 / 10)).max() < 0.01 # low statistics
+
 
 def test_volumeScatterProb(rng, shaderUtil):
     N = 32 * 256
