@@ -3,9 +3,7 @@
 
 #include "cosy.glsl"
 #include "ray.glsl"
-
-#define TWO_PI 6.283185307179586477
-#define INV_4PI 0.0795774715459476679
+#include "math.glsl"
 
 vec3 scatterDir(vec3 prevDir, float cos_theta, float phi) {
     //sanitize just to be safe

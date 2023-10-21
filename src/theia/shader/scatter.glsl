@@ -3,9 +3,7 @@
 
 #include "cosy.glsl"
 #include "material.glsl"
-
-#define TWO_PI 6.283185307179586477
-#define INV_4PI 0.0795774715459476679
+#include "math.glsl"
 
 ////////////////////////////////////// RAY /////////////////////////////////////
 

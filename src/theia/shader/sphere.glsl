@@ -2,8 +2,7 @@
 #define _SPHERE_INCLUDE
 
 #include "cosy.glsl"
-
-#define TWO_PI 6.28318530717958647
+#include "math.glsl"
 
 struct Sphere{
     vec3 position;
