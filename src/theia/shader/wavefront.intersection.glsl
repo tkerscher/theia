@@ -140,7 +140,7 @@ void main() {
         //create hits
         PhotonHit hits[N_PHOTONS];
         for (int i = 0; i < N_PHOTONS; ++i) {
-            hits[i] = createHit(item.ray.photons[i]);
+            hits[i] = createHit(ray.photons[i]);
             //attenuate by transmission
             hits[i].throughput *= (1.0 - r[i]);
         }
