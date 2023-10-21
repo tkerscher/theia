@@ -36,7 +36,12 @@ struct ResponseItem{
     PhotonHit hits[N_PHOTONS];
 };
 
-// struct ShadowRayItem{};
+struct ShadowRayItem{
+    Ray ray;
+    int targetIdx;
+
+    float dist;
+};
 
 struct IntersectionItem{
     Ray ray;
