@@ -381,11 +381,9 @@ def test_volumeScatter(rng, shaderUtil):
     phi = rng.random(N) * 2.0 * np.pi
     cos_theta_in = rng.random(N) * 2.0 - 1.0
     sin_theta_in = np.sqrt(1.0 - cos_theta_in ** 2)
-    queries["direction"] = stackVector([
-        sin_theta_in * np.cos(phi),
-        sin_theta_in * np.sin(phi),
-        cos_theta_in
-    ], vec3)
+    queries["direction"] = stackVector(
+        [sin_theta_in * np.cos(phi), sin_theta_in * np.sin(phi), cos_theta_in], vec3
+    )
     queries["medium"][N_EMPTY:] = packUint64(media["water"])
     queries["medium"][:N_EMPTY] = packUint64(media["empty"])
     queries["photons"]["T_lin"] = rng.random(N * 4).reshape((N, -1))
@@ -410,9 +408,9 @@ def test_volumeScatter(rng, shaderUtil):
     cos_theta = np.multiply(dir_in, dir_out).sum(-1)
     assert np.allclose(result["photons"]["T_lin"], tlin_exp)
     # test lambertian disitribution
-    bins = np.histogram(cos_theta[:N_EMPTY], bins=10, range=(-1,1))[0]
-    assert np.abs(bins / N_EMPTY - 0.1).max() < 0.1 #low statistic
-    assert np.allclose(result["prob"][:N_EMPTY], 1. / (4.0 * np.pi))
+    bins = np.histogram(cos_theta[:N_EMPTY], bins=10, range=(-1, 1))[0]
+    assert np.abs(bins / N_EMPTY - 0.1).max() < 0.1  # low statistic
+    assert np.allclose(result["prob"][:N_EMPTY], 1.0 / (4.0 * np.pi))
     # test henyey greenstein via E[cos_theta] = g
     assert np.abs(cos_theta[N_EMPTY:].mean() - model.g) < 5e-3
     p_exp = np.exp(model.log_phase_function(cos_theta[N_EMPTY:]))
@@ -438,7 +436,7 @@ def test_volumeScatter(rng, shaderUtil):
     # check if phi is uniform
     hist = np.histogram(phi, bins=10, range=(-np.pi, np.pi))[0]
     # check for uniform
-    assert np.abs((hist / N) - (1.0 / 10)).max() < 0.01 # low statistics
+    assert np.abs((hist / N) - (1.0 / 10)).max() < 0.01  # low statistics
 
 
 def test_volumeScatterProb(rng, shaderUtil):
