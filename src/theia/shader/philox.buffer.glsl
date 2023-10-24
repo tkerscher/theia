@@ -1,5 +1,3 @@
-#version 460
-
 #extension GL_EXT_scalar_block_layout : require
 
 // Philox 4x32 implementation
