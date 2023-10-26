@@ -3,6 +3,7 @@ import hephaistos as hp
 from ctypes import c_uint32, c_uint64
 from hephaistos.glsl import uvec4, uvec2
 from os.path import join
+from typing import Dict
 
 
 def getCompiler() -> hp.Compiler:
@@ -15,13 +16,36 @@ def getCompiler() -> hp.Compiler:
     return getCompiler._compiler
 
 
-def compileShader(file: str) -> bytes:
-    """Compiles the given shader code stored inside the libs shader folder"""
-    path = str(importlib.resources.files("theia").joinpath(f"shader/{file}"))
-    source = None
-    with open(path, "r") as file:
-        source = file.read()
-    return getCompiler().compile(source)
+def getShaderPath(file: str) -> str:
+    """Returns the path to the given shader file"""
+    return str(importlib.resources.files("theia").joinpath(f"shader/{file}"))
+
+
+def loadShader(file: str) -> str:
+    """Loads the given shader file and returns its source code"""
+    with open(getShaderPath(file), "r") as file:
+        return file.read()
+
+
+def compileShader(
+        file: str,
+        preamble: str = "",
+        headers: Dict[str, str] = {}
+    ) -> bytes:
+    """
+    Compiles the given shader code stored inside the libs shader folder.
+    
+    Parameters
+    ----------
+    file: str
+        path to file containing the shader source code
+    preamble: str, default=""
+        text to prepend the source code
+    headers: { str: str }, default={}
+        map of runtime header files mapping file name to source code
+    """
+    code = preamble + "\n" + loadShader(file)
+    return getCompiler().compile(code, headers)
 
 
 def uvec4ToInt(value: uvec4) -> int:
