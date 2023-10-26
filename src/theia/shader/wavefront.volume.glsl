@@ -11,36 +11,31 @@
 
 #include "scatter.volume.glsl"
 #include "sphere.glsl"
-#include "wavefront.items.glsl"
+#include "wavefront.common.glsl"
 
-layout(local_size_x = 32) in;
+layout(local_size_x = LOCAL_SIZE) in;
 
-layout(scalar) readonly buffer VolumeScatterQueue{
+layout(scalar) readonly buffer VolumeScatterQueue {
     uint volumeCount;
     VolumeScatterItem volumeItems[];
 };
-layout(scalar) writeonly buffer RayQueue{
+layout(scalar) writeonly buffer RayQueue {
     uint rayCount;
-    RayItem rayItems[];
+    Ray rayItems[];
 };
-layout(scalar) writeonly buffer ShadowQueue{
+layout(scalar) writeonly buffer ShadowQueue {
     uint shadowCount;
     ShadowRayItem shadowItems[];
 };
 
-layout(scalar) readonly buffer RNGBuffer{ float u[]; };
-layout(scalar) readonly buffer Detectors{
+layout(scalar) readonly buffer RNGBuffer { float u[]; };
+layout(scalar) readonly buffer Detectors {
     Sphere detectors[];
 };
 
-layout(scalar) uniform TraceParams{
-    // for transient rendering, we won't importance sample the media
-    float scatterCoefficient;
-
-    float maxTime;
-    vec3 lowerBBoxCorner;
-    vec3 upperBBoxCorner;
-} params;
+layout(scalar) uniform Params {
+    TraceParams params;
+};
 
 void main() {
     //range check
@@ -90,7 +85,7 @@ void main() {
         return;
     
     //sample target
-    Sphere detector = detectors[item.targetIdx];
+    Sphere detector = detectors[params.targetIdx];
     vec2 rng = vec2(u[ray.rngIdx++], u[ray.rngIdx++]);
     float pTarget, targetDist;
     vec3 targetDir = sampleSphere(detector, ray.position, rng, targetDist, pTarget);
@@ -137,12 +132,12 @@ void main() {
     //order the active invocations so each can write at their own spot
     uint id = subgroupExclusiveAdd(1);
     //create and save item
-    rayItems[oldCount + id] = RayItem(ray, item.targetIdx);
+    rayItems[oldCount + id] = ray;
 
     //Now do the same with the shadow rays
     if (subgroupElect()) {
         oldCount = atomicAdd(shadowCount, n);
     }
     oldCount = subgroupBroadcastFirst(oldCount);
-    shadowItems[oldCount + id] = ShadowRayItem(targetRay, item.targetIdx, targetDist);
+    shadowItems[oldCount + id] = ShadowRayItem(targetRay, targetDist);
 }

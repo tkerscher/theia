@@ -1,12 +1,11 @@
 #ifndef _ITEMS_INCLUDE
 #define _ITEMS_INCLUDE
 
-#include "ray.glsl"
+#ifndef LOCAL_SIZE
+#define LOCAL_SIZE 32
+#endif
 
-struct RayItem{
-    Ray ray;
-    int targetIdx; //same as customIdx on geometry
-};
+#include "ray.glsl"
 
 struct PhotonHit{
     float wavelength;
@@ -31,21 +30,18 @@ struct ResponseItem{
     vec3 position;
     vec3 direction;
     vec3 normal;
-    int detectorIdx;
 
     PhotonHit hits[N_PHOTONS];
 };
 
 struct ShadowRayItem{
     Ray ray;
-    int targetIdx;
 
     float dist;
 };
 
 struct IntersectionItem{
     Ray ray;
-    int targetIdx;
 
     int geometryIdx;
     int customIdx;
@@ -57,9 +53,21 @@ struct IntersectionItem{
 
 struct VolumeScatterItem{
     Ray ray;
-    int targetIdx;
 
     float dist;
+};
+
+struct TraceParams {
+    //Index of target we want to hit
+    uint targetIdx;
+
+    //for transient rendering, we won't importance sample the media
+    float scatterCoefficient;
+
+    //boundary conditions
+    float maxTime;
+    vec3 lowerBBoxCorner;
+    vec3 upperBBoxCorner;
 };
 
 #endif

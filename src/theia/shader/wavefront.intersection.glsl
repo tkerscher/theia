@@ -8,20 +8,20 @@
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_basic : require
 
-#include "wavefront.items.glsl"
 #include "scatter.surface.glsl"
+#include "wavefront.common.glsl"
 
-layout(local_size_x = 32) in;
+layout(local_size_x = LOCAL_SIZE) in;
 
-layout(scalar) readonly buffer IntersectionQueue{
+layout(scalar) readonly buffer IntersectionQueue {
     uint intersectionCount;
     IntersectionItem intersectionItems[];
 };
-layout(scalar) writeonly buffer RayQueue{
+layout(scalar) writeonly buffer RayQueue {
     uint rayCount;
-    RayItem rayItems[];
+    Ray rayItems[];
 };
-layout(scalar) writeonly buffer ResponseQueue{
+layout(scalar) writeonly buffer ResponseQueue {
     uint responseCount;
     ResponseItem responseItems[];
 };
@@ -33,21 +33,16 @@ layout(buffer_reference, scalar, buffer_reference_align=4) readonly buffer Verte
 layout(buffer_reference, scalar, buffer_reference_align=4) readonly buffer Index {
     ivec3 idx;
 };
-struct Geometry{
+struct Geometry {
     Vertex vertices;    // &vertices[0]
     Index indices;      // &indices[0]
     Material material;
 };
-layout(scalar) buffer Geometries{ Geometry geometries[]; };
+layout(scalar) buffer Geometries { Geometry geometries[]; };
 
-layout(scalar) uniform TraceParams{
-    // for transient rendering, we won't importance sample the media
-    float scatterCoefficient;
-
-    float maxTime;
-    vec3 lowerBBoxCorner;
-    vec3 upperBBoxCorner;
-} params;
+layout(scalar) uniform Params {
+    TraceParams params;
+};
 
 //Taken from Ray Tracing Gems: Chapter 6
 // Normal points outward for rays exiting the surface, else is flipped.
@@ -132,7 +127,7 @@ void main() {
         return;
     
     //If hit target -> create response item
-    if (item.customIdx == item.targetIdx &&
+    if (item.customIdx == params.targetIdx &&
         (geom.material.flags & MATERIAL_TARGET_BIT) != 0
     ) {
         //create hits
@@ -160,7 +155,7 @@ void main() {
         uint id = subgroupExclusiveAdd(1);
         //create response item
         responseItems[oldCount + id] = ResponseItem(
-            objPos, objDir, objNormal, item.targetIdx, hits
+            objPos, objDir, objNormal, hits
         );
     }
 
@@ -188,5 +183,5 @@ void main() {
     //order the active invocations so each can write at their own spot
     uint id = subgroupExclusiveAdd(1);
     //create item on the tracing queue
-    rayItems[oldCount + id] = RayItem(ray, item.targetIdx);
+    rayItems[oldCount + id] = ray;
 }

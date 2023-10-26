@@ -10,15 +10,15 @@
 #extension GL_KHR_shader_subgroup_basic : require
 
 #include "scatter.surface.glsl"
-#include "wavefront.items.glsl"
+#include "wavefront.common.glsl"
 
-layout(local_size_x = 32) in;
+layout(local_size_x = LOCAL_SIZE) in;
 
-layout(scalar) readonly buffer ShadowQueue{
+layout(scalar) readonly buffer ShadowQueue {
     uint shadowCount;
     ShadowRayItem shadowItems[];
 };
-layout(scalar) writeonly buffer ResponseQueue{
+layout(scalar) writeonly buffer ResponseQueue {
     uint responseCount;
     ResponseItem responseItems[];
 };
@@ -30,22 +30,17 @@ layout(buffer_reference, scalar, buffer_reference_align=4) readonly buffer Verte
 layout(buffer_reference, scalar, buffer_reference_align=4) readonly buffer Index {
     ivec3 idx;
 };
-struct Geometry{
+struct Geometry {
     Vertex vertices;    // &vertices[0]
     Index indices;      // &indices[0]
     Material material;
 };
-layout(scalar) buffer Geometries{ Geometry geometries[]; };
+layout(scalar) buffer Geometries { Geometry geometries[]; };
 uniform accelerationStructureEXT tlas;
 
-layout(scalar) uniform TraceParams{
-    // for transient rendering, we won't importance sample the media
-    float scatterCoefficient;
-
-    float maxTime;
-    vec3 lowerBBoxCorner;
-    vec3 upperBBoxCorner;
-} params;
+layout(scalar) uniform Params {
+    TraceParams params;
+};
 
 void main() {
     //Range check
@@ -74,7 +69,7 @@ void main() {
     int customIdx = rayQueryGetIntersectionInstanceCustomIndexEXT(rayQuery, true);
     int geometryIdx = rayQueryGetIntersectionInstanceIdEXT(rayQuery, true);
     Geometry geom = geometries[geometryIdx];
-    if (customIdx != item.targetIdx && (geom.material.flags & MATERIAL_TARGET_BIT) != 0)
+    if (customIdx != params.targetIdx && (geom.material.flags & MATERIAL_TARGET_BIT) != 0)
         return;
     
     //We indeed hit the detector -> collect all infromations about the hit
@@ -155,6 +150,6 @@ void main() {
     uint id = subgroupExclusiveAdd(1);
     //create response item
     responseItems[oldCount + id] = ResponseItem(
-        objPos, objDir, objNormal, item.targetIdx, hits
+        objPos, objDir, objNormal, hits
     );
 }

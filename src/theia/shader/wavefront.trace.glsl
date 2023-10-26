@@ -9,41 +9,37 @@
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_basic : require
 
-#include "wavefront.items.glsl"
+#include "wavefront.common.glsl"
 
-layout(local_size_x = 32) in;
+layout(local_size_x = LOCAL_SIZE) in;
 
-layout(scalar) readonly buffer RayQueue{
+layout(scalar) readonly buffer RayQueue {
     uint rayCount;
-    RayItem rayItems[];
+    Ray rayItems[];
 };
-layout(scalar) writeonly buffer IntersectionQueue{
+layout(scalar) writeonly buffer IntersectionQueue {
     uint intersectionCount;
     IntersectionItem intersectionItems[];
 };
-layout(scalar) writeonly buffer VolumeScatterQueue{
+layout(scalar) writeonly buffer VolumeScatterQueue {
     uint volumeCount;
     VolumeScatterItem volumeItems[];
 };
 
-layout(scalar) readonly buffer RNGBuffer{ float u[]; };
+layout(scalar) readonly buffer RNGBuffer { float u[]; };
 uniform accelerationStructureEXT tlas;
 
-layout(scalar) uniform TraceParams{
-    // for transient rendering, we won't importance sample the media
-    float scatterCoefficient;
-
-    float maxTime;
-    vec3 lowerBBoxCorner;
-    vec3 upperBBoxCorner;
-} params;
+layout(scalar) uniform Params {
+    TraceParams params;
+};
 
 void main() {
     //range check
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= rayCount)
         return;
-    Ray ray = rayItems[idx].ray;
+    //create editable copy
+    Ray ray = rayItems[idx];
 
     //just to be safe
     vec3 dir = normalize(ray.direction);
@@ -92,7 +88,6 @@ void main() {
         //create and save item
         intersectionItems[oldCount + id] = IntersectionItem(
             ray,
-            rayItems[idx].targetIdx,
 
             instanceId,
             customId,
@@ -121,11 +116,6 @@ void main() {
         //order the active invocations so each can write at their own spot
         uint id = subgroupExclusiveAdd(1);
         //create and save item
-        volumeItems[oldCount + id] = VolumeScatterItem(
-            ray,
-            rayItems[idx].targetIdx,
-            
-            dist
-        );
+        volumeItems[oldCount + id] = VolumeScatterItem(ray, dist);
     }
 }

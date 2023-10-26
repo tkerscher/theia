@@ -3,6 +3,7 @@ import hephaistos as hp
 import theia.material
 import theia.random
 import theia.scene
+import theia.trace
 from ctypes import *
 from hephaistos.glsl import mat4x3, vec2, vec3, uvec2, stackVector
 from numpy.ctypeslib import as_array
@@ -103,7 +104,6 @@ class RayQuery(Structure):
     _fields_ = [
         ("position", vec3),
         ("direction", vec3),
-        ("targetIdx", c_int32),
         ("photons", PhotonQuery * N_PHOTONS),
     ]
 
@@ -120,7 +120,6 @@ class InitParams(Structure):
 class IntersectionItem(Structure):
     _fields_ = [
         ("ray", Ray),
-        ("targetIdx", c_int32),
         ("geometryIdx", c_int32),
         ("customIdx", c_int32),
         ("triangleIdx", c_int32),
@@ -135,7 +134,6 @@ class ResponseItem(Structure):
         ("position", vec3),
         ("direction", vec3),
         ("normal", vec3),
-        ("detectorIdx", c_int32),
         ("hits", PhotonHit * N_PHOTONS),
     ]
 
@@ -143,17 +141,12 @@ class ResponseItem(Structure):
 class ShadowRayItem(Structure):
     _fields_ = [
         ("ray", Ray),
-        ("targetIdx", c_int32),
         ("dist", c_float),
     ]
 
 
-class RayItem(Structure):
-    _fields_ = [("ray", Ray), ("targetIdx", c_int32)]
-
-
 class VolumeScatterItem(Structure):
-    _fields_ = [("ray", Ray), ("targetIdx", c_int32), ("dist", c_float)]
+    _fields_ = [("ray", Ray), ("dist", c_float)]
 
 
 class Detector(Structure):
@@ -162,6 +155,7 @@ class Detector(Structure):
 
 class TraceParams(Structure):
     _fields_ = [
+        ("targetIdx", c_uint32),
         ("scatterCoefficient", c_float),
         ("maxTime", c_float),
         ("lowerBBoxCorner", vec3),
@@ -172,70 +166,66 @@ class TraceParams(Structure):
 #################################### STAGES ####################################
 
 
-def test_wavefront_init(rng):
+def test_lightsource(rng):
+    # create host light
     N = 32 * 256
     RNG_STRIDE = 16
-    # create program
-    program = hp.Program(compileShader("wavefront.init.glsl"))
+    light = theia.trace.HostLightSource(N, nPhotons=N_PHOTONS)
 
     # create medium
     model = WaterModel()
     water = model.createMedium()
     tensor, _, media = theia.material.bakeMaterials(media=[water])
 
-    # allocate memory
-    inputBuffer = hp.ArrayBuffer(RayQuery, N)
-    inputTensor = hp.ArrayTensor(RayQuery, N)
-    outputBuffer = QueueBuffer(RayItem, N)
-    outputTensor = QueueTensor(RayItem, N)
-    # bind memory
-    program.bindParams(QueryInput=inputTensor, RayQueue=outputTensor)
+    # allocate queue
+    outputBuffer = QueueBuffer(Ray, N)
+    outputTensor = QueueTensor(Ray, N)
 
     # fill input buffer
-    queries = inputBuffer.numpy()
+    rays = light.numpy()
     x = rng.random(N) * 10.0 - 5.0
     y = rng.random(N) * 10.0 - 5.0
     z = rng.random(N) * 10.0 - 5.0
-    theta = rng.random(N) * np.pi
+    cos_theta = 2.0 * rng.random(N) - 1.0
+    sin_theta = np.sqrt(1.0 - cos_theta**2)
     phi = rng.random(N) * 2.0 * np.pi
-    queries["position"] = stackVector((x, y, z), vec3)
-    queries["direction"] = stackVector(
-        (np.sin(theta) * np.cos(phi), np.sin(theta) * np.sin(phi), np.cos(theta)), vec3
-    )
-    queries["targetIdx"] = rng.integers(1, 256, N)
-    queries["photons"]["wavelength"] = rng.random((N, N_PHOTONS)) * 600.0 + 200.0
-    queries["photons"]["log_radiance"] = rng.random((N, N_PHOTONS)) * 5.0 - 4.0
-    queries["photons"]["startTime"] = rng.random((N, N_PHOTONS)) * 50.0
-    queries["photons"]["probability"] = rng.random((N, N_PHOTONS))
-    # create push descriptor
-    push = InitParams(count=N, medium=packUint64(media["water"]), rngStride=RNG_STRIDE)
+    rays["position"] = stackVector((x, y, z), vec3)
+    rays["direction"] = stackVector([
+        sin_theta * np.cos(phi),
+        sin_theta * np.sin(phi),
+        cos_theta
+    ], vec3)
+    rays["photons"]["wavelength"] = rng.random((N, N_PHOTONS)) * 600.0 + 200.0
+    rays["photons"]["log_radiance"] = rng.random((N, N_PHOTONS)) * 5.0 - 4.0
+    rays["photons"]["startTime"] = rng.random((N, N_PHOTONS)) * 50.0
+    rays["photons"]["probability"] = rng.random((N, N_PHOTONS))
+    # upload input
+    light.update()
 
-    # run program
+    # run
     (
         hp.beginSequence()
-        .And(hp.updateTensor(inputBuffer, inputTensor))
-        .Then(program.dispatchPush(bytes(push), N // 32))
+        .And(light.sample(N, outputTensor, media["water"], RNG_STRIDE))
         .Then(hp.retrieveTensor(outputTensor, outputBuffer))
         .Submit()
         .wait()
     )
 
     # check result
-    lam = queries["photons"]["wavelength"]
+    lam = rays["photons"]["wavelength"]
     assert outputBuffer.count == N
     result = outputBuffer.numpy()
-    assert np.all(result["targetIdx"] == queries["targetIdx"])
-    assert np.all(result["ray"]["position"] == queries["position"])
-    assert np.all(result["ray"]["direction"] == queries["direction"])
-    assert np.all(result["ray"]["rngIdx"] == np.arange(N) * RNG_STRIDE)
+    assert np.all(result["position"] == rays["position"])
+    assert np.all(result["direction"] == rays["direction"])
+    assert np.all(result["rngIdx"] == np.arange(N) * RNG_STRIDE)
     water_packed = packUint64(media["water"])
-    assert np.all(result["ray"]["medium"]["x"] == water_packed.x)
-    assert np.all(result["ray"]["medium"]["y"] == water_packed.y)
-    photons = result["ray"]["photons"]
+    assert np.all(result["medium"]["x"] == water_packed.x)
+    assert np.all(result["medium"]["y"] == water_packed.y)
+    photons = result["photons"]
     assert np.all(photons["wavelength"] == lam)
-    assert np.all(photons["travelTime"] == queries["photons"]["startTime"])
-    assert np.all(photons["log_radiance"] == queries["photons"]["log_radiance"])
-    assert np.all(photons["T_lin"] == queries["photons"]["probability"])
+    assert np.all(photons["travelTime"] == rays["photons"]["startTime"])
+    assert np.all(photons["log_radiance"] == rays["photons"]["log_radiance"])
+    assert np.all(photons["T_lin"] == rays["photons"]["probability"])
     assert np.all(photons["T_log"] == 0.0)
     assert np.abs(photons["n"] - model.refractive_index(lam)).max() < 5e-6
     assert np.abs(photons["vg"] - model.group_velocity(lam)).max() < 1e-6
@@ -247,9 +237,10 @@ def test_wavefront_init(rng):
 def test_wavefront_trace(rng):
     N = 32 * 256
     RNG_BATCH = 4 * 16
+    # create light
+    light = theia.trace.HostLightSource(N, nPhotons=4)
     # create programs
     philox = theia.random.PhiloxRNG(N, RNG_BATCH, key=0xC0110FFC0FFEE)
-    wavefront_init = hp.Program(compileShader("wavefront.init.glsl"))
     wavefront_trace = hp.Program(compileShader("wavefront.trace.glsl"))
     wavefront_intersect = hp.Program(compileShader("wavefront.intersection.glsl"))
 
@@ -272,14 +263,12 @@ def test_wavefront_trace(rng):
     c1 = store.createInstance("sphere", "mat", transform=t1, detectorId=0)
     t2 = theia.scene.Transform.Scale(r, r, r).translate(x, y, z - r - d)
     c2 = store.createInstance("sphere", "mat", transform=t2, detectorId=1)
-    scene = theia.scene.Scene([c1, c2], material, media["water"])
+    scene = theia.scene.Scene([c1, c2], material, medium=media["water"])
 
     # reserve memory
-    inputBuffer = hp.ArrayBuffer(RayQuery, N)
-    inputTensor = hp.ArrayTensor(RayQuery, N)
-    rayBufferIn = QueueBuffer(RayItem, N)
-    rayBufferOut = QueueBuffer(RayItem, N)
-    rayTensor = QueueTensor(RayItem, N)
+    rayBufferIn = QueueBuffer(Ray, N)
+    rayBufferOut = QueueBuffer(Ray, N)
+    rayTensor = QueueTensor(Ray, N)
     intBuffer = QueueBuffer(IntersectionItem, N)
     intTensor = QueueTensor(IntersectionItem, N)
     volBuffer = QueueBuffer(VolumeScatterItem, N)
@@ -289,31 +278,29 @@ def test_wavefront_trace(rng):
     paramsBuffer = hp.StructureBuffer(TraceParams)
     paramsTensor = hp.StructureTensor(TraceParams)
     # bind memory
-    wavefront_init.bindParams(QueryInput=inputTensor, RayQueue=rayTensor)
     wavefront_trace.bindParams(
         RayQueue=rayTensor,
         IntersectionQueue=intTensor,
         VolumeScatterQueue=volTensor,
         RNGBuffer=philox.tensor,
         tlas=scene.tlas,
-        TraceParams=paramsTensor,
+        Params=paramsTensor,
     )
     wavefront_intersect.bindParams(
         IntersectionQueue=intTensor,
         RayQueue=rayTensor,
         ResponseQueue=responseTensor,
         Geometries=scene.geometries,
-        TraceParams=paramsTensor,
+        Params=paramsTensor,
     )
 
     # fill input buffer
-    queries = inputBuffer.numpy()
+    queries = light.numpy()
     theta = rng.random(N) * np.pi
     phi = rng.random(N) * 2.0 * np.pi
     queries["direction"] = stackVector(
         (np.sin(theta) * np.cos(phi), np.sin(theta) * np.sin(phi), np.cos(theta)), vec3
     )
-    queries["targetIdx"] = 1
     queries["position"]["x"] = 10.0
     queries["position"]["y"] = 5.0
     queries["position"]["z"] = 0.0
@@ -324,23 +311,23 @@ def test_wavefront_trace(rng):
     queries["photons"]["log_radiance"] = rng.random((N, N_PHOTONS)) * 5.0 - 4.0
     queries["photons"]["startTime"] = rng.random((N, N_PHOTONS)) * 50.0
     queries["photons"]["probability"] = rng.random((N, N_PHOTONS))
+    # upload queries
+    light.update()
     # create params
     lambda_sc = 1.0 / 100.0
     t_max = 500.0
+    paramsBuffer.targetIdx = 1
     paramsBuffer.scatterCoefficient = lambda_sc
     paramsBuffer.maxTime = t_max
     paramsBuffer.lowerBBoxCorner = vec3(x=-100.0, y=-100.0, z=-100.0)
     paramsBuffer.upperBBoxCorner = vec3(x=100.0, y=100.0, z=100.0)
-    # create push descriptor
-    push = InitParams(count=N, medium=packUint64(media["water"]), rngStride=RNG_BATCH)
 
     # run program
     (
         hp.beginSequence()
-        .And(hp.updateTensor(inputBuffer, inputTensor))
         .And(hp.updateTensor(paramsBuffer, paramsTensor))
-        .Then(philox.dispatchNext())
-        .Then(wavefront_init.dispatchPush(bytes(push), N // 32))
+        .And(philox.dispatchNext())
+        .And(light.sample(N, rayTensor, media["water"], RNG_BATCH))
         .Then(hp.retrieveTensor(rayTensor, rayBufferIn))
         .Then(wavefront_trace.dispatch(N // 32))
         .Then(hp.retrieveTensor(intTensor, intBuffer))
@@ -377,52 +364,54 @@ def test_wavefront_trace(rng):
     # check intersections
     i = rayBufferOut.numpy()[: rayBufferOut.count]
     # reconstruct input queries
-    i_idx = (i["ray"]["photons"]["wavelength"][:, 0] - 200.0) / (600.0 / (N - 1))
+    i_idx = (i["photons"]["wavelength"][:, 0] - 200.0) / (600.0 / (N - 1))
     i_in = r_in[np.round(i_idx).astype(np.int32)]
     # check position: direction match
-    i_pos = structured_to_unstructured(i["ray"]["position"])
-    i_dir = i_pos - structured_to_unstructured(i_in["ray"]["position"])
+    i_pos = structured_to_unstructured(i["position"])
+    i_dir = i_pos - structured_to_unstructured(i_in["position"])
     i_dir /= np.sqrt(np.square(i_dir).sum(-1))[:, None]
-    r_dir = structured_to_unstructured(i_in["ray"]["direction"])
+    r_dir = structured_to_unstructured(i_in["direction"])
     assert np.abs(i_dir - r_dir).max() < 1e-4
     # check positions: on sphere
     center = np.array([x, y, r + d])
     i_dup = np.square(i_pos - center[None, :]).sum(-1)
     center[2] = -(r + d)
     i_d = np.square(i_pos - center[None, :]).sum(-1)
-    mask = i_in["ray"]["direction"]["z"] > 0.0
+    mask = i_in["direction"]["z"] > 0.0
     i_d[mask] = i_dup[mask]
     i_d = np.sqrt(i_d)
-    assert np.all((i_d <= r + 5e-5) & (i_d >= r_insc + 5e-5))
+    # on small sphere
+    d_small = (i_d <= r + 5e-5) & (i_d >= r_insc + 5e-5)
+    d_big = (i_d <= 2*r + 5e-5) & (i_d >= 2*r_insc + 5e-5)
+    assert np.all(d_small | d_big)
     # check distance & throughput
     i_dist = np.sqrt(np.square(i_pos - pos[None, :]).sum(-1))
     i_t = (
-        i_dist[:, None] / i_in["ray"]["photons"]["vg"]
-        + i_in["ray"]["photons"]["travelTime"]
+        i_dist[:, None] / i_in["photons"]["vg"]
+        + i_in["photons"]["travelTime"]
     )
-    assert np.allclose(i_t, i["ray"]["photons"]["travelTime"])
-    i_thr = (lambda_sc - i_in["ray"]["photons"]["mu_e"]) * i_dist[:, None]
-    assert np.allclose(i_thr, i["ray"]["photons"]["T_log"])
+    assert np.allclose(i_t, i["photons"]["travelTime"])
+    i_thr = (lambda_sc - i_in["photons"]["mu_e"]) * i_dist[:, None]
+    assert np.allclose(i_thr, i["photons"]["T_log"])
     # TODO: check reflectance
     # check direction
     i_normal = (i_pos - center[None, :]) / i_d[:, None]
     center[2] = r + d
     i_normal_up = (i_pos - center[None, :]) / i_d[:, None]
     i_normal[mask] = i_normal_up[mask]
-    i_din = structured_to_unstructured(i_in["ray"]["direction"])
+    i_din = structured_to_unstructured(i_in["direction"])
     i_dout = (
         i_din - 2.0 * np.multiply(i_din, i_normal).sum(-1)[:, None] * i_normal
     )  # reflect
-    n_err = np.abs(i_dout - structured_to_unstructured(i["ray"]["direction"]))
+    n_err = np.abs(i_dout - structured_to_unstructured(i["direction"]))
     assert n_err.max() < 0.01  # TODO: error a bit hight
 
     # check detector hits
     hits = responseBuffer.numpy()[: responseBuffer.count]
-    assert np.all(hits["detectorIdx"] == 1)
     # reconstruct input queries
     hits_idx = (hits["hits"]["wavelength"][:, 0] - 200.0) / (600.0 / (N - 1))
     hits_in = r_in[np.round(hits_idx).astype(np.int32)]
-    # check positions (note: unit icosphere)
+    # check positions (note: unit icosphere local coordinates)
     hits_pos = structured_to_unstructured(hits["position"])
     hits_d = np.sqrt(np.square(hits_pos).sum(-1))
     assert np.all((hits_d <= 1.0 + 5e-5) & (hits_d >= 0.99547149974733 + 5e-5))
@@ -433,10 +422,12 @@ def test_wavefront_trace(rng):
     n_err = np.abs(hits_normal - structured_to_unstructured(hits["normal"]))
     assert n_err.max() < 0.01
     # test direction
-    hits_din = structured_to_unstructured(hits_in["ray"]["direction"])
+    hits_din = structured_to_unstructured(hits_in["direction"])
     hits_dir = structured_to_unstructured(hits["direction"])
     n_err = np.abs(hits_din - hits_dir)
     assert n_err.max() < 1e-5
+    # check the hits are on the lower sphere via ray direction
+    assert hits_din[:,2].max() < 0.0
 
 
 def test_wavefront_volume(rng):
@@ -454,8 +445,8 @@ def test_wavefront_volume(rng):
     # allocate memory
     volumeQueueBuffer = QueueBuffer(VolumeScatterItem, N)
     volumeQueueTensor = QueueTensor(VolumeScatterItem, N)
-    rayQueueBuffer = QueueBuffer(RayItem, N)
-    rayQueueTensor = QueueTensor(RayItem, N)
+    rayQueueBuffer = QueueBuffer(Ray, N)
+    rayQueueTensor = QueueTensor(Ray, N)
     shadowQueueBuffer = QueueBuffer(ShadowRayItem, N)
     shadowQueueTensor = QueueTensor(ShadowRayItem, N)
     detectorBuffer = hp.ArrayBuffer(Detector, N_DET)
@@ -472,7 +463,7 @@ def test_wavefront_volume(rng):
         ShadowQueue=shadowQueueTensor,
         Detectors=detectorTensor,
         RNGBuffer=philox.tensor,
-        TraceParams=paramsTensor,
+        Params=paramsTensor,
     )
 
     # set params
@@ -480,6 +471,8 @@ def test_wavefront_volume(rng):
     _lam = 10.0
     mu_s = 0.6
     mu_e = 0.9
+    targetIdx = 13
+    paramsBuffer.targetIdx = targetIdx
     paramsBuffer.scatterCoefficient = _lam
     paramsBuffer.maxTime = t_max
     paramsBuffer.lowerBBoxCorner = vec3(x=-50.0, y=-50.0, z=-50.0)
@@ -521,7 +514,6 @@ def test_wavefront_volume(rng):
     v["ray"]["photons"]["mu_s"] = mu_s
     v["ray"]["photons"]["mu_e"] = mu_e
     v["dist"] = rng.random(N) * 100.0
-    v["targetIdx"] = rng.integers(0, N_DET - 1, N)
 
     # run program
     (
@@ -554,7 +546,7 @@ def test_wavefront_volume(rng):
 
     # reconstruct item ordering
     r = rayQueueBuffer.numpy()[:N_res]
-    r_idx = (r["ray"]["photons"]["wavelength"][:, 0] - 200.0) / (600.0 / (N - 1))
+    r_idx = (r["photons"]["wavelength"][:, 0] - 200.0) / (600.0 / (N - 1))
     r = r[np.argsort(np.round(r_idx).astype(np.int32))]
     assert r.size == N_res
     s = shadowQueueBuffer.numpy()[:N_res]
@@ -567,21 +559,20 @@ def test_wavefront_volume(rng):
     pos = pos[mask]
     # shortcuts
     v_ph = v["ray"]["photons"]
-    r_ph = r["ray"]["photons"]
+    r_ph = r["photons"]
     s_ph = s["ray"]["photons"]
     # check we matched correctly
     assert np.all(r_ph["wavelength"][:, 0] == v_ph["wavelength"][:, 0])
     assert np.all(s_ph["wavelength"][:, 0] == v_ph["wavelength"][:, 0])
 
     # check created shadow items
-    assert np.all(s["targetIdx"] == v["targetIdx"])
-    d_pos = structured_to_unstructured(det[s["targetIdx"]]["position"])
+    d_pos = structured_to_unstructured(det[targetIdx]["position"])
     s_pos = structured_to_unstructured(s["ray"]["position"])
     sd_dir = d_pos - s_pos
     center_dist = np.sqrt(np.square(sd_dir).sum(-1))
     sd_dir = sd_dir / center_dist[:, None]
     assert np.all(s["dist"] >= center_dist)
-    edge_dist = np.sqrt(det[s["targetIdx"]]["radius"] ** 2 + center_dist ** 2)
+    edge_dist = np.sqrt(det[targetIdx]["radius"] ** 2 + center_dist ** 2)
     cos_cone = center_dist / edge_dist
     s_dir = structured_to_unstructured(s["ray"]["direction"])
     cos_theta = np.multiply(sd_dir, s_dir).sum(-1)
@@ -597,10 +588,9 @@ def test_wavefront_volume(rng):
     assert np.abs(s_ph["log_radiance"] - v_ph["log_radiance"]).max() < 1e-6
 
     # Check created ray queries
-    assert np.all(r["targetIdx"] == v["targetIdx"])
-    r_pos = structured_to_unstructured(r["ray"]["position"])
+    r_pos = structured_to_unstructured(r["position"])
     assert np.abs(r_pos - pos).max() < 5e-6
-    delta_rng = r["ray"]["rngIdx"] - v["ray"]["rngIdx"]
+    delta_rng = r["rngIdx"] - v["ray"]["rngIdx"]
     assert delta_rng.max() == delta_rng.min()  # we have to always draw the same amount
     assert delta_rng.min() > 0  # check that we actually drew some random numbers
     assert np.abs(r_ph["travelTime"] - travelTime).max() < 5e-5
@@ -614,7 +604,7 @@ def test_wavefront_volume(rng):
     # since we IS the cosine, the mean of the cosines should be g
     # (HG is normalized to 1/2pi)
     v_dir = structured_to_unstructured(v["ray"]["direction"])
-    r_dir = structured_to_unstructured(r["ray"]["direction"])
+    r_dir = structured_to_unstructured(r["direction"])
     cos_theta = np.multiply(v_dir, r_dir).sum(-1)
     g_mc = cos_theta.mean()
     # give a bit more slack since we dont have that many samples
@@ -674,7 +664,7 @@ def test_wavefront_shadow(rng):
     c2 = store.createInstance("cube", "mat", transform=t2)  # obstacle
     t3 = theia.scene.Transform.Translation(5.0, 0.0, 8.0)
     c3 = store.createInstance("cube", "mat", transform=t3, detectorId=3)
-    scene = theia.scene.Scene([c1, c2, c3], material, media["water"])
+    scene = theia.scene.Scene([c1, c2, c3], material, medium=media["water"])
 
     # reserve memory
     shadowBuffer = QueueBuffer(ShadowRayItem, N)
@@ -689,12 +679,11 @@ def test_wavefront_shadow(rng):
         ResponseQueue=responseTensor,
         Geometries=scene.geometries,
         tlas=scene.tlas,
-        TraceParams=paramsTensor,
+        Params=paramsTensor,
     )
 
     # fill input buffer
     queries = shadowBuffer.numpy()
-    queries["targetIdx"] = 1
     queries["dist"] = 50.0
     queries["ray"]["photons"]["wavelength"] = rng.random((N, N_PHOTONS)) * 600.0 + 200.0
     # Use first wavelength as constant for reordering results
@@ -710,6 +699,7 @@ def test_wavefront_shadow(rng):
     # create params
     lambda_sc = 1.0 / 100.0
     t_max = 500.0
+    paramsBuffer.targetIdx = 1
     paramsBuffer.scatterCoefficient = lambda_sc
     paramsBuffer.maxTime = t_max
     paramsBuffer.lowerBBoxCorner = vec3(x=-100.0, y=-100.0, z=-100.0)
@@ -738,7 +728,6 @@ def test_wavefront_shadow(rng):
     i_in = queries[np.round(i_idx).astype(np.int32)]
     i_ph = i_in["ray"]["photons"]
     assert np.all(i_ph["wavelength"][:, 0] == r["hits"]["wavelength"][:, 0])
-    assert np.all(r["detectorIdx"] == 1)
     r_pos = structured_to_unstructured(r["position"])
     # check we are on local sphere coords
     r_rad = np.sqrt(np.square(r_pos).sum(-1))
