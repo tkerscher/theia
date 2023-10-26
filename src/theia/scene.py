@@ -7,7 +7,7 @@ import trimesh
 from ctypes import Structure, c_float, c_uint64
 from hephaistos.glsl import vec2, vec3
 from numpy.typing import NDArray, ArrayLike
-from typing import Iterable, Optional, Union
+from typing import Iterable, Optional, Tuple, Union
 
 
 class Transform:
@@ -103,7 +103,7 @@ def loadMesh(filepath: str) -> hp.Mesh:
 
 
 class MeshInstance:
-    """ "
+    """
     Instance of a mesh by referencing the corresponding one stored in a
     MeshStore. It can also be assigned a material by name, which will get
     resolved during compilation of the scene.
@@ -221,6 +221,116 @@ class MeshStore:
         return instance
 
 
+class RectBBox:
+    """
+    Rectangular bounding box defined by two opposite corners
+    
+    Parameter
+    ---------
+    lowerCorner: Tuple[float, float, float]
+        The corner with minimal coordinate values
+    
+    upperCorner: Tuple[float, float, float]
+        The corner with maximal coordinate values
+    """
+
+    class GLSL(Structure):
+        """GLSL struct equivalent"""
+        _fields_ = [("lowerCorner", vec3), ("upperCorner", vec3)]
+
+    def __init__(
+            self,
+            lowerCorner: Tuple[float, float, float],
+            upperCorner: Tuple[float, float, float]
+        ) -> None:
+        self._glsl = self.GLSL()
+        self.lowerCorner = lowerCorner
+        self.upperCorner = upperCorner
+    
+    @property
+    def glsl(self) -> RectBBox.GLSL:
+        """The underlying GLSL structure to be consumed by shaders"""
+        return self._glsl
+
+    @property
+    def lowerCorner(self) -> Tuple[float, float, float]:
+        """The corner with minimal coordinate values"""
+        return (
+            self._glsl.lowerCorner.x,
+            self._glsl.lowerCorner.y,
+            self._glsl.lowerCorner.z,
+        )
+    @lowerCorner.setter
+    def lowerCorner(self, value: Tuple[float, float, float]) -> None:
+        self._glsl.lowerCorner.x = value[0]
+        self._glsl.lowerCorner.y = value[1]
+        self._glsl.lowerCorner.z = value[2]
+    
+    @property
+    def upperCorner(self) -> Tuple[float, float, float]:
+        """The corner with maximal coordinate values"""
+        return (
+            self._glsl.upperCorner.x,
+            self._glsl.upperCorner.y,
+            self._glsl.upperCorner.z,
+        )
+    @upperCorner.setter
+    def upperCorner(self, value: Tuple[float, float, float]) -> None:
+        self._glsl.upperCorner.x = value[0]
+        self._glsl.upperCorner.y = value[1]
+        self._glsl.upperCorner.z = value[2]
+
+
+class SphereBBox:
+    """
+    Spherical bounding box defined by its center and radius.
+    Corresponds to a single point if radius is zero.
+    
+    Parameters
+    ----------
+    center: Tuple[float, float, float]
+        center of the sphere
+    radius: float
+        radius of the sphere
+    """
+
+    class GLSL(Structure):
+        """GLSL struct equivalent"""
+        _fields_ = [("center", vec3), ("radius", c_float)]
+
+    def __init__(self, center: Tuple[float, float, float], radius: float) -> None:
+        self._glsl = self.GLSL()
+        self.center = center
+        self.radius = radius
+    
+    @property
+    def glsl(self) -> SphereBBox.GLSL:
+        """The underlying GLSL structure to be consumed by shaders"""
+        return self._glsl
+
+    @property
+    def center(self) -> Tuple[float, float, float]:
+        """Center of the sphere"""
+        return (
+            self._glsl.center.x,
+            self._glsl.center.y,
+            self._glsl.center.z,
+        )
+    @center.setter
+    def center(self, value: Tuple[float, float, float]) -> None:
+        self._glsl.center.x = value[0]
+        self._glsl.center.y = value[1]
+        self._glsl.center.z = value[2]
+    
+    @property
+    def radius(self) -> float:
+        """Radius of the sphere"""
+        return self._glsl.radius
+    @radius.setter
+    def radius(self, value: float) -> None:
+        self._glsl.radius = value
+
+
 class Scene:
     """
     A scene describes a structure that the shader can query rays against and
@@ -237,7 +347,13 @@ class Scene:
         ]
 
     def __init__(
-        self, instances: Iterable[MeshInstance], materials: dict[str, int], medium: int
+        self,
+        instances: Iterable[MeshInstance],
+        materials: dict[str, int],
+        *,
+        medium: int = 0,
+        bbox: Optional[RectBBox] = None,
+        detectors: Iterable[SphereBBox] = []
     ) -> None:
         """
         Creates a new scene using the given instances
@@ -249,9 +365,17 @@ class Scene:
         materials: dict[str, int]
             dictionary mapping material names to device addresses as obtained
             from bakeMaterials()
-        medium: int
+        medium: int, default=0
             device address of the medium the scene is emerged in, e.g. the
-            address of a water medium for an underwater simulation
+            address of a water medium for an underwater simulation.
+            Defaults to zero specifying vacuum.
+        bbox: RectBBox, default=None
+            bounding box containing the scene, limiting traced rays inside.
+            Defaults to a cube of 1,000 units in each primal direction.
+        detectors: Iterable[SphereBBox], default=[]
+            spheres encapsulating the detectors used for sampling rays.
+            Tracing a detector without specifying its boundary box may result
+            in the tracing algorithm crashing.
         """
         instances = list(instances)
         # collect geometries
@@ -267,14 +391,60 @@ class Scene:
         self._geometries = hp.ArrayTensor(Scene.GLSLGeometry, len(instances))
         hp.execute(hp.updateTensor(geometries, self._geometries))
 
+        # upload detectors to gpu
+        detectors = list(detectors) # make sure its a list
+        if len(detectors) == 0:
+            # cant create empty buffer -> we need at least one detector uploaded
+            detectors = [SphereBBox((0.0,)*3,0.0)]
+        detectorBuffer = hp.ArrayBuffer(SphereBBox.GLSL, len(detectors))
+        for i in range(len(detectors)):
+            # Maybe a bit slow -> copy via numpy array?
+            detectorBuffer[i] = detectors[i].glsl
+        self._detectors = hp.ArrayTensor(SphereBBox.GLSL, len(detectors))
+        hp.execute(hp.updateTensor(detectorBuffer, self._detectors))
+
         # in order to pass to hephaistos.AccelerationStructure, we need to
         # extract the hephaistos.GeometryInstance from the MeshInstance
         self._tlas = hp.AccelerationStructure([i.instance for i in instances])
+
+        # save medium
+        self.medium = medium
+        # save bbox
+        if bbox is None:
+            bbox = RectBBox((1000,)*3,(1000,)*3)
+        self.bbox = bbox
+    
+    @property
+    def bbox(self) -> RectBBox:
+        """The bounding box containing the scene, limiting traced rays inside"""
+        return self._bbox
+    @bbox.setter
+    def bbox(self, value: RectBBox) -> None:
+        self._bbox = value
+    
+    @property
+    def detectors(self) -> hp.ByteTensor:
+        """
+        Tensor holding the array of spherical bounding boxes encapsulating the
+        detectors
+        """
+        return self._detectors
 
     @property
     def geometries(self) -> hp.ByteTensor:
         """The tensor holding the array of geometries in the scene"""
         return self._geometries
+    
+    @property
+    def medium(self) -> int:
+        """
+        device address of the medium the scene is emerged in, e.g. the address
+        of a water medium for an underwater simulation.
+        """
+        return self._medium
+    @medium.setter
+    def medium(self, value: int) -> None:
+        self._medium = value
 
     @property
     def tlas(self) -> hp.AccelerationStructure:
