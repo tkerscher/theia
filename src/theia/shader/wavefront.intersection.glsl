@@ -23,7 +23,7 @@ layout(scalar) writeonly buffer RayQueue {
 };
 layout(scalar) writeonly buffer ResponseQueue {
     uint responseCount;
-    ResponseItem responseItems[];
+    RayHit responseItems[];
 };
 
 layout(buffer_reference, scalar, buffer_reference_align=4) readonly buffer Vertex {
@@ -154,7 +154,7 @@ void main() {
         //order the active invocations so each can write at their own spot
         uint id = subgroupExclusiveAdd(1);
         //create response item
-        responseItems[oldCount + id] = ResponseItem(
+        responseItems[oldCount + id] = RayHit(
             objPos, objDir, objNormal, hits
         );
     }

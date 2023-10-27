@@ -38,7 +38,7 @@ Photon createPhoton(
     );
 }
 
-struct Ray{
+struct Ray {
     vec3 position;              //12 bytes
     vec3 direction;             //12 bytes
     uint rngIdx;                // 4 bytes
@@ -49,5 +49,32 @@ struct Ray{
     uvec2 medium;               // 8 bytes
     Photon photons[N_PHOTONS];  // N * 36 bytes
 };          // TOTAL: 36 + N*36 bytes (180 bytes)
+
+struct PhotonHit {
+    float wavelength;       // 4 bytes
+    float travelTime;       // 4 bytes
+    float log_radiance;     // 4 bytes
+    float throughput;       // 4 bytes
+};                  // TOTAL: 16 bytes
+
+PhotonHit createHit(Photon photon) {
+    //we just have to combine the throughputs and transform the data
+    float throughput = exp(photon.T_log) * photon.T_lin;
+    return PhotonHit(
+        photon.wavelength,
+        photon.travelTime,
+        photon.log_radiance,
+        throughput
+    );
+}
+
+struct RayHit {
+    //in object space (no trafo)
+    vec3 position;              //12 bytes
+    vec3 direction;             //12 bytes
+    vec3 normal;                //12 bytes
+
+    PhotonHit hits[N_PHOTONS];  //N * 16 bytes
+};                      // TOTAL: 36 + N*16 bytes (100 bytes)
 
 #endif

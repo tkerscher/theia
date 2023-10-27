@@ -91,6 +91,15 @@ class Ray(Structure):
     ]
 
 
+class RayHit(Structure):
+    _fields_ = [
+        ("position", vec3),
+        ("direction", vec3),
+        ("normal", vec3),
+        ("hits", PhotonHit * N_PHOTONS),
+    ]
+
+
 class PhotonQuery(Structure):
     _fields_ = [
         ("wavelength", c_float),
@@ -126,15 +135,6 @@ class IntersectionItem(Structure):
         ("barys", vec2),
         ("obj2World", mat4x3),
         ("world2Obj", mat4x3),
-    ]
-
-
-class ResponseItem(Structure):
-    _fields_ = [
-        ("position", vec3),
-        ("direction", vec3),
-        ("normal", vec3),
-        ("hits", PhotonHit * N_PHOTONS),
     ]
 
 
@@ -273,8 +273,8 @@ def test_wavefront_trace(rng):
     intTensor = QueueTensor(IntersectionItem, N)
     volBuffer = QueueBuffer(VolumeScatterItem, N)
     volTensor = QueueTensor(VolumeScatterItem, N)
-    responseBuffer = QueueBuffer(ResponseItem, N)
-    responseTensor = QueueTensor(ResponseItem, N)
+    responseBuffer = QueueBuffer(RayHit, N)
+    responseTensor = QueueTensor(RayHit, N)
     paramsBuffer = hp.StructureBuffer(TraceParams)
     paramsTensor = hp.StructureTensor(TraceParams)
     # bind memory
@@ -669,8 +669,8 @@ def test_wavefront_shadow(rng):
     # reserve memory
     shadowBuffer = QueueBuffer(ShadowRayItem, N)
     shadowTensor = QueueTensor(ShadowRayItem, N)
-    responseBuffer = QueueBuffer(ResponseItem, N)
-    responseTensor = QueueTensor(ResponseItem, N)
+    responseBuffer = QueueBuffer(RayHit, N)
+    responseTensor = QueueTensor(RayHit, N)
     paramsBuffer = hp.StructureBuffer(TraceParams)
     paramsTensor = hp.StructureTensor(TraceParams)
     # bind params
