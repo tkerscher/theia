@@ -21,6 +21,7 @@ class QueueBuffer(hp.RawBuffer):
         self._adr = super().address
         self._arr = (itemType * n).from_address(self._adr + 4)
         self._count = c_uint32.from_address(self._adr)
+        self.count = n
 
     def numpy(self):
         return as_array(self._arr)
@@ -326,13 +327,15 @@ def test_wavefront_trace(rng):
     (
         hp.beginSequence()
         .And(hp.updateTensor(paramsBuffer, paramsTensor))
+        .And(hp.clearTensor(intTensor))
+        .And(hp.clearTensor(volTensor))
         .And(philox.dispatchNext())
         .And(light.sample(N, rayTensor, media["water"], RNG_BATCH))
         .Then(hp.retrieveTensor(rayTensor, rayBufferIn))
         .Then(wavefront_trace.dispatch(N // 32))
         .Then(hp.retrieveTensor(intTensor, intBuffer))
         .And(hp.retrieveTensor(volTensor, volBuffer))
-        .And(hp.fillTensor(rayTensor))
+        .And(hp.clearTensor(rayTensor))
         .Then(wavefront_intersect.dispatch(N // 32))
         .Then(hp.retrieveTensor(responseTensor, responseBuffer))
         .And(hp.retrieveTensor(rayTensor, rayBufferOut))
@@ -521,6 +524,8 @@ def test_wavefront_volume(rng):
         .And(hp.updateTensor(volumeQueueBuffer, volumeQueueTensor))
         .And(hp.updateTensor(paramsBuffer, paramsTensor))
         .And(hp.updateTensor(detectorBuffer, detectorTensor))
+        .And(hp.clearTensor(rayQueueTensor))
+        .And(hp.clearTensor(shadowQueueTensor))
         .And(philox.dispatchNext())
         .Then(program.dispatch(N // 32))
         .Then(hp.retrieveTensor(rayQueueTensor, rayQueueBuffer))
@@ -710,6 +715,7 @@ def test_wavefront_shadow(rng):
         hp.beginSequence()
         .And(hp.updateTensor(shadowBuffer, shadowTensor))
         .And(hp.updateTensor(paramsBuffer, paramsTensor))
+        .And(hp.clearTensor(responseTensor))
         .Then(program.dispatch(N // 32))
         .Then(hp.retrieveTensor(responseTensor, responseBuffer))
         .Submit()
