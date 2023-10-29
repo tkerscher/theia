@@ -27,14 +27,10 @@ def loadShader(file: str) -> str:
         return file.read()
 
 
-def compileShader(
-        file: str,
-        preamble: str = "",
-        headers: Dict[str, str] = {}
-    ) -> bytes:
+def compileShader(file: str, preamble: str = "", headers: Dict[str, str] = {}) -> bytes:
     """
     Compiles the given shader code stored inside the libs shader folder.
-    
+
     Parameters
     ----------
     file: str
@@ -65,10 +61,7 @@ def intToUvec4(value: int) -> uvec4:
 
 def packUint64(value: int) -> uvec2:
     """Packs a 64bit unsigned integer into a 2D 32bit unsigned integer vector"""
-    return uvec2(
-        x = c_uint32(value & 0xFFFFFFFF),
-        y = c_uint32(value >> 32 & 0xFFFFFFFF)
-    )
+    return uvec2(x=c_uint32(value & 0xFFFFFFFF), y=c_uint32(value >> 32 & 0xFFFFFFFF))
 
 
 def unpackUint64(value: uvec2) -> int:
