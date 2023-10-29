@@ -8,7 +8,7 @@ from ctypes import *
 from hephaistos.glsl import mat4x3, vec2, vec3, uvec2, stackVector
 from numpy.ctypeslib import as_array
 from numpy.lib.recfunctions import structured_to_unstructured
-from theia.util import compileShader, packUint64
+from theia.util import compileShader, loadShader, packUint64
 
 
 ##################################### UTIL #####################################
@@ -188,14 +188,12 @@ def test_lightsource(rng):
     y = rng.random(N) * 10.0 - 5.0
     z = rng.random(N) * 10.0 - 5.0
     cos_theta = 2.0 * rng.random(N) - 1.0
-    sin_theta = np.sqrt(1.0 - cos_theta**2)
+    sin_theta = np.sqrt(1.0 - cos_theta ** 2)
     phi = rng.random(N) * 2.0 * np.pi
     rays["position"] = stackVector((x, y, z), vec3)
-    rays["direction"] = stackVector([
-        sin_theta * np.cos(phi),
-        sin_theta * np.sin(phi),
-        cos_theta
-    ], vec3)
+    rays["direction"] = stackVector(
+        [sin_theta * np.cos(phi), sin_theta * np.sin(phi), cos_theta], vec3
+    )
     rays["photons"]["wavelength"] = rng.random((N, N_PHOTONS)) * 600.0 + 200.0
     rays["photons"]["log_radiance"] = rng.random((N, N_PHOTONS)) * 5.0 - 4.0
     rays["photons"]["startTime"] = rng.random((N, N_PHOTONS)) * 50.0
@@ -233,6 +231,147 @@ def test_lightsource(rng):
     assert np.abs(photons["mu_s"] - model.scattering_coef(lam)).max() < 5e-5
     mu_e = model.scattering_coef(lam) + model.absorption_coef(lam)
     assert np.abs((photons["mu_e"] - mu_e) / mu_e).max() < 4e-3
+
+
+def test_histogram(rng):
+    N = 32 * 256
+    N_BINS = 64
+    BIN_SIZE = 2.0
+    NORM = 0.3
+    t0 = 30.0
+
+    # create integrator
+    integrator = theia.trace.HistogramIntegrator(
+        loadShader("response.lambertian.glsl"),
+        N,
+        nBins=N_BINS,
+        nPhotons=N_PHOTONS,
+        batchSize=128,
+    )
+    reducer = theia.trace.HistogramReducer(nBins=N_BINS)
+
+    # allocate memory
+    queueBuffer = QueueBuffer(RayHit, N)
+    queueTensor = QueueTensor(RayHit, N)
+    histogramBuffer = hp.FloatBuffer(N_BINS)
+    histogramTensor = hp.FloatTensor(N_BINS)
+
+    # create samples
+    samples = queueBuffer.numpy()
+    phi_dir = rng.random(N) * 2.0 * np.pi
+    phi_nrm = rng.random(N) * 2.0 * np.pi
+    ct_dir = rng.random(N) - 1.0
+    ct_nrm = rng.random(N)  # opposite direction
+    st_dir = np.sqrt(1.0 - ct_dir ** 2)
+    st_nrm = np.sqrt(1.0 - ct_nrm ** 2)
+    samples["position"]["x"] = rng.normal(0.0, 10.0, N)
+    samples["position"]["y"] = rng.normal(0.0, 10.0, N)
+    samples["position"]["z"] = rng.normal(0.0, 10.0, N)
+    samples["direction"] = stackVector(
+        [st_dir * np.cos(phi_dir), st_dir * np.sin(phi_dir), ct_dir], vec3
+    )
+    samples["normal"] = stackVector(
+        [st_nrm * np.cos(phi_nrm), st_nrm * np.sin(phi_nrm), ct_nrm], vec3
+    )
+    value = rng.random(N * N_PHOTONS).reshape((N, N_PHOTONS)) * 5.0 - 2.0
+    beta = rng.random(N * N_PHOTONS).reshape((N, N_PHOTONS)) * 5.0 - 2.0
+    time = rng.random(N * N_PHOTONS).reshape((N, N_PHOTONS)) * 200.0
+    samples["hits"]["log_radiance"] = value
+    samples["hits"]["throughput"] = beta
+    samples["hits"]["travelTime"] = time
+
+    # run integrator
+    (
+        hp.beginSequence()
+        .And(hp.updateTensor(queueBuffer, queueTensor))
+        .Then(integrator.integrate(queueTensor, t0, BIN_SIZE, 5))
+        .Then(
+            reducer.reduce(
+                histogramTensor, integrator.histograms, integrator.nHist, NORM
+            )
+        )
+        .Then(hp.retrieveTensor(histogramTensor, histogramBuffer))
+        .Submit()
+        .wait()
+    )
+
+    # calculate expected result
+    cosine = -np.multiply(
+        structured_to_unstructured(samples["normal"]),
+        structured_to_unstructured(samples["direction"]),
+    ).sum(-1)
+    weights = (value * beta * cosine[:, None] * NORM).flatten()
+    hist_exp, _ = np.histogram(
+        time.flatten(), N_BINS, (t0, N_BINS * BIN_SIZE + t0), weights=weights
+    )
+    # check result
+    hist = histogramBuffer.numpy()
+    assert np.allclose(hist, hist_exp)
+
+
+def test_kernelInt_box(rng):
+    N = 32 * 256
+    N_BINS = 64
+    BIN_SIZE = 2.0
+    NORM = 0.3
+    KERNEL_SCALE = 5.0  # +/- 5ns
+    t0 = 30.0
+
+    # create integrator
+    code = theia.trace.BinnedKernelIntegrator.SourceCode(
+        loadShader("response.lambertian.glsl"), loadShader("kernel.box.glsl")
+    )
+    integrator = theia.trace.BinnedKernelIntegrator(
+        code, N, nBins=N_BINS, nPhotons=N_PHOTONS, batchSize=128
+    )
+    reducer = theia.trace.HistogramReducer(nBins=N_BINS)
+
+    # allocate memory
+    queueBuffer = QueueBuffer(RayHit, N)
+    queueTensor = QueueTensor(RayHit, N)
+    histogramBuffer = hp.FloatBuffer(N_BINS)
+    histogramTensor = hp.FloatTensor(N_BINS)
+
+    # create samples
+    samples = queueBuffer.numpy()
+    phi_dir = rng.random(N) * 2.0 * np.pi
+    phi_nrm = rng.random(N) * 2.0 * np.pi
+    ct_dir = rng.random(N) - 1.0
+    ct_nrm = rng.random(N)  # opposite direction
+    st_dir = np.sqrt(1.0 - ct_dir ** 2)
+    st_nrm = np.sqrt(1.0 - ct_nrm ** 2)
+    samples["position"]["x"] = rng.normal(0.0, 10.0, N)
+    samples["position"]["y"] = rng.normal(0.0, 10.0, N)
+    samples["position"]["z"] = rng.normal(0.0, 10.0, N)
+    samples["direction"] = stackVector(
+        [st_dir * np.cos(phi_dir), st_dir * np.sin(phi_dir), ct_dir], vec3
+    )
+    samples["normal"] = stackVector(
+        [st_nrm * np.cos(phi_nrm), st_nrm * np.sin(phi_nrm), ct_nrm], vec3
+    )
+    value = rng.random(N * N_PHOTONS).reshape((N, N_PHOTONS)) * 5.0 - 2.0
+    beta = rng.random(N * N_PHOTONS).reshape((N, N_PHOTONS)) * 5.0 - 2.0
+    time = rng.random(N * N_PHOTONS).reshape((N, N_PHOTONS)) * 200.0
+    samples["hits"]["log_radiance"] = value
+    samples["hits"]["throughput"] = beta
+    samples["hits"]["travelTime"] = time
+
+    # run integrator
+    (
+        hp.beginSequence()
+        .And(hp.updateTensor(queueBuffer, queueTensor))
+        .Then(integrator.integrate(queueTensor, t0, BIN_SIZE, 5, KERNEL_SCALE))
+        .Then(
+            reducer.reduce(
+                histogramTensor, integrator.histograms, integrator.nHist, NORM
+            )
+        )
+        .Then(hp.retrieveTensor(histogramTensor, histogramBuffer))
+        .Submit()
+        .wait()
+    )
+
+    # calculate expected result
 
 
 def test_wavefront_trace(rng):
@@ -385,14 +524,11 @@ def test_wavefront_trace(rng):
     i_d = np.sqrt(i_d)
     # on small sphere
     d_small = (i_d <= r + 5e-5) & (i_d >= r_insc + 5e-5)
-    d_big = (i_d <= 2*r + 5e-5) & (i_d >= 2*r_insc + 5e-5)
+    d_big = (i_d <= 2 * r + 5e-5) & (i_d >= 2 * r_insc + 5e-5)
     assert np.all(d_small | d_big)
     # check distance & throughput
     i_dist = np.sqrt(np.square(i_pos - pos[None, :]).sum(-1))
-    i_t = (
-        i_dist[:, None] / i_in["photons"]["vg"]
-        + i_in["photons"]["travelTime"]
-    )
+    i_t = i_dist[:, None] / i_in["photons"]["vg"] + i_in["photons"]["travelTime"]
     assert np.allclose(i_t, i["photons"]["travelTime"])
     i_thr = (lambda_sc - i_in["photons"]["mu_e"]) * i_dist[:, None]
     assert np.allclose(i_thr, i["photons"]["T_log"])
@@ -430,7 +566,7 @@ def test_wavefront_trace(rng):
     n_err = np.abs(hits_din - hits_dir)
     assert n_err.max() < 1e-5
     # check the hits are on the lower sphere via ray direction
-    assert hits_din[:,2].max() < 0.0
+    assert hits_din[:, 2].max() < 0.0
 
 
 def test_wavefront_volume(rng):
