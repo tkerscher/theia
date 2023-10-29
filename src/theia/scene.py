@@ -85,7 +85,7 @@ class Transform:
     def __imatmul__(self, other: Transform) -> Transform:
         if type(other) != Transform:
             raise TypeError(other)
-        self._arr = other._arr @ self._arr 
+        self._arr = other._arr @ self._arr
         return self
 
 
@@ -224,29 +224,30 @@ class MeshStore:
 class RectBBox:
     """
     Rectangular bounding box defined by two opposite corners
-    
+
     Parameter
     ---------
     lowerCorner: Tuple[float, float, float]
         The corner with minimal coordinate values
-    
+
     upperCorner: Tuple[float, float, float]
         The corner with maximal coordinate values
     """
 
     class GLSL(Structure):
         """GLSL struct equivalent"""
+
         _fields_ = [("lowerCorner", vec3), ("upperCorner", vec3)]
 
     def __init__(
-            self,
-            lowerCorner: Tuple[float, float, float],
-            upperCorner: Tuple[float, float, float]
-        ) -> None:
+        self,
+        lowerCorner: Tuple[float, float, float],
+        upperCorner: Tuple[float, float, float],
+    ) -> None:
         self._glsl = self.GLSL()
         self.lowerCorner = lowerCorner
         self.upperCorner = upperCorner
-    
+
     @property
     def glsl(self) -> RectBBox.GLSL:
         """The underlying GLSL structure to be consumed by shaders"""
@@ -260,12 +261,13 @@ class RectBBox:
             self._glsl.lowerCorner.y,
             self._glsl.lowerCorner.z,
         )
+
     @lowerCorner.setter
     def lowerCorner(self, value: Tuple[float, float, float]) -> None:
         self._glsl.lowerCorner.x = value[0]
         self._glsl.lowerCorner.y = value[1]
         self._glsl.lowerCorner.z = value[2]
-    
+
     @property
     def upperCorner(self) -> Tuple[float, float, float]:
         """The corner with maximal coordinate values"""
@@ -274,6 +276,7 @@ class RectBBox:
             self._glsl.upperCorner.y,
             self._glsl.upperCorner.z,
         )
+
     @upperCorner.setter
     def upperCorner(self, value: Tuple[float, float, float]) -> None:
         self._glsl.upperCorner.x = value[0]
@@ -285,7 +288,7 @@ class SphereBBox:
     """
     Spherical bounding box defined by its center and radius.
     Corresponds to a single point if radius is zero.
-    
+
     Parameters
     ----------
     center: Tuple[float, float, float]
@@ -296,13 +299,14 @@ class SphereBBox:
 
     class GLSL(Structure):
         """GLSL struct equivalent"""
+
         _fields_ = [("center", vec3), ("radius", c_float)]
 
     def __init__(self, center: Tuple[float, float, float], radius: float) -> None:
         self._glsl = self.GLSL()
         self.center = center
         self.radius = radius
-    
+
     @property
     def glsl(self) -> SphereBBox.GLSL:
         """The underlying GLSL structure to be consumed by shaders"""
@@ -316,16 +320,18 @@ class SphereBBox:
             self._glsl.center.y,
             self._glsl.center.z,
         )
+
     @center.setter
     def center(self, value: Tuple[float, float, float]) -> None:
         self._glsl.center.x = value[0]
         self._glsl.center.y = value[1]
         self._glsl.center.z = value[2]
-    
+
     @property
     def radius(self) -> float:
         """Radius of the sphere"""
         return self._glsl.radius
+
     @radius.setter
     def radius(self, value: float) -> None:
         self._glsl.radius = value
@@ -392,10 +398,10 @@ class Scene:
         hp.execute(hp.updateTensor(geometries, self._geometries))
 
         # upload detectors to gpu
-        detectors = list(detectors) # make sure its a list
+        detectors = list(detectors)  # make sure its a list
         if len(detectors) == 0:
             # cant create empty buffer -> we need at least one detector uploaded
-            detectors = [SphereBBox((0.0,)*3,0.0)]
+            detectors = [SphereBBox((0.0,) * 3, 0.0)]
         detectorBuffer = hp.ArrayBuffer(SphereBBox.GLSL, len(detectors))
         for i in range(len(detectors)):
             # Maybe a bit slow -> copy via numpy array?
@@ -411,17 +417,18 @@ class Scene:
         self.medium = medium
         # save bbox
         if bbox is None:
-            bbox = RectBBox((1000,)*3,(1000,)*3)
+            bbox = RectBBox((1000,) * 3, (1000,) * 3)
         self.bbox = bbox
-    
+
     @property
     def bbox(self) -> RectBBox:
         """The bounding box containing the scene, limiting traced rays inside"""
         return self._bbox
+
     @bbox.setter
     def bbox(self, value: RectBBox) -> None:
         self._bbox = value
-    
+
     @property
     def detectors(self) -> hp.ByteTensor:
         """
@@ -434,7 +441,7 @@ class Scene:
     def geometries(self) -> hp.ByteTensor:
         """The tensor holding the array of geometries in the scene"""
         return self._geometries
-    
+
     @property
     def medium(self) -> int:
         """
@@ -442,6 +449,7 @@ class Scene:
         of a water medium for an underwater simulation.
         """
         return self._medium
+
     @medium.setter
     def medium(self, value: int) -> None:
         self._medium = value
