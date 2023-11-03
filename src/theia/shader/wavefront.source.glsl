@@ -14,18 +14,26 @@
 #ifndef N_PHOTONS
 #define N_PHOTONS 4
 #endif
-#ifndef RNG_SAMPLES
-#define RNG_SAMPLES 0
-#endif
 
 layout(local_size_x = LOCAL_SIZE) in;
+
+//rng api
+layout(buffer_reference, scalar, buffer_reference_align=4) readonly buffer RNGBuffer {
+    float u[];
+};
+/*!!! NEED TO INIT IN MAIN !!!*/
+RNGBuffer rngBuffer;
+uint rngIdx;
+float rand() {
+    return rngBuffer.u[rngIdx++];
+}
 
 //Light description
 struct SourcePhoton{
     float wavelength;
-    float log_radiance;
     float startTime;
-    float probability;
+    float lin_contrib;
+    float log_contrib;
 };
 struct SourceRay{
     vec3 position;
@@ -35,29 +43,33 @@ struct SourceRay{
 //user provided source: defines function SourceRay sample()
 #include "light.glsl"
 
-//redefine ray query as buffer reference to avoid the need to bind it
+//ray queue
 layout(buffer_reference, scalar, buffer_reference_align=4) writeonly buffer RayQueue {
     uint count;
     Ray rays[];
 };
 
 layout(push_constant, scalar) uniform Push {
-    uvec2 rayQueue; // 8 bytes
+    uvec2 queue;    // 8 bytes
+    uvec2 rngBuffer;// 8 bytes
     uvec2 medium;   // 8 bytes
     uint count;     // 4 bytes
     uint rngStride; // 4 bytes
-} params;           //24 bytes
+} params;           //32 bytes
 
 void main() {
     //range check
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= params.count)
         return;
-    //retrieve buffer references
-    RayQueue queue = RayQueue(params.rayQueue);
+    //retrieve queue
+    RayQueue queue = RayQueue(params.queue);
+    //init rng
+    rngBuffer = RNGBuffer(params.rngBuffer);
+    uint rngStride = params.rngStride;
+    rngIdx = idx * rngStride;
+    //retrieve medium
     Medium medium = Medium(params.medium);
-    //calc rng stride, i.e. samples per stream
-    uint rngStride = params.rngStride + RNG_SAMPLES;
 
     //sample light
     SourceRay sourceRay = sampleLight();
@@ -69,8 +81,8 @@ void main() {
             medium,
             sourceRay.photons[i].wavelength,
             sourceRay.photons[i].startTime,
-            sourceRay.photons[i].log_radiance,
-            sourceRay.photons[i].probability
+            sourceRay.photons[i].lin_contrib,
+            sourceRay.photons[i].log_contrib
         );
     }
     //create ray and place it on the queue
@@ -79,7 +91,7 @@ void main() {
     queue.rays[idx] = Ray(
         sourceRay.position,
         sourceRay.direction,
-        idx * rngStride + RNG_SAMPLES,
+        rngIdx,
         params.medium,
         photons
     );

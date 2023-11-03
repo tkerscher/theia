@@ -9,31 +9,31 @@
 
 struct Photon {
     float wavelength;           // 4 bytes
-    float travelTime;           // 4 bytes
-    //keeping radiance and throughput separate allows to MIS light (if we want to...)
-    float log_radiance;         // 4 bytes
+    //start time + travel time
+    float time;                 // 4 bytes
 
-    //total throughput: linT * exp(logT)
-    //  hope this makes the estimate more precise...
-    float T_lin;                // 4 bytes
-    float T_log;                // 4 bytes
+    //to (hopefully) be more numerically stable and a bit faster on the
+    //calculations, split lin and exp factors. Total contribrution:
+    // L(path)/p(path) = lin_contrib * exp(log_contrib)
+    float lin_contribution;     // 4 bytes
+    float log_contribution;     // 4 bytes
     
+    //cache medium constants to ease memory pressure
     MediumConstants constants;  //16 bytes
-};                      // TOTAL: 36 bytes
+};                      // TOTAL: 32 bytes
 
 Photon createPhoton(
     Medium medium,
     float wavelength,
     float startTime,
-    float log_radiance,
-    float prob
+    float lin_contrib,
+    float log_contrib
 ) {
     return Photon(
         wavelength,
         startTime,
-        log_radiance,
-        prob, // throughput
-        0.0,  // log throughput
+        lin_contrib,
+        log_contrib,
         lookUpMedium(medium, wavelength)
     );
 }
@@ -47,24 +47,22 @@ struct Ray {
     //Moreover, Ray would also get an alignment of 8 bytes. To make things more
     //simple, we'll use uvec2 instead and thus have an alignment of only 4 bytes
     uvec2 medium;               // 8 bytes
-    Photon photons[N_PHOTONS];  // N * 36 bytes
-};          // TOTAL: 36 + N*36 bytes (180 bytes)
+    Photon photons[N_PHOTONS];  // N * 32 bytes
+};          // TOTAL: 36 + N*32 bytes (164 bytes)
 
 struct PhotonHit {
-    float wavelength;       // 4 bytes
-    float travelTime;       // 4 bytes
-    float log_radiance;     // 4 bytes
-    float throughput;       // 4 bytes
-};                  // TOTAL: 16 bytes
+    float wavelength;   // 4 bytes
+    float time;         // 4 bytes
+    // L(path)/p(path)
+    float contribution; // 4 bytes
+};              // TOTAL: 12 bytes
 
 PhotonHit createHit(Photon photon) {
-    //we just have to combine the throughputs and transform the data
-    float throughput = exp(photon.T_log) * photon.T_lin;
+    float contribution = exp(photon.log_contribution) * photon.lin_contribution;
     return PhotonHit(
         photon.wavelength,
-        photon.travelTime,
-        photon.log_radiance,
-        throughput
+        photon.time,
+        contribution
     );
 }
 
@@ -74,7 +72,7 @@ struct RayHit {
     vec3 direction;             //12 bytes
     vec3 normal;                //12 bytes
 
-    PhotonHit hits[N_PHOTONS];  //N * 16 bytes
-};                      // TOTAL: 36 + N*16 bytes (100 bytes)
+    PhotonHit hits[N_PHOTONS];  //N * 12 bytes
+};                      // TOTAL: 36 + N*12 bytes (84 bytes)
 
 #endif

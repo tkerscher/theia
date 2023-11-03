@@ -114,12 +114,12 @@ void main() {
         //attenuation is simply Beer's law
         float mu_e = ray.photons[i].constants.mu_e;
         //write out multplication in hope to prevent catastrophic cancelation
-        ray.photons[i].T_log += lambda * dist - mu_e * dist;
+        ray.photons[i].log_contribution += lambda * dist - mu_e * dist;
 
         //update travel time
-        ray.photons[i].travelTime += dist / ray.photons[i].constants.vg;
+        ray.photons[i].time += dist / ray.photons[i].constants.vg;
         //bound check
-        if (ray.photons[i].travelTime <= params.maxTime)
+        if (ray.photons[i].time <= params.maxTime)
             anyBelowMaxTime = true;
     }
     //bounds check: max time
@@ -135,7 +135,7 @@ void main() {
         for (int i = 0; i < N_PHOTONS; ++i) {
             hits[i] = createHit(ray.photons[i]);
             //attenuate by transmission
-            hits[i].throughput *= (1.0 - r[i]);
+            hits[i].contribution *= (1.0 - r[i]);
         }
         //transform direction to object space
         vec3 objDir = normalize(mat3(item.world2Obj) * item.ray.direction);
@@ -166,7 +166,7 @@ void main() {
     //update photons
     for (int i = 0; i < N_PHOTONS; ++i) {
         //attenuate by reflectance
-        ray.photons[i].T_lin *= r[i];
+        ray.photons[i].lin_contribution *= r[i];
     }
 
     //count how many items we will be adding in this subgroup

@@ -111,19 +111,19 @@ void main() {
         //calculate reflectance
         float r = reflectance(geom.material, ray.photons[i], objNormal, objDir);
         //we absorb -> attenuate by transmission
-        ray.photons[i].T_lin *= (1.0 - r);
+        ray.photons[i].lin_contribution *= (1.0 - r);
 
         //since we hit something the prob for the distance is to sample at
         //least dist -> p(d>=dist) = exp(-lambda*dist)
         //attenuation is simply Beer's law
         float mu_e = ray.photons[i].constants.mu_e;
         //write out multplication in hope to prevent catastrophic cancelation
-        ray.photons[i].T_log += lambda * dist - mu_e * dist;
+        ray.photons[i].log_contribution += lambda * dist - mu_e * dist;
 
         //update travel time
-        ray.photons[i].travelTime += dist / ray.photons[i].constants.vg;
+        ray.photons[i].time += dist / ray.photons[i].constants.vg;
         //bound check
-        if (ray.photons[i].travelTime <= params.maxTime)
+        if (ray.photons[i].time <= params.maxTime)
             anyBelowMaxTime = true;
         
         //create hit

@@ -47,12 +47,8 @@ vec3 scatter(inout Ray ray, vec2 rng, out float p) {
     ray.direction = scatterDir(ray.direction, cos_theta, phi);
 
     //since we importance sampled the phase function they cancel,
-    //leaving us with only the scattering coefficient
-
-    //update photons
-    for (int i = 0; i < N_PHOTONS; ++i) {
-        ray.photons[i].T_lin *= ray.photons[i].constants.mu_s;
-    }
+    //leaving us with only the scattering coefficient,
+    //which is handled outside the function
 
     //return direction
     return ray.direction;

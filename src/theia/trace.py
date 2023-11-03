@@ -1,6 +1,5 @@
 from __future__ import annotations
 import hephaistos as hp
-import importlib.resources
 import warnings
 
 from collections import namedtuple
@@ -8,7 +7,7 @@ from ctypes import Structure, c_float, c_uint32, addressof
 from hephaistos.glsl import vec3, uvec2
 from numpy.ctypeslib import as_array
 from numpy.typing import NDArray
-from typing import Optional, Union, Type
+from typing import Optional, Union, Tuple, Type
 from .util import compileShader, loadShader, packUint64
 
 
@@ -29,8 +28,9 @@ class LightSource:
 
     Parameters
     ----------
-    lightCode: str
-        shader code used for sampling the light source
+    code: str | bytes
+        code used for sampling the light source. Can either be the source code
+        or an cached compiled code, which might be differ on different machines
     nPhotons: int, default=4
         number of photons(wavelengths) a single ray carries
     rngSamples: int, default=0
@@ -42,6 +42,7 @@ class LightSource:
 
         _fields_ = [
             ("rayQueue", uvec2),
+            ("rngBuffer", uvec2),
             ("medium", uvec2),
             ("count", c_uint32),
             ("rngStride", c_uint32),
@@ -91,7 +92,12 @@ class LightSource:
         self._program.bindParams(**kwargs)
 
     def sample(
-        self, count: int, queue: hp.ByteTensor, medium: int, rngStride: int
+        self,
+        count: int,
+        queue: Union[hp.Tensor, int],
+        rngBuffer: Union[hp.Tensor, int],
+        medium: int,
+        rngStride: int,
     ) -> hp.Command:
         """
         creates a command for sampling the light source to generate the provided
@@ -101,8 +107,12 @@ class LightSource:
         ----------
         count: int
             amount of samples to generate
-        queue: hp.ByteTensor
-            tensor holding the ray queue to populate
+        queue: hp.Tensor, int
+            either the Tensor or the device address pointing to the memory
+            holding the ray queue to populate
+        rngBuffer: hp.Tensor, int
+            either the Tensor or the device address pointing to the memory
+            holding the rng buffer
         medium: int
             device address of the medium the rays start in
         rngStride: int
@@ -114,9 +124,16 @@ class LightSource:
                 f"count is not a multiple of the device's subgroup size ({self._localSize})"
             )
 
+        # retrieve addresses if needed
+        if isinstance(queue, hp.Tensor):
+            queue = queue.address
+        if isinstance(rngBuffer, hp.Tensor):
+            rngBuffer = rngBuffer.address
+
         # create push constant
         push = self.Push(
-            rayQueue=packUint64(queue.address),
+            rayQueue=packUint64(queue),
+            rngBuffer=packUint64(rngBuffer),
             medium=packUint64(medium),
             count=count,
             rngStride=rngStride,
@@ -149,9 +166,9 @@ class HostLightSource(LightSource):
         class SourcePhoton(Structure):
             _fields_ = [
                 ("wavelength", c_float),
-                ("log_radiance", c_float),
                 ("startTime", c_float),
-                ("probability", c_float),
+                ("lin_contrib", c_float),
+                ("log_contrib", c_float),
             ]
 
         class SourceRay(Structure):
@@ -210,6 +227,132 @@ class HostLightSource(LightSource):
         source is used by the GPU results in undefined behavior.
         """
         hp.execute(hp.updateTensor(self._buffer, self._tensor))
+
+
+class SphericalLightSource(LightSource):
+    """
+    Isotropic light source located at a single point.
+    Samples uniform in both time and wavelength.
+
+    Parameters
+    ----------
+    position: (float,float,float), default=(0.0, 0.0, 0.0)
+        position of the light source
+    wavelengthRange: (float, float), default=(300.0, 700.0)
+        min and max wavelength the source emits
+    timeRange: (float, float), default=(0.0, 100.0)
+        start and stop time of the light source
+    intensity: float, default=1.0
+        intensity of the light source
+    nPhotons: int, default=4
+        number of photons(wavelengths) a single ray carries
+    code: bytes | None
+        Compiled version of the light source. If None, compiles from source.
+        Note, that the compiled code may differ on different machines
+    """
+
+    class GLSL(Structure):
+        """Params structure"""
+
+        _fields_ = [
+            ("position", vec3),
+            ("lambda_min", c_float),
+            ("lambdaRange", c_float),
+            ("t0", c_float),
+            ("timeRange", c_float),
+            ("contribution", c_float),
+        ]
+
+    def __init__(
+        self,
+        *,
+        position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        wavelengthRange: Tuple[float, float] = (300.0, 700.0),
+        timeRange: Tuple[float, float] = (0.0, 100.0),
+        intensity: float = 1.0,
+        nPhotons: int = 4,
+        code: Optional[bytes] = None,
+    ) -> None:
+        # load code if needed
+        if code is None:
+            code = loadShader("lightsource.spherical.glsl")
+        # number of samples we'll draw per ray
+        rngSamples = 2 + 2 * nPhotons
+        super().__init__(code, nPhotons=nPhotons, rngSamples=rngSamples)
+
+        # allocate memory for params
+        self._params = hp.StructureBuffer(self.GLSL)
+        self._tensor = hp.StructureTensor(self.GLSL)
+        # bind tensor
+        self.bindParams(LightParams=self._tensor)
+        # save params
+        self.position = position
+        self.wavelengthRange = wavelengthRange
+        self.timeRange = timeRange
+        self.intensity = intensity
+        # upload params
+        self.update()
+
+    @property
+    def position(self) -> Tuple[float, float, float]:
+        """position of the light source"""
+        return (
+            self._params.position.x,
+            self._params.position.y,
+            self._params.position.z,
+        )
+
+    @position.setter
+    def position(self, value: Tuple[float, float, float]) -> None:
+        self._params.position.x = value[0]
+        self._params.position.y = value[1]
+        self._params.position.z = value[2]
+
+    @property
+    def wavelengthRange(self) -> Tuple[float, float]:
+        """min and max wavelength the source emits"""
+        return (
+            self._params.lambda_min,
+            self._params.lambda_min + self._params.lambdaRange,
+        )
+
+    @wavelengthRange.setter
+    def wavelengthRange(self, value: Tuple[float, float]) -> None:
+        self._params.lambda_min = value[0]
+        self._params.lambdaRange = value[1] - value[0]
+
+    @property
+    def timeRange(self) -> Tuple[float, float]:
+        """start and stop time of the light source"""
+        return (self._params.t0, self._params.t0 + self._params.timeDuration)
+
+    @timeRange.setter
+    def timeRange(self, value: Tuple[float, float]) -> None:
+        self._params.t0 = value[0]
+        self._params.timeRange = value[1] - value[0]
+
+    @property
+    def intensity(self) -> float:
+        """intensity of the light source"""
+        return self._intensity
+
+    @intensity.setter
+    def intensity(self, value: float) -> None:
+        self._intensity = value
+
+    def update(self) -> None:
+        """
+        Synchronizes the local ray buffer with the GPU. Updating while the light
+        source is used by the GPU results in undefined behavior.
+        """
+        # calculate const contribution
+        c = self.intensity
+        c /= self._params.lambdaRange
+        c /= self._params.timeRange
+        # set contribution
+        self._params.contribution = c
+        # upload to GPU
+        hp.execute(hp.updateTensor(self._params, self._tensor))
 
 
 class HistogramIntegrator:

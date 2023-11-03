@@ -72,17 +72,16 @@ void main() {
         PhotonHit photon = ray.hits[phIdx];
 
         //calculate response
-        float value = response(
+        float importance = response(
             ray.position,
             ray.direction,
             ray.normal,
             photon.wavelength,
-            photon.log_radiance,
             params.detectorId);
-        value *= photon.throughput;
+        float value = importance * photon.contribution;
         
         //calculate affected bin
-        float t_hit = photon.travelTime;
+        float t_hit = photon.time;
         uint bin = int(floor((t_hit - params.t0) / params.binSize));
         
         //update histogram if bin is in range

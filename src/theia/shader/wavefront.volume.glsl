@@ -66,17 +66,17 @@ void main() {
         //  -> log(delta) = (mu_e-lambda)*dist
         float mu_e = ray.photons[i].constants.mu_e;
         //write out multplication in hope to prevent catastrophic cancelation
-        ray.photons[i].T_log += lambda * item.dist - mu_e * item.dist;
-        ray.photons[i].T_lin /= lambda;
+        ray.photons[i].log_contribution += lambda * item.dist - mu_e * item.dist;
+        ray.photons[i].lin_contribution /= lambda;
 
         //scattereing is mu_s*p(theta) -> mu_s shared by all processes
         float mu_s = ray.photons[i].constants.mu_s;
-        ray.photons[i].T_lin *= mu_s;
+        ray.photons[i].lin_contribution *= mu_s;
 
         //update traveltime
-        ray.photons[i].travelTime += item.dist / ray.photons[i].constants.vg;
+        ray.photons[i].time += item.dist / ray.photons[i].constants.vg;
         //bounds check
-        if (ray.photons[i].travelTime <= params.maxTime)
+        if (ray.photons[i].time <= params.maxTime)
             anyBelowMaxTime = true;
     }
     
@@ -84,39 +84,46 @@ void main() {
     if (!anyBelowMaxTime)
         return;
     
+    //We'll use the following naming scheme: pXY, where
+    //X: sampled distribution
+    //Y: prob, distribution
+    //S: scatter, D: detector
+    //e.g. pSD: p_det(dir ~ scatter)
+
     //sample target
     Sphere detector = detectors[params.targetIdx];
     vec2 rng = vec2(u[ray.rngIdx++], u[ray.rngIdx++]);
-    float pTarget, targetDist;
-    vec3 targetDir = sampleSphere(detector, ray.position, rng, targetDist, pTarget);
-    Ray targetRay = ray; //copy
-    //keep original direction for now, we'll need it for the weights
-    //targetRay.direction = targetDir;
+    float pDD, targetDist;
+    vec3 targetDir = sampleSphere(detector, ray.position, rng, targetDist, pDD);
+    //Copy ray
+    Ray targetRay = ray;
 
     //scatter
     rng = vec2(u[ray.rngIdx++], u[ray.rngIdx++]);
-    float pScatter;
-    vec3 scatterDir = scatter(ray, rng, pScatter);
+    float pSS;
+    vec3 scatterDir = scatter(ray, rng, pSS);
 
-    //calculate cross probs
-    float pSc_target = sampleSphereProb(detector, ray.position, scatterDir);
-    float pT_scatter = scatterProb(targetRay, targetDir);
+    //calculate cross probs pSD, pDS
+    float pSD = scatterProb(targetRay, targetDir);
+    float pDS = sampleSphereProb(detector, ray.position, scatterDir);
+    //Note that pSD is also the phase function
+
     //calculate MIS weights (power heuristic)
-    float w_scatter = pScatter*pScatter / (pScatter*pScatter + pSc_target*pSc_target);
-    float w_target = pTarget*pT_scatter / (pTarget*pTarget + pT_scatter*pT_scatter); //(!)
-    //Now it's safe to update direction
-    targetRay.direction = targetDir;
+    float w_scatter = pSS*pSS / (pSS*pSS + pSD*pSD);
+    float w_target = pDD / (pDD*pDD + pDS*pDS);
+    //^^^ Note that we already canceled out the extra pDD from the estimator
+    // -> f(x)/pDD * w_target
 
     //update photons
     for (int i = 0; i < N_PHOTONS; ++i) {
-        //scatter coefficient
-        float mu_s = ray.photons[i].constants.mu_s;
+        //update scattered sample
+        ray.photons[i].lin_contribution *= w_scatter;
 
-        //update scatter sampled
-        ray.photons[i].T_lin *= w_scatter * mu_s;
-        //update target sampled
-        targetRay.photons[i].T_lin *= w_target * mu_s;
+        //update target sample
+        targetRay.photons[i].lin_contribution *= pSD * w_target;
     }
+    //update target direction
+    targetRay.direction = targetDir;
 
     //count how many items we will be adding in this subgroup
     uint n = subgroupAdd(1);

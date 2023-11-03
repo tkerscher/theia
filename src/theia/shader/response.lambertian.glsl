@@ -8,10 +8,9 @@ float response(
     vec3 rayDir,
     vec3 detNormal,
     float wavelength,
-    float log_radiance,
     uint detId
 ) {
-    return -dot(rayDir, detNormal) * log_radiance;
+    return -dot(rayDir, detNormal);
 }
 
 #endif
