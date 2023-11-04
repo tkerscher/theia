@@ -24,7 +24,7 @@ class PhiloxRNG:
         batch: int,
         *,
         key: Optional[int] = None,
-        startCount: int = 0
+        startCount: int = 0,
     ) -> None:
         # check if streams is a multiple of 32 (local size)
         # TODO: ease this restriction

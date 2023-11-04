@@ -804,8 +804,8 @@ class HenyeyGreensteinPhaseFunction:
         Normalized with respect to unit sphere.
         """
         return np.log(
-            (1.0 - self.g ** 2)
-            / np.power(1.0 + self.g ** 2 - 2 * self.g * cos_theta, 1.5)
+            (1.0 - self.g**2)
+            / np.power(1.0 + self.g**2 - 2 * self.g * cos_theta, 1.5)
             / (4.0 * np.pi)
         )
 
@@ -822,8 +822,8 @@ class HenyeyGreensteinPhaseFunction:
         else:
             return (
                 1.0
-                + self.g ** 2
-                - ((1.0 - self.g ** 2) / (1 + self.g - 2.0 * self.g * eta)) ** 2
+                + self.g**2
+                - ((1.0 - self.g**2) / (1 + self.g - 2.0 * self.g * eta)) ** 2
             ) / (2.0 * self.g)
 
 
@@ -895,7 +895,7 @@ class FournierForandPhaseFunction:
         x = cos_theta
         A = nu * (1 - d) - (1 - d_nu) + 2 * (d * (1 - d_nu) - nu * (1 - d)) / (1 - x)
         B = 4 * np.pi * (1 - d) ** 2 * d_nu
-        C = (1 - d_180_nu) * (3 * x ** 2 - 1)
+        C = (1 - d_180_nu) * (3 * x**2 - 1)
         D = 16 * np.pi * (d_180 - 1) * d_180_nu
         return np.log(A / B + C / D)
 
@@ -1025,35 +1025,35 @@ class WaterBaseModel:
         # following naming convention from paper
         N1 = (
             self.A0
-            + self.L2 * (L ** 2)
-            + self.LM2 / (L ** 2)
-            + self.LM4 / (L ** 4)
-            + self.LM6 / (L ** 6)
+            + self.L2 * (L**2)
+            + self.LM2 / (L**2)
+            + self.LM4 / (L**4)
+            + self.LM6 / (L**6)
             + self.T1 * T
-            + self.T2 * (T ** 2)
-            + self.T3 * (T ** 3)
-            + self.T4 * (T ** 4)
+            + self.T2 * (T**2)
+            + self.T3 * (T**3)
+            + self.T4 * (T**4)
             + self.TL * T * L
-            + self.T2L * (T ** 2) * L
-            + self.T3L * (T ** 3) * L
+            + self.T2L * (T**2) * L
+            + self.T3L * (T**3) * L
         )
         N2 = (
             self.S0 * S
-            + self.S1LM2 * S / (L ** 2)
+            + self.S1LM2 * S / (L**2)
             + self.S1T * S * T
-            + self.S1T2 * S * (T ** 2)
-            + self.S1T3 * S * (T ** 3)
+            + self.S1T2 * S * (T**2)
+            + self.S1T3 * S * (T**3)
             + self.STL * S * T * L
         )
         N3 = (
             self.P1 * p
-            + self.P2 * (p ** 2)
-            + self.PLM2 * p / (L ** 2)
+            + self.P2 * (p**2)
+            + self.PLM2 * p / (L**2)
             + self.PT * p * T
-            + self.PT2 * p * (T ** 2)
-            + self.P2T2 * (p ** 2) * (T ** 2)
+            + self.PT2 * p * (T**2)
+            + self.P2T2 * (p**2) * (T**2)
         )
-        N4 = self.P1S * p * S + self.PTS * p * T * S + self.PT2S * p * (T ** 2) * S
+        N4 = self.P1S * p * S + self.PTS * p * T * S + self.PT2S * p * (T**2) * S
         return N1 + N2 + N3 + N4
 
     def group_velocity(self, wavelength: npt.ArrayLike) -> npt.NDArray:
@@ -1068,15 +1068,15 @@ class WaterBaseModel:
         # G_i = dN_i/dL
         G1 = (
             2.0 * self.L2 * L
-            - 2.0 * self.LM2 / (L ** 3)
-            - 4.0 * self.LM4 / (L ** 5)
-            - 6.0 * self.LM6 / (L ** 7)
+            - 2.0 * self.LM2 / (L**3)
+            - 4.0 * self.LM4 / (L**5)
+            - 6.0 * self.LM6 / (L**7)
             + self.TL * T
-            + self.T2L * (T ** 2)
-            + self.T3L * (T ** 3)
+            + self.T2L * (T**2)
+            + self.T3L * (T**3)
         )
-        G2 = -2.0 * self.S1LM2 * S / (L ** 3) + self.STL * S * T
-        G3 = -2.0 * self.PLM2 * p / (L ** 3)
+        G2 = -2.0 * self.S1LM2 * S / (L**3) + self.STL * S * T
+        G3 = -2.0 * self.PLM2 * p / (L**3)
         G4 = 0.0
         G = G1 + G2 + G3 + G4
         # vg = c / (n - L*dn/dL)

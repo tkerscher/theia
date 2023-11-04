@@ -183,7 +183,7 @@ class MeshStore:
         material: Union[str, None] = None,
         *,
         transform: Union[Transform, None] = None,
-        detectorId: int = 0
+        detectorId: int = 0,
     ) -> MeshInstance:
         """
         Creates and returns a new MeshInstance of a mesh specified via its name.
@@ -359,7 +359,7 @@ class Scene:
         *,
         medium: int = 0,
         bbox: Optional[RectBBox] = None,
-        detectors: Iterable[SphereBBox] = []
+        detectors: Iterable[SphereBBox] = [],
     ) -> None:
         """
         Creates a new scene using the given instances
@@ -488,7 +488,7 @@ class SceneRender:
         position: tuple[float, float, float] = (0.0, 0.0, 0.0),
         direction: tuple[float, float, float] = (0.0, 1.0, 0.0),
         up: tuple[float, float, float] = (0.0, 0.0, 1.0),
-        maxDistance: float = 100.0
+        maxDistance: float = 100.0,
     ) -> None:
         """
         Creates a new scene renderer
@@ -615,7 +615,7 @@ class SceneRender:
         position: Optional[tuple[float, float, float]] = None,
         direction: Optional[tuple[float, float, float]] = None,
         up: Optional[tuple[float, float, float]] = None,
-        maxDistance: Optional[float] = None
+        maxDistance: Optional[float] = None,
     ) -> NDArray:
         """
         Renders the given scene and returns the image as numpy array of
