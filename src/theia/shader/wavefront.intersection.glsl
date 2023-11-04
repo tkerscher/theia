@@ -70,6 +70,8 @@ void main() {
     IntersectionItem item = intersectionItems[idx];
     //create modifyable copy
     Ray ray = item.ray;
+    //just to be safe
+    vec3 dir = normalize(ray.direction);
 
     //reconstruct hit triangle
     Geometry geom = geometries[item.geometryIdx];
@@ -107,7 +109,7 @@ void main() {
     float r[N_PHOTONS]; //reflectance
     for (int i = 0; i < N_PHOTONS; ++i) {
         //calculate reflectance
-        r[i] = reflectance(geom.material, ray.photons[i], ray.direction, worldNrm);
+        r[i] = reflectance(geom.material, ray.photons[i], dir, worldNrm);
 
         //since we hit something the prob for the distance is to sample at
         //least dist -> p(d>=dist) = exp(-lambda*dist)
@@ -159,15 +161,17 @@ void main() {
         );
     }
 
+    //update photons
+    //geometric effect (Lambert's cosine law)
+    float lambert = -dot(dir, worldNrm);
+    for (int i = 0; i < N_PHOTONS; ++i) {
+        //and attenuate by reflectance
+        ray.photons[i].lin_contribution *= r[i] * lambert;
+    }
+
     //update ray
     ray.position = worldPos;
-    ray.direction = normalize(reflect(ray.direction, worldNrm));
-
-    //update photons
-    for (int i = 0; i < N_PHOTONS; ++i) {
-        //attenuate by reflectance
-        ray.photons[i].lin_contribution *= r[i];
-    }
+    ray.direction = normalize(reflect(dir, worldNrm));
 
     //count how many items we will be adding in this subgroup
     uint n = subgroupAdd(1);
