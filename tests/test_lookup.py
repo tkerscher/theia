@@ -44,6 +44,7 @@ def test_lookup1D(sampleData1D, shaderUtil):
     buffer = hp.FloatBuffer(N)
     program = shaderUtil.createTestProgram("lookup.test.1D.glsl")
     program.bindParams(OutputBuffer=tensor)
+
     # run program
     class Push(Structure):
         _fields_ = [("table", c_int64), ("normalization", c_float)]
@@ -74,6 +75,7 @@ def test_lookup1Ddx(sampleData1D, shaderUtil):
     deriv = hp.FloatBuffer(N)
     program = shaderUtil.createTestProgram("lookup.test.1Ddx.glsl")
     program.bindParams(ValueOut=valueTensor, DerivOut=derivTensor)
+
     # run program
     class Push(Structure):
         _fields_ = [("table", c_int64), ("normalization", c_float)]
@@ -143,6 +145,7 @@ def test_lookup2D(sampleData2D, shaderUtil):
     buffer = hp.FloatBuffer(N * N)
     program = shaderUtil.createTestProgram("lookup.test.2D.glsl")
     program.bindParams(outputImage=image)
+
     # run program
     class Push(Structure):
         _fields_ = [("table", c_int64), ("normalization", c_float)]

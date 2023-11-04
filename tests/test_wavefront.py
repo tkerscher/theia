@@ -7,148 +7,12 @@ import theia.random
 import theia.scene
 import theia.trace
 
+from common.queue import *
 from ctypes import *
-from hephaistos.glsl import mat4x3, vec2, vec3, uvec2, stackVector
-from numpy.ctypeslib import as_array
+
+from hephaistos.glsl import vec3, stackVector
 from numpy.lib.recfunctions import structured_to_unstructured
 from theia.util import compileShader, loadShader, packUint64
-
-
-##################################### UTIL #####################################
-
-
-class QueueBuffer(hp.RawBuffer):
-    def __init__(self, itemType: Structure, n: int):
-        self._size = 4 + n * sizeof(itemType)
-        super().__init__(self._size)
-        self._adr = super().address
-        self._arr = (itemType * n).from_address(self._adr + 4)
-        self._count = c_uint32.from_address(self._adr)
-        self.count = n
-
-    def numpy(self):
-        return as_array(self._arr)
-
-    @property
-    def count(self):
-        return self._count.value
-
-    @count.setter
-    def count(self, value):
-        self._count.value = value
-
-
-class QueueTensor(hp.ByteTensor):
-    def __init__(self, itemType: Structure, n: int):
-        super().__init__(4 + sizeof(itemType) * n)
-
-
-class WaterModel(
-    theia.material.WaterBaseModel,
-    theia.material.HenyeyGreensteinPhaseFunction,
-    theia.material.MediumModel,
-):
-    def __init__(self) -> None:
-        theia.material.WaterBaseModel.__init__(self, 5.0, 1000.0, 35.0)
-        theia.material.HenyeyGreensteinPhaseFunction.__init__(self, 0.6)
-
-    ModelName = "water"
-
-
-##################################### TYPES ####################################
-
-
-N_PHOTONS = 4
-
-
-class Photon(Structure):
-    _fields_ = [
-        ("wavelength", c_float),
-        ("time", c_float),
-        ("lin_c", c_float),
-        ("log_c", c_float),
-        # medium constants
-        ("n", c_float),
-        ("vg", c_float),
-        ("mu_s", c_float),
-        ("mu_e", c_float),
-    ]
-
-
-class PhotonHit(Structure):
-    _fields_ = [
-        ("wavelength", c_float),
-        ("time", c_float),
-        ("contribution", c_float),
-    ]
-
-
-class Ray(Structure):
-    _fields_ = [
-        ("position", vec3),
-        ("direction", vec3),
-        ("rngIdx", c_uint32),
-        ("medium", uvec2),  # uint64
-        ("photons", Photon * N_PHOTONS),
-    ]
-
-
-class RayHit(Structure):
-    _fields_ = [
-        ("position", vec3),
-        ("direction", vec3),
-        ("normal", vec3),
-        ("hits", PhotonHit * N_PHOTONS),
-    ]
-
-
-class InitParams(Structure):
-    _fields_ = [
-        # ("medium", c_uint64),
-        ("medium", uvec2),
-        ("count", c_uint32),
-        ("rngStride", c_uint32),
-    ]
-
-
-class IntersectionItem(Structure):
-    _fields_ = [
-        ("ray", Ray),
-        ("geometryIdx", c_int32),
-        ("customIdx", c_int32),
-        ("triangleIdx", c_int32),
-        ("barys", vec2),
-        ("obj2World", mat4x3),
-        ("world2Obj", mat4x3),
-    ]
-
-
-class ShadowRayItem(Structure):
-    _fields_ = [
-        ("ray", Ray),
-        ("dist", c_float),
-    ]
-
-
-class VolumeScatterItem(Structure):
-    _fields_ = [("ray", Ray), ("dist", c_float)]
-
-
-class Detector(Structure):
-    _fields_ = [("position", vec3), ("radius", c_float)]
-
-
-class TraceParams(Structure):
-    _fields_ = [
-        ("targetIdx", c_uint32),
-        ("scatterCoefficient", c_float),
-        ("maxTime", c_float),
-        ("lowerBBoxCorner", vec3),
-        ("upperBBoxCorner", vec3),
-    ]
-
-
-#################################### STAGES ####################################
 
 
 def test_histogram(rng):
@@ -180,8 +44,8 @@ def test_histogram(rng):
     phi_nrm = rng.random(N) * 2.0 * np.pi
     ct_dir = rng.random(N) - 1.0
     ct_nrm = rng.random(N)  # opposite direction
-    st_dir = np.sqrt(1.0 - ct_dir ** 2)
-    st_nrm = np.sqrt(1.0 - ct_nrm ** 2)
+    st_dir = np.sqrt(1.0 - ct_dir**2)
+    st_nrm = np.sqrt(1.0 - ct_nrm**2)
     samples["position"]["x"] = rng.normal(0.0, 10.0, N)
     samples["position"]["y"] = rng.normal(0.0, 10.0, N)
     samples["position"]["z"] = rng.normal(0.0, 10.0, N)
@@ -347,7 +211,7 @@ def test_wavefront_trace(rng):
     may_hit = cos_theta >= cos_theta_min + 0.01  # acount for err in geometry too
     cos_theta = cos_theta[may_hit]
     t0 = (r_insc + d) * cos_theta - np.sqrt(
-        (r_insc + d) ** 2 * cos_theta ** 2 - (2 * r_insc * d + d ** 2)
+        (r_insc + d) ** 2 * cos_theta**2 - (2 * r_insc * d + d**2)
     )
     # bit tricky to test, since our sphere is approximated with triangles
     assert (v["dist"][may_hit] < t0).sum() / may_hit.sum() > 0.95
@@ -488,7 +352,7 @@ def test_wavefront_volume(rng):
     z = rng.random(N) * 10.0 - 5.0
     phi = rng.random(N) * 2.0 * np.pi
     cos_theta = 2.0 * rng.random(N) - 1.0
-    sin_theta = np.sqrt(1.0 - cos_theta ** 2)
+    sin_theta = np.sqrt(1.0 - cos_theta**2)
     v["ray"]["position"] = stackVector((x, y, z), vec3)
     v["ray"]["direction"] = stackVector(
         (sin_theta * np.cos(phi), sin_theta * np.sin(phi), cos_theta), vec3
@@ -565,7 +429,7 @@ def test_wavefront_volume(rng):
     center_dist = np.sqrt(np.square(sd_dir).sum(-1))
     sd_dir = sd_dir / center_dist[:, None]
     assert np.all(s["dist"] >= center_dist)
-    edge_dist = np.sqrt(det[targetIdx]["radius"] ** 2 + center_dist ** 2)
+    edge_dist = np.sqrt(det[targetIdx]["radius"] ** 2 + center_dist**2)
     cos_cone = center_dist / edge_dist
     s_dir = structured_to_unstructured(s["ray"]["direction"])
     cos_theta = np.multiply(sd_dir, s_dir).sum(-1)

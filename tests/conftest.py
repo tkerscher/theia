@@ -1,8 +1,13 @@
 import numpy as np
 import hephaistos as hp
 import importlib.resources
+import os
 import os.path
+import sys
 import pytest
+
+# needed to discover common package...
+sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 
 
 @pytest.fixture(scope="session", autouse=True)

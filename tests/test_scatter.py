@@ -10,6 +10,7 @@ from theia.util import packUint64
 
 def test_scatterDir(rng, shaderUtil):
     N = 32 * 1024
+
     # reserve memory
     class Query(Structure):
         _fields_ = [("inDir", vec3), ("cos_theta", c_float), ("phi", c_float)]
@@ -380,7 +381,7 @@ def test_volumeScatter(rng, shaderUtil):
     queries = inputBuffer.numpy()
     phi = rng.random(N) * 2.0 * np.pi
     cos_theta_in = rng.random(N) * 2.0 - 1.0
-    sin_theta_in = np.sqrt(1.0 - cos_theta_in ** 2)
+    sin_theta_in = np.sqrt(1.0 - cos_theta_in**2)
     queries["direction"] = stackVector(
         [sin_theta_in * np.cos(phi), sin_theta_in * np.sin(phi), cos_theta_in], vec3
     )
@@ -474,7 +475,7 @@ def test_volumeScatterProb(rng, shaderUtil):
     queries = inputBuffer.numpy()
     phi_in = rng.random(N) * 2.0 * np.pi
     cos_theta_in = rng.random(N) * 2.0 - 1.0
-    sin_theta_in = np.sqrt(1.0 - cos_theta_in ** 2)
+    sin_theta_in = np.sqrt(1.0 - cos_theta_in**2)
     queries["direction"] = stackVector(
         [sin_theta_in * np.cos(phi_in), sin_theta_in * np.sin(phi_in), cos_theta_in],
         vec3,
@@ -483,7 +484,7 @@ def test_volumeScatterProb(rng, shaderUtil):
     queries["medium"][(N // 2) :] = packUint64(media["empty"])
     phi_out = rng.random(N) * 2.0 * np.pi
     cos_theta_out = rng.random(N) * 2.0 - 1.0
-    sin_theta_out = np.sqrt(1.0 - cos_theta_out ** 2)
+    sin_theta_out = np.sqrt(1.0 - cos_theta_out**2)
     queries["dir"] = stackVector(
         [
             sin_theta_out * np.cos(phi_out),

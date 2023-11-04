@@ -225,6 +225,7 @@ def test_MediumShader(shaderUtil, rng):
 
 def test_MaterialShader(shaderUtil, rng):
     N = 32 * 1000  # amount of samples/shader calls
+
     # we start with building some simple materials
     class WaterModel(
         theia.material.WaterBaseModel,
@@ -276,7 +277,9 @@ def test_MaterialShader(shaderUtil, rng):
     flag_buffer = hp.UnsignedIntBuffer(1)
     # fill query structures with random parameters
     queries = query_buffer.numpy()
-    queries["material"] = [mats["water_glass"],] * (N // 2) + [
+    queries["material"] = [
+        mats["water_glass"],
+    ] * (N // 2) + [
         mats["vac_glass"],
     ] * (N // 2)
     queries["lam"] = rng.random(N, np.float32) * 600.0 + 200.0  # [200,800]nm

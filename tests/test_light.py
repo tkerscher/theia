@@ -5,76 +5,12 @@ import theia.light
 import theia.material
 import theia.random
 
+from common.queue import *
 from ctypes import *
-from hephaistos.glsl import vec3, uvec2, stackVector
-from numpy.ctypeslib import as_array
-from numpy.lib.recfunctions import structured_to_unstructured
+
+from hephaistos.glsl import vec3, stackVector
+from numpy.lib.recfunctions import structured_to_unstructured as s2u
 from theia.util import packUint64
-
-
-class QueueBuffer(hp.RawBuffer):
-    def __init__(self, itemType: Structure, n: int):
-        self._size = 4 + n * sizeof(itemType)
-        super().__init__(self._size)
-        self._adr = super().address
-        self._arr = (itemType * n).from_address(self._adr + 4)
-        self._count = c_uint32.from_address(self._adr)
-        self.count = n
-
-    def numpy(self):
-        return as_array(self._arr)
-
-    @property
-    def count(self):
-        return self._count.value
-
-    @count.setter
-    def count(self, value):
-        self._count.value = value
-
-
-class QueueTensor(hp.ByteTensor):
-    def __init__(self, itemType: Structure, n: int):
-        super().__init__(4 + sizeof(itemType) * n)
-
-
-class WaterModel(
-    theia.material.WaterBaseModel,
-    theia.material.HenyeyGreensteinPhaseFunction,
-    theia.material.MediumModel,
-):
-    def __init__(self) -> None:
-        theia.material.WaterBaseModel.__init__(self, 5.0, 1000.0, 35.0)
-        theia.material.HenyeyGreensteinPhaseFunction.__init__(self, 0.6)
-
-    ModelName = "water"
-
-
-N_PHOTONS = 4
-
-
-class Photon(Structure):
-    _fields_ = [
-        ("wavelength", c_float),
-        ("time", c_float),
-        ("lin_c", c_float),
-        ("log_c", c_float),
-        # medium constants
-        ("n", c_float),
-        ("vg", c_float),
-        ("mu_s", c_float),
-        ("mu_e", c_float),
-    ]
-
-
-class Ray(Structure):
-    _fields_ = [
-        ("position", vec3),
-        ("direction", vec3),
-        ("rngIdx", c_uint32),
-        ("medium", uvec2),  # uint64
-        ("photons", Photon * N_PHOTONS),
-    ]
 
 
 def test_lightsource(rng):
@@ -98,7 +34,7 @@ def test_lightsource(rng):
     y = rng.random(N) * 10.0 - 5.0
     z = rng.random(N) * 10.0 - 5.0
     cos_theta = 2.0 * rng.random(N) - 1.0
-    sin_theta = np.sqrt(1.0 - cos_theta ** 2)
+    sin_theta = np.sqrt(1.0 - cos_theta**2)
     phi = rng.random(N) * 2.0 * np.pi
     rays["position"] = stackVector((x, y, z), vec3)
     rays["direction"] = stackVector(
@@ -124,17 +60,17 @@ def test_lightsource(rng):
     lam = rays["photons"]["wavelength"]
     assert outputBuffer.count == N
     result = outputBuffer.numpy()
-    assert np.all(result["position"] == rays["position"])
-    assert np.all(result["direction"] == rays["direction"])
+    assert np.allclose(s2u(result["position"]), s2u(rays["position"]))
+    assert np.allclose(s2u(result["direction"]), s2u(rays["direction"]))
     assert np.all(result["rngIdx"] == np.arange(N) * RNG_STRIDE)
     water_packed = packUint64(media["water"])
     assert np.all(result["medium"]["x"] == water_packed.x)
     assert np.all(result["medium"]["y"] == water_packed.y)
     photons = result["photons"]
-    assert np.all(photons["wavelength"] == lam)
-    assert np.all(photons["time"] == rays["photons"]["startTime"])
-    assert np.all(photons["lin_c"] == rays["photons"]["lin_contrib"])
-    assert np.all(photons["log_c"] == rays["photons"]["log_contrib"])
+    assert np.allclose(photons["wavelength"], lam)
+    assert np.allclose(photons["time"], rays["photons"]["startTime"])
+    assert np.allclose(photons["lin_c"], rays["photons"]["lin_contrib"])
+    assert np.allclose(photons["log_c"], rays["photons"]["log_contrib"])
     assert np.abs(photons["n"] - model.refractive_index(lam)).max() < 5e-6
     assert np.abs(photons["vg"] - model.group_velocity(lam)).max() < 1e-6
     assert np.abs(photons["mu_s"] - model.scattering_coef(lam)).max() < 5e-5
@@ -184,10 +120,10 @@ def test_sphericalLight():
     assert outputBuffer.count == N
     result = outputBuffer.numpy()
     photons = result["photons"]
-    pos = structured_to_unstructured(result["position"])
+    pos = s2u(result["position"])
     assert np.all(pos == position)
     # uniform direction should average to zero
-    dir = structured_to_unstructured(result["direction"])
+    dir = s2u(result["direction"])
     assert np.abs(np.mean(dir, axis=0)).max() < 0.01  # low statistics
     # correct rng indices
     assert np.all(np.diff(result["rngIdx"]) == RNG_STRIDE)

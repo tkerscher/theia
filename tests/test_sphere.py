@@ -36,7 +36,7 @@ def test_sampleSphere(rng, shaderUtil):
     inBuf = inputBuffer.numpy()
     phi = rng.random(N) * 2.0 * np.pi
     cos_theta = 2.0 * rng.random(N) - 1.0
-    sin_theta = np.sqrt(1.0 - cos_theta ** 2)
+    sin_theta = np.sqrt(1.0 - cos_theta**2)
     rho = rng.random(N) * 50.0 + r + 1.5
     x = rho * sin_theta * np.cos(phi) + cx
     y = rho * sin_theta * np.sin(phi) + cy
@@ -58,8 +58,8 @@ def test_sampleSphere(rng, shaderUtil):
     o = outputBuffer.numpy()
     observer = np.stack([x, y, z], axis=-1)
     dx, dy, dz = x - cx, y - cy, z - cz
-    center_dist = np.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
-    edge_dist = np.sqrt(r ** 2 + center_dist ** 2)
+    center_dist = np.sqrt(dx**2 + dy**2 + dz**2)
+    edge_dist = np.sqrt(r**2 + center_dist**2)
     cos_cone = center_dist / edge_dist
     prob_expected = 1.0 / (2.0 * np.pi * (1.0 - cos_cone))
     assert np.allclose(o["prob"], prob_expected, 1e-4)
@@ -127,7 +127,7 @@ def test_sampleProb(rng, shaderUtil):
     # test results
     p = outputBuffer.numpy()
     center_dist = np.sqrt((x - cx) ** 2 + (y - cy) ** 2 + (z - cz) ** 2)
-    edge_dist = np.sqrt(r ** 2 + center_dist ** 2)
+    edge_dist = np.sqrt(r**2 + center_dist**2)
     cos_cone = center_dist / edge_dist
     cos_dir = np.cos(theta_jitter)
     hit_mask = cos_dir >= cos_cone
