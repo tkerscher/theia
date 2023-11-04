@@ -1,5 +1,6 @@
 #extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
@@ -91,6 +92,16 @@ void main() {
     //vec3 worldPos = vec3(item.obj2World * vec4(objPos, 1.0));
     vec3 worldNrm = normalize(vec3(objNormal * item.world2Obj));
     geoNormal = normalize(vec3(geoNormal * item.world2Obj));
+    
+    //light models are generally unaware of the scene's geometry and might have
+    //sampled a light ray inside a geometry
+    //-> test against and discard
+    bool inwards = dot(dir, worldNrm) <= 0.0; //normal and ray in opposite direction
+    //address of expected ray medium
+    uvec2 medium = inwards ? uvec2(geom.material.outside) : uvec2(geom.material.inside);
+    if (ray.medium != medium)
+        return; //discard
+
     //do matrix multiplication manually to improve error
     //See: https://developer.nvidia.com/blog/solving-self-intersection-artifacts-in-directx-raytracing/
     mat4x3 m = item.obj2World;
