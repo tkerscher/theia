@@ -90,7 +90,7 @@ void main() {
     // -> no need for atomic counting
     queue.rays[idx] = Ray(
         sourceRay.position,
-        sourceRay.direction,
+        normalize(sourceRay.direction), //just to be safe
         rngIdx,
         params.medium,
         photons

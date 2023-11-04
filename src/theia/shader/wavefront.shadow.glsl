@@ -58,7 +58,7 @@ void main() {
         0xFF,
         ray.position,
         0.0,
-        ray.direction,
+        normalize(ray.direction),
         item.dist);
     rayQueryProceedEXT(rayQuery);
 
