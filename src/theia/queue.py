@@ -1,6 +1,8 @@
+from __future__ import annotations
 import hephaistos as hp
 
 from ctypes import Structure, c_int32, sizeof
+from numpy import ndarray
 from numpy.ctypeslib import as_array
 
 from numpy.typing import NDArray
@@ -54,12 +56,14 @@ class QueueView:
         self._arr = as_array(self._data)
 
     def __len__(self) -> int:
-        return self._count
+        return self._capacity
 
     def __contains__(self, key: str) -> bool:
         return key in self._names
 
-    def __getitem__(self, key: str) -> NDArray:
+    def __getitem__(self, key) -> Union[QueueView, NDArray]:
+        if isinstance(key, slice) or isinstance(key, tuple) or isinstance(key, ndarray):
+            return QueueSubView(self, key)
         if key not in self:
             raise KeyError(f"No field with name {key}")
         # return as_array(getattr(self._data, key))
@@ -105,6 +109,41 @@ class QueueView:
     def item(self) -> Type[Structure]:
         """Structure describing the items of the queue"""
         return self._item
+
+
+class QueueSubView:
+    """Utility class for slicing and masking a QueueView"""
+
+    def __init__(
+        self, orig: Union[QueueView, QueueSubView], mask: Union[slice, tuple, NDArray]
+    ) -> None:
+        self._orig = orig
+        self._mask = mask
+        # query new length by applying mask to a random field
+        self._count = len(orig[next(iter(orig.fields))][mask])
+
+    def __len__(self) -> int:
+        return self._count
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._orig
+
+    def __getitem__(self, key) -> Union[QueueView, NDArray]:
+        if isinstance(key, slice) or isinstance(key, tuple) or isinstance(key, ndarray):
+            return QueueSubView(self, key)
+        if key not in self:
+            raise KeyError(f"No field with name {key}")
+        return self._orig[key][self._mask]
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        if key not in self:
+            raise KeyError(f"No field with name {key}")
+        self._orig[key][self._mask] = value
+
+    @property
+    def fields(self) -> Set[str]:
+        """List of field names"""
+        return self._orig.fields
 
 
 def queueSize(
@@ -191,6 +230,11 @@ class QueueBuffer(hp.RawBuffer):
     ) -> None:
         super().__init__(queueSize(item, capacity, skipHeader=skipHeader))
         self._view = QueueView(self.address, item, capacity, skipHeader=skipHeader)
+
+    @property
+    def count(self) -> int:
+        """Number of items stored in the queue"""
+        return self.view.count
 
     @property
     def view(self) -> QueueView:
