@@ -4,7 +4,7 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
-#include "scatter.glsl"
+#include "scatter.surface.glsl"
 
 layout(local_size_x = 32) in;
 
@@ -23,11 +23,12 @@ layout(push_constant) uniform Scene {
 
 void main() {
     uint i = gl_GlobalInvocationID.x;
-    
     //check which side of material via normal (points outwards)
     float cos_i = dot(q[i].direction, q[i].normal);
     Medium med = cos_i <= 0.0 ? scene.mat.outside : scene.mat.inside;
 
-    Ray ray = initRay(vec3(0.0), q[i].direction, q[i].wavelength, med);
-    r[i] = reflectance(ray, scene.mat, q[i].normal);
+    //create photon
+    Photon ph = createPhoton(med, q[i].wavelength, 0.0, 1.0, 0.0);
+    //calculate reflectance
+    r[i] = reflectance(scene.mat, ph, q[i].direction, q[i].normal);
 }

@@ -14,6 +14,8 @@
 
 layout(local_size_x = LOCAL_SIZE) in;
 
+#include "scene.glsl"
+
 layout(scalar) readonly buffer IntersectionQueue {
     uint intersectionCount;
     IntersectionItem intersectionItems[];
@@ -26,20 +28,6 @@ layout(scalar) writeonly buffer ResponseQueue {
     uint responseCount;
     RayHit responseItems[];
 };
-
-layout(buffer_reference, scalar, buffer_reference_align=4) readonly buffer Vertex {
-    vec3 position;
-    vec3 normal;
-};
-layout(buffer_reference, scalar, buffer_reference_align=4) readonly buffer Index {
-    ivec3 idx;
-};
-struct Geometry {
-    Vertex vertices;    // &vertices[0]
-    Index indices;      // &indices[0]
-    Material material;
-};
-layout(scalar) buffer Geometries { Geometry geometries[]; };
 
 layout(scalar) uniform Params {
     TraceParams params;
