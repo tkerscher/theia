@@ -3,7 +3,8 @@ import hephaistos as hp
 from ctypes import Structure, c_float
 from hephaistos.glsl import vec3, stackVector
 from numpy.lib.recfunctions import structured_to_unstructured
-from theia.random import PhiloxRNG
+from theia.random import PhiloxRNG, RNGBufferSink
+from theia.scheduler import runPipelineStage
 
 
 def test_sampleSphere(rng, shaderUtil):
@@ -22,12 +23,14 @@ def test_sampleSphere(rng, shaderUtil):
     outputBuffer = hp.ArrayBuffer(Result, N)
     outputTensor = hp.ArrayTensor(Result, N)
     # create rng
-    philox = PhiloxRNG(N // 2, 4, key=0xC01DC0FFEE)  # need 2N samples
+    philox = PhiloxRNG(key=0xC01DC0FFEE)  # need 2N samples
+    generator = RNGBufferSink(philox, N // 2, 16)
+    runPipelineStage(generator)
 
     # create program
     program = shaderUtil.createTestProgram("sphere.sample.test.glsl")
     # bind params
-    program.bindParams(Input=inputTensor, Output=outputTensor, RNG=philox.tensor)
+    program.bindParams(Input=inputTensor, Output=outputTensor, RNG=generator.tensor)
 
     # create push
     cx, cy, cz, r = 10.0, 5.0, 27.0, 3.5
@@ -46,7 +49,6 @@ def test_sampleSphere(rng, shaderUtil):
     # run program
     (
         hp.beginSequence()
-        .And(philox.dispatchNext())
         .And(hp.updateTensor(inputBuffer, inputTensor))
         .Then(program.dispatchPush(bytes(push), N // 32))
         .Then(hp.retrieveTensor(outputTensor, outputBuffer))

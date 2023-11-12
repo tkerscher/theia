@@ -1,9 +1,24 @@
 import importlib.resources
 import hephaistos as hp
-from ctypes import c_uint32, c_uint64
+
+from ctypes import Structure, c_uint32
 from hephaistos.glsl import uvec4, uvec2
-from os.path import join
-from typing import Dict
+from numpy.ctypeslib import as_array
+
+from numpy.typing import NDArray
+from typing import Dict, Type
+
+
+def viewSoA(address: int, item: Type[Structure], count: int) -> NDArray:
+    """
+    Returns a structured numpy array as a view of the structure of array saved
+    at the given memory address.
+    """
+
+    class SoA(Structure):
+        _fields_ = [(name, t * count) for name, t in item._fields_]
+
+    return as_array(SoA.from_address(address))
 
 
 def getCompiler() -> hp.Compiler:

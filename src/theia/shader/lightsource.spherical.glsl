@@ -1,6 +1,7 @@
 #ifndef _INCLUDE_LIGHTSOURCE_SPHERICAL
 #define _INCLUDE_LIGHTSOURCE_SPHERICAL
 
+#include "rng.glsl"
 #include "math.glsl"
 
 //light params
@@ -15,11 +16,12 @@ layout(scalar) uniform LightParams {
 } lightParams;
 
 SourceRay sampleLight() {
+    uint rngStream = gl_GlobalInvocationID.x;
     //float prob = INV_4PI / dLam / time_duration;
     SourcePhoton photons[N_PHOTONS];
     for (int i = 0; i < N_PHOTONS; ++i) {
-        float lambda = lightParams.lambda_min + lightParams.lambdaRange * rand();
-        float t = lightParams.t0 + lightParams.timeRange * rand();
+        float lambda = lightParams.lambda_min + lightParams.lambdaRange * random();
+        float t = lightParams.t0 + lightParams.timeRange * random();
 
         photons[i] = SourcePhoton(
             lambda,
@@ -30,9 +32,10 @@ SourceRay sampleLight() {
     }
 
     //sample direction
-    float cos_theta = 2.0 * rand() - 1.0;
+    vec2 u = random2D();
+    float cos_theta = 2.0 * u.x - 1.0;
     float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
-    float phi = TWO_PI * rand();
+    float phi = TWO_PI * u.y;
     vec3 rayDir = vec3(
         sin_theta * cos(phi),
         sin_theta * sin(phi),

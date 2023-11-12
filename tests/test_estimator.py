@@ -4,6 +4,7 @@ import theia.estimator
 from common.queue import *
 from hephaistos.glsl import stackVector
 from numpy.lib.recfunctions import structured_to_unstructured as s2u
+from theia.scheduler import RetrieveTensorStage, runPipeline
 
 
 def test_histogram(rng):
@@ -14,22 +15,22 @@ def test_histogram(rng):
     T0 = 30.0
     T1 = T0 + N_BINS * BIN_SIZE
 
+    # upload data via cached estimator
+    cache = theia.estimator.CachedSampleSource(N, N_PHOTONS)
     # create estimator
     estimator = theia.estimator.HistogramEstimator(
-        None,
         N,
-        nDetectors=4,
+        cache.queue,
+        None,
         nBins=N_BINS,
         nPhotons=N_PHOTONS,
         t0=T0,
         binSize=BIN_SIZE,
         normalization=NORM,
     )
-    # upload data via cached estimator
-    cache = theia.estimator.CachedEstimator(estimator, N, N_PHOTONS)
 
     # fill data
-    samples = cache.numpy()
+    samples = cache.numpy(0)
     samples["position"] = stackVector(
         [rng.normal(0.0, 10.0, N), rng.normal(0.0, 10.0, N), rng.normal(0.0, 10.0, N)],
         vec3,
@@ -63,27 +64,27 @@ def test_histogram(rng):
     samples["hits"]["contribution"] = contrib
 
     # run estimator
-    cache.estimate(2)
+    retriever = RetrieveTensorStage(estimator.histogram)
+    runPipeline([cache, estimator, retriever])
 
     # calculate expected result
     cosine = -np.multiply(s2u(samples["normal"]), s2u(samples["direction"])).sum(-1)
     weights = (contrib * cosine[:, None] * NORM).flatten()
     hist_exp, _ = np.histogram(time.flatten(), N_BINS, (T0, T1), weights=weights)
     # check result
-    hist = estimator.histogram(2)
+    hist = retriever.view(np.float32)
     assert np.allclose(hist, hist_exp)
 
 
 def test_hostEstimator(rng):
     N = 32 * 256
 
-    # create estimator
-    estimator = theia.estimator.HostEstimator(N, N_PHOTONS)
-    # upload data via cached estimator
-    cache = theia.estimator.CachedEstimator(estimator, N, N_PHOTONS)
+    # create pipeline
+    cache = theia.estimator.CachedSampleSource(N, N_PHOTONS)
+    estimator = theia.estimator.HostEstimator(N, N_PHOTONS, cache.queue)
 
     # fill data
-    samples = cache.numpy()
+    samples = cache.numpy(0)
     samples["position"] = stackVector(
         [rng.normal(0.0, 10.0, N), rng.normal(0.0, 10.0, N), rng.normal(0.0, 10.0, N)],
         vec3,
@@ -115,8 +116,8 @@ def test_hostEstimator(rng):
     samples["hits"]["contribution"] = rng.random((N, N_PHOTONS)) * 50.0
 
     # run estimator
-    cache.estimate(4)  # id does not really matter...
+    runPipeline([cache, estimator])
 
     # check result
-    result = estimator.numpy()
+    result = estimator.numpy(0)
     assert np.all(samples == result)

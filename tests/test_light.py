@@ -5,19 +5,20 @@ import theia.light
 import theia.material
 import theia.random
 
-from common.queue import *
 from ctypes import *
+
+from common.items import Ray, N_PHOTONS
+from common.models import WaterModel
 
 from hephaistos.glsl import vec3, stackVector
 from numpy.lib.recfunctions import structured_to_unstructured as s2u
+from theia.queue import QueueBuffer, QueueTensor, as_queue
+from theia.scheduler import RetrieveTensorStage, runPipeline
 from theia.util import packUint64
 
 
 def test_lightsource(rng):
-    # create host light
     N = 32 * 256
-    RNG_STRIDE = 16
-    light = theia.light.HostLightSource(N, nPhotons=N_PHOTONS)
 
     # create medium
     model = WaterModel()
@@ -25,11 +26,18 @@ def test_lightsource(rng):
     tensor, _, media = theia.material.bakeMaterials(media=[water])
 
     # allocate queue
-    outputBuffer = QueueBuffer(Ray, N)
     outputTensor = QueueTensor(Ray, N)
 
+    # create light
+    light = theia.light.HostLightSource(
+        N,
+        nBuffers=1,
+        rayQueue=outputTensor,
+        nPhotons=N_PHOTONS,
+        medium=media["water"])
+    
     # fill input buffer
-    rays = light.numpy()
+    rays = light.view(0)
     x = rng.random(N) * 10.0 - 5.0
     y = rng.random(N) * 10.0 - 5.0
     z = rng.random(N) * 10.0 - 5.0
@@ -44,25 +52,19 @@ def test_lightsource(rng):
     rays["photons"]["startTime"] = rng.random((N, N_PHOTONS)) * 50.0
     rays["photons"]["lin_contrib"] = rng.random((N, N_PHOTONS)) + 1.0
     rays["photons"]["log_contrib"] = rng.random((N, N_PHOTONS)) * 5.0 - 4.0
-    # upload input
-    light.update()
 
     # run
-    (
-        hp.beginSequence()
-        .And(light.sample(N, outputTensor, 0, media["water"], RNG_STRIDE))
-        .Then(hp.retrieveTensor(outputTensor, outputBuffer))
-        .Submit()
-        .wait()
-    )
+    retrieve = RetrieveTensorStage(outputTensor, 1)
+    result = as_queue(retrieve.buffer(0), Ray)
+    runPipeline([light, retrieve])
 
     # check result
     lam = rays["photons"]["wavelength"]
-    assert outputBuffer.count == N
-    result = outputBuffer.numpy()
+    assert result.count == N
     assert np.allclose(s2u(result["position"]), s2u(rays["position"]))
     assert np.allclose(s2u(result["direction"]), s2u(rays["direction"]))
-    assert np.all(result["rngIdx"] == np.arange(N) * RNG_STRIDE)
+    assert np.all(result["rngStream"] == np.arange(N))
+    assert np.all(result["rngCount"] == 0)
     water_packed = packUint64(media["water"])
     assert np.all(result["medium"]["x"] == water_packed.x)
     assert np.all(result["medium"]["y"] == water_packed.y)
@@ -80,22 +82,14 @@ def test_lightsource(rng):
 
 def test_sphericalLight():
     N = 32 * 256
-    RNG_STRIDE = 16
     position = (14.0, -2.0, 3.0)
     lamRange, dLam = (350.0, 750.0), 400.0
     timeRange, dt = (20.0, 70.0), 50.0
     intensity = 8.0
     contrib = intensity / dLam / dt
-    light = theia.light.SphericalLightSource(
-        nPhotons=N_PHOTONS,
-        position=position,
-        wavelengthRange=lamRange,
-        timeRange=timeRange,
-        intensity=intensity,
-    )
 
     # create rng
-    philox = theia.random.PhiloxRNG(N, RNG_STRIDE, key=0xC0110FFC0FFEE)
+    philox = theia.random.PhiloxRNG(key=0xC0110FFC0FFEE)
 
     # create medium
     model = WaterModel()
@@ -103,22 +97,28 @@ def test_sphericalLight():
     tensor, _, media = theia.material.bakeMaterials(media=[water])
 
     # allocate queue
-    outputBuffer = QueueBuffer(Ray, N)
     outputTensor = QueueTensor(Ray, N)
 
-    # run
-    (
-        hp.beginSequence()
-        .And(philox.dispatchNext())
-        .Then(light.sample(N, outputTensor, philox.tensor, media["water"], RNG_STRIDE))
-        .Then(hp.retrieveTensor(outputTensor, outputBuffer))
-        .Submit()
-        .wait()
+    # create light
+    light = theia.light.SphericalLightSource(
+        N,
+        rayQueue=outputTensor,
+        nPhotons=N_PHOTONS,
+        position=position,
+        rng=philox,
+        wavelengthRange=lamRange,
+        timeRange=timeRange,
+        intensity=intensity,
+        medium=media["water"],
     )
 
+    # run
+    retrieve = RetrieveTensorStage(outputTensor, 1)
+    result = as_queue(retrieve.buffer(0), Ray)
+    runPipeline([philox, light, retrieve])
+
     # check result
-    assert outputBuffer.count == N
-    result = outputBuffer.numpy()
+    assert result.count == N
     photons = result["photons"]
     pos = s2u(result["position"])
     assert np.all(pos == position)
@@ -126,10 +126,8 @@ def test_sphericalLight():
     dir = s2u(result["direction"])
     assert np.abs(np.mean(dir, axis=0)).max() < 0.01  # low statistics
     # correct rng indices
-    assert np.all(np.diff(result["rngIdx"]) == RNG_STRIDE)
-    assert np.all(
-        np.mod(result["rngIdx"], RNG_STRIDE, dtype=np.int32) == light.rngSamples
-    )
+    assert np.all(result["rngStream"] == np.arange(N))
+    assert np.all(result["rngCount"] == light.rngSamples)
     # check medium
     water_packed = packUint64(media["water"])
     assert np.all(result["medium"]["x"] == water_packed.x)

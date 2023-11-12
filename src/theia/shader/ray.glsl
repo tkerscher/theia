@@ -41,14 +41,15 @@ Photon createPhoton(
 struct Ray {
     vec3 position;              //12 bytes
     vec3 direction;             //12 bytes
-    uint rngIdx;                // 4 bytes
+    uint rngStream;             // 4 bytes
+    uint rngCount;              // 4 bytes
 
     //A plane buffer reference would have an alignment of 8 bytes (uint64).
     //Moreover, Ray would also get an alignment of 8 bytes. To make things more
     //simple, we'll use uvec2 instead and thus have an alignment of only 4 bytes
     uvec2 medium;               // 8 bytes
     Photon photons[N_PHOTONS];  // N * 32 bytes
-};          // TOTAL: 36 + N*32 bytes (164 bytes)
+};          // TOTAL: 40 + N*32 bytes (168 bytes)
 
 struct PhotonHit {
     float wavelength;   // 4 bytes
