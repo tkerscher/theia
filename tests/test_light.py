@@ -30,12 +30,9 @@ def test_lightsource(rng):
 
     # create light
     light = theia.light.HostLightSource(
-        N,
-        nBuffers=1,
-        rayQueue=outputTensor,
-        nPhotons=N_PHOTONS,
-        medium=media["water"])
-    
+        N, nBuffers=1, rayQueue=outputTensor, nPhotons=N_PHOTONS, medium=media["water"]
+    )
+
     # fill input buffer
     rays = light.view(0)
     x = rng.random(N) * 10.0 - 5.0

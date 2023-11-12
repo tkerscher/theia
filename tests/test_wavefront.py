@@ -22,11 +22,13 @@ def test_wavefront_trace(rng):
     N = 32 * 256
     # create rng
     philox = PhiloxRNG(key=0xC01DC0FFEE)  # need 2N samples
-    philox.update(0) # update manually
+    philox.update(0)  # update manually
     # create programs
-    headers = {"rng.glsl":philox.sourceCode}
+    headers = {"rng.glsl": philox.sourceCode}
     wavefront_trace = hp.Program(compileShader("wavefront.trace.glsl", headers=headers))
-    wavefront_intersect = hp.Program(compileShader("wavefront.intersection.glsl", headers=headers))
+    wavefront_intersect = hp.Program(
+        compileShader("wavefront.intersection.glsl", headers=headers)
+    )
 
     # create material
     water = WaterModel().createMedium()
@@ -51,7 +53,9 @@ def test_wavefront_trace(rng):
 
     # create light
     rayTensor = QueueTensor(Ray, N)
-    light = theia.light.HostLightSource(N, rayQueue=rayTensor, nPhotons=4, medium=media["water"])
+    light = theia.light.HostLightSource(
+        N, rayQueue=rayTensor, nPhotons=4, medium=media["water"]
+    )
     # fill input buffer
     queries = light.view(0)
     theta = rng.random(N) * np.pi
@@ -72,7 +76,7 @@ def test_wavefront_trace(rng):
     # fill ray queue
     runPipelineStage(light)
 
-    # reserve memory for 
+    # reserve memory for
     rayBufferIn = QueueBuffer(Ray, N)
     rayBufferOut = QueueBuffer(Ray, N)
     intBuffer = QueueBuffer(IntersectionItem, N)
@@ -137,7 +141,7 @@ def test_wavefront_trace(rng):
     assert rayQueue.count <= intQueue.count
 
     # check volume items did not pass through geometry
-    v = volQueue[:volQueue.count]
+    v = volQueue[: volQueue.count]
     v_pos = structured_to_unstructured(v["ray"]["position"])
     v_dir = structured_to_unstructured(v["ray"]["direction"])
     cos_theta = np.abs(v_dir[:, 2])  # dot with +/- e_z
@@ -153,7 +157,7 @@ def test_wavefront_trace(rng):
     assert ((v["dist"][may_hit] - t0) / t0).max() < 0.1
 
     # check intersections
-    i = rayQueue[:rayQueue.count]
+    i = rayQueue[: rayQueue.count]
     # reconstruct input queries
     i_idx = (i["photons"]["wavelength"][:, 0] - 200.0) / (600.0 / (N - 1))
     i_in = r_in[np.round(i_idx).astype(np.int32)]
@@ -197,7 +201,7 @@ def test_wavefront_trace(rng):
 
     # check detector hits
     responseQueue = responseBuffer.view
-    hits = responseQueue[:responseQueue.count]
+    hits = responseQueue[: responseQueue.count]
     # reconstruct input queries
     hits_idx = (hits["hits"]["wavelength"][:, 0] - 200.0) / (600.0 / (N - 1))
     hits_in = r_in[np.round(hits_idx).astype(np.int32)]
@@ -225,9 +229,9 @@ def test_wavefront_volume(rng):
     N_DET = 32
     # create rng
     philox = PhiloxRNG(key=0xC01DC0FFEE)  # need 2N samples
-    philox.update(0) # update manually
+    philox.update(0)  # update manually
     # create programs
-    headers = {"rng.glsl":philox.sourceCode}
+    headers = {"rng.glsl": philox.sourceCode}
     program = hp.Program(compileShader("wavefront.volume.glsl", headers=headers))
 
     # create medium
