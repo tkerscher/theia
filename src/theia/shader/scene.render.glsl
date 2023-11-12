@@ -9,6 +9,8 @@ layout(local_size_x = 4, local_size_y = 4) in;
 
 #include "scene.glsl"
 
+uniform accelerationStructureEXT tlas;
+
 layout(rgba8) uniform image2D outImage;
 
 layout(push_constant, scalar) uniform Push{
