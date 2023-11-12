@@ -5,15 +5,13 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
+#include "rng.glsl"
 #include "scatter.volume.glsl"
 
 layout(local_size_x = 32) in;
 
 layout(scalar) readonly buffer Input{
     Ray rays[];
-};
-layout(scalar) readonly buffer RNG{
-    float u[];
 };
 
 struct Result{
@@ -26,12 +24,10 @@ layout(scalar) writeonly buffer Output{
 
 void main() {
     uint i = gl_GlobalInvocationID.x;
-    
-    Ray ray = rays[i];
-    vec2 rng = vec2(u[2*i], u[2*i + 1]);
+    Ray ray = rays[i]; 
     
     float prob;
-    scatter(ray, rng, prob);
+    scatter(ray, random2D(i, 0), prob);
 
     results[i] = Result(ray, prob);
 }

@@ -34,13 +34,13 @@ class ShaderUtil:
         with open(path, "r") as file:
             return file.read()
 
-    def compileTestShader(self, shader) -> bytes:
-        source = self.getTestShader(shader)
-        code = self.compiler.compile(source)
+    def compileTestShader(self, shader, preamble="", headers={}) -> bytes:
+        source = preamble + "\n" + self.getTestShader(shader)
+        code = self.compiler.compile(source, headers)
         return code
 
-    def createTestProgram(self, shader) -> hp.Program:
-        code = self.compileTestShader(shader)
+    def createTestProgram(self, shader, preamble="", headers={}) -> hp.Program:
+        code = self.compileTestShader(shader, preamble, headers)
         return hp.Program(code)
 
 

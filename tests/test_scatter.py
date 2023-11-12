@@ -2,6 +2,10 @@ import numpy as np
 import hephaistos as hp
 import theia.material
 import theia.random
+
+from common.items import *
+from common.models import WaterModel
+
 from ctypes import *
 from hephaistos.glsl import vec3, uvec2, stackVector
 from numpy.lib.recfunctions import structured_to_unstructured
@@ -306,43 +310,6 @@ def test_transmitMaterial(rng, shaderUtil):
     assert np.all(results["match_consts"] >= 0.0)
 
 
-class Photon(Structure):
-    _fields_ = [
-        ("wavelength", c_float),
-        ("travelTime", c_float),
-        ("log_radiance", c_float),
-        ("T_lin", c_float),
-        ("T_log", c_float),
-        # medium constants
-        ("n", c_float),
-        ("vg", c_float),
-        ("mu_s", c_float),
-        ("mu_e", c_float),
-    ]
-
-
-class Ray(Structure):
-    _fields_ = [
-        ("position", vec3),
-        ("direction", vec3),
-        ("rngIdx", c_uint32),
-        ("medium", uvec2),  # uint64
-        ("photons", Photon * 4),
-    ]
-
-
-class WaterModel(
-    theia.material.WaterBaseModel,
-    theia.material.HenyeyGreensteinPhaseFunction,
-    theia.material.MediumModel,
-):
-    def __init__(self) -> None:
-        theia.material.WaterBaseModel.__init__(self, 5.0, 1000.0, 35.0)
-        theia.material.HenyeyGreensteinPhaseFunction.__init__(self, 0.6)
-
-    ModelName = "water"
-
-
 def test_volumeScatter(rng, shaderUtil):
     N = 32 * 2048
     N_EMPTY = 32 * 64
@@ -358,7 +325,8 @@ def test_volumeScatter(rng, shaderUtil):
         _fields_ = [
             ("position", vec3),
             ("direction", vec3),
-            ("rngIdx", c_uint32),
+            ("rngStream", c_uint32),
+            ("rngCount", c_uint32),
             ("medium", uvec2),  # uint64
             ("photons", Photon * 4),
             ("prob", c_float),
@@ -370,12 +338,17 @@ def test_volumeScatter(rng, shaderUtil):
     outputBuffer = hp.ArrayBuffer(Result, N)
     outputTensor = hp.ArrayTensor(Result, N)
     # create rng
-    philox = theia.random.PhiloxRNG(N // 2, 4, key=0xC0110FFC0FFEE)
+    philox = theia.random.PhiloxRNG(key=0xC0110FFC0FFEE)
+    philox.update(0)
 
     # create program
-    program = shaderUtil.createTestProgram("scatter.volume.scatter.test.glsl")
+    headers = {"rng.glsl": philox.sourceCode}
+    program = shaderUtil.createTestProgram(
+        "scatter.volume.scatter.test.glsl", headers=headers
+    )
     # bind params
-    program.bindParams(Input=inputTensor, Output=outputTensor, RNG=philox.tensor)
+    philox.bindParams(program, 0)
+    program.bindParams(Input=inputTensor, Output=outputTensor)
 
     # fill input
     queries = inputBuffer.numpy()
@@ -387,14 +360,11 @@ def test_volumeScatter(rng, shaderUtil):
     )
     queries["medium"][N_EMPTY:] = packUint64(media["water"])
     queries["medium"][:N_EMPTY] = packUint64(media["empty"])
-    queries["photons"]["T_lin"] = rng.random(N * 4).reshape((N, -1))
-    queries["photons"]["mu_s"] = rng.random(N * 4).reshape((N, -1))
 
     # run program
     (
         hp.beginSequence()
         .And(hp.updateTensor(inputBuffer, inputTensor))
-        .And(philox.dispatchNext())
         .Then(program.dispatch(N // 32))
         .Then(hp.retrieveTensor(outputTensor, outputBuffer))
         .Submit()
@@ -403,11 +373,9 @@ def test_volumeScatter(rng, shaderUtil):
 
     # test result
     result = outputBuffer.numpy()
-    tlin_exp = queries["photons"]["mu_s"] * queries["photons"]["T_lin"]
     dir_in = structured_to_unstructured(queries["direction"])
     dir_out = structured_to_unstructured(result["direction"])
     cos_theta = np.multiply(dir_in, dir_out).sum(-1)
-    assert np.allclose(result["photons"]["T_lin"], tlin_exp)
     # test lambertian disitribution
     bins = np.histogram(cos_theta[:N_EMPTY], bins=10, range=(-1, 1))[0]
     assert np.abs(bins / N_EMPTY - 0.1).max() < 0.1  # low statistic
@@ -454,7 +422,8 @@ def test_volumeScatterProb(rng, shaderUtil):
         _fields_ = [
             ("position", vec3),
             ("direction", vec3),
-            ("rngIdx", c_uint32),
+            ("rngStream", c_uint32),
+            ("rngCount", c_uint32),
             ("medium", uvec2),  # uint64
             ("photons", Photon * 4),
             ("dir", vec3),
