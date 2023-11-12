@@ -9,6 +9,7 @@
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_basic : require
 
+#include "rng.glsl"
 #include "scatter.volume.glsl"
 #include "sphere.glsl"
 #include "wavefront.common.glsl"
@@ -28,7 +29,6 @@ layout(scalar) writeonly buffer ShadowQueue {
     ShadowRayItem shadowItems[];
 };
 
-layout(scalar) readonly buffer RNGBuffer { float u[]; };
 layout(scalar) readonly buffer Detectors {
     Sphere detectors[];
 };
@@ -92,14 +92,16 @@ void main() {
 
     //sample target
     Sphere detector = detectors[params.targetIdx];
-    vec2 rng = vec2(u[ray.rngIdx++], u[ray.rngIdx++]);
+    vec2 rng = random2D(ray.rngStream, ray.rngCount);
+    ray.rngCount += 2;
     float pDD, targetDist;
     vec3 targetDir = sampleSphere(detector, ray.position, rng, targetDist, pDD);
     //Copy ray
     Ray targetRay = ray;
 
     //scatter
-    rng = vec2(u[ray.rngIdx++], u[ray.rngIdx++]);
+    rng = random2D(ray.rngStream, ray.rngCount);
+    ray.rngCount += 2;
     float pSS;
     vec3 scatterDir = scatter(ray, rng, pSS);
 

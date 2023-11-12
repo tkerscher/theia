@@ -9,6 +9,7 @@
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_basic : require
 
+#include "rng.glsl"
 #include "wavefront.common.glsl"
 
 layout(local_size_x = LOCAL_SIZE) in;
@@ -26,7 +27,6 @@ layout(scalar) writeonly buffer VolumeScatterQueue {
     VolumeScatterItem volumeItems[];
 };
 
-layout(scalar) readonly buffer RNGBuffer { float u[]; };
 uniform accelerationStructureEXT tlas;
 
 layout(scalar) uniform Params {
@@ -44,7 +44,8 @@ void main() {
     //just to be safe
     vec3 dir = normalize(ray.direction);
     //sample distance
-    float dist = -log(1.0 - u[ray.rngIdx++]) / params.scatterCoefficient;
+    float u = random(ray.rngStream, ray.rngCount++);
+    float dist = -log(1.0 - u) / params.scatterCoefficient;
 
     //trace ray
     rayQueryEXT rayQuery;

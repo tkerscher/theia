@@ -185,7 +185,7 @@ void main() {
     ray.direction = normalize(reflect(dir, worldNrm));
     //skip four random numbers to match the amount
     //a volume scatter event would have drawn
-    ray.rngIdx += 4;
+    ray.rngCount += 4;
 
     //count how many items we will be adding in this subgroup
     uint n = subgroupAdd(1);
