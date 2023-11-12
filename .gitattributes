@@ -1,0 +1,2 @@
+# linguist settings
+*.ipynb linguist-detectable=false
