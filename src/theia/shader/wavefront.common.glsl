@@ -8,27 +8,27 @@
 #include "ray.glsl"
 
 struct ShadowRayItem{
-    Ray ray;
+    Ray ray;            //40 + N*32 bytes
 
-    float dist;
-};
+    float dist;         // 4 bytes
+};              // TOTAL: 44 + N*32 bytes
 
 struct IntersectionItem{
-    Ray ray;
+    Ray ray;            //40 + N*32 bytes
 
-    int geometryIdx;
-    int customIdx;
-    int triangleIdx;
-    vec2 barys;
-    mat4x3 obj2World;
-    mat4x3 world2Obj;
-};
+    int geometryIdx;    // 4 bytes
+    int customIdx;      // 4 bytes
+    int triangleIdx;    // 4 bytes
+    vec2 barys;         // 8 bytes
+    mat4x3 obj2World;   //12 bytes
+    mat4x3 world2Obj;   //12 bytes
+};              // TOTAL: 84 + N*32 bytes
 
 struct VolumeScatterItem{
-    Ray ray;
+    Ray ray;            //40 + N*32 bytes
 
-    float dist;
-};
+    float dist;         // 4 bytes
+};              // TOTAL: 44 + N*32 bytes
 
 struct TraceParams {
     //Index of target we want to hit
