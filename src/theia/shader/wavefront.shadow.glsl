@@ -9,6 +9,7 @@
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_basic : require
 
+#include "hits.glsl"
 #include "scatter.surface.glsl"
 #include "wavefront.common.glsl"
 
@@ -16,13 +17,13 @@ layout(local_size_x = LOCAL_SIZE) in;
 
 #include "scene.glsl"
 
-layout(scalar) readonly buffer ShadowQueue {
+layout(scalar) readonly buffer ShadowQueueBuffer {
     uint shadowCount;
-    ShadowRayItem shadowItems[];
+    ShadowRayQueue shadowQueue;
 };
-layout(scalar) writeonly buffer ResponseQueue {
-    uint responseCount;
-    RayHit responseItems[];
+layout(scalar) writeonly buffer HitQueueBuffer {
+    uint hitCount;
+    HitQueue hitQueue;
 };
 
 uniform accelerationStructureEXT tlas;
@@ -36,8 +37,9 @@ void main() {
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= shadowCount)
         return;
-    ShadowRayItem item = shadowItems[idx];
-    Ray ray = item.ray;
+    //load item
+    LOAD_RAY(ray, shadowQueue.rays, idx)
+    float dist = shadowQueue.dist[idx];
     
     //check if we can hit the detector
     rayQueryEXT rayQuery;
@@ -48,7 +50,7 @@ void main() {
         ray.position,
         0.0,
         normalize(ray.direction),
-        item.dist);
+        dist);
     rayQueryProceedEXT(rayQuery);
 
     //Did we hit anything? (we might have missed the detector)
@@ -83,7 +85,7 @@ void main() {
     worldPos.x = m[3][0] + fma(m[0][0], objPos.x, fma(m[1][0], objPos.y, m[2][0] * objPos.z));
     worldPos.y = m[3][1] + fma(m[0][1], objPos.x, fma(m[1][1], objPos.y, m[2][1] * objPos.z));
     worldPos.z = m[3][2] + fma(m[0][2], objPos.x, fma(m[1][2], objPos.y, m[2][2] * objPos.z));
-    float dist = length(worldPos - ray.position);
+    dist = length(worldPos - ray.position);
     //interpolate normal
     precise vec3 n1 = v1.normal - v0.normal;
     precise vec3 n2 = v2.normal - v0.normal;
@@ -100,14 +102,14 @@ void main() {
         //calculate reflectance
         float r = reflectance(geom.material, ray.photons[i], objNormal, objDir);
         //we absorb -> attenuate by transmission
-        ray.photons[i].lin_contribution *= (1.0 - r);
+        ray.photons[i].lin_contrib *= (1.0 - r);
 
         //since we hit something the prob for the distance is to sample at
         //least dist -> p(d>=dist) = exp(-lambda*dist)
         //attenuation is simply Beer's law
         float mu_e = ray.photons[i].constants.mu_e;
         //write out multplication in hope to prevent catastrophic cancelation
-        ray.photons[i].log_contribution += lambda * dist - mu_e * dist;
+        ray.photons[i].log_contrib += lambda * dist - mu_e * dist;
 
         //update travel time
         ray.photons[i].time += dist / ray.photons[i].constants.vg;
@@ -116,7 +118,9 @@ void main() {
             anyBelowMaxTime = true;
         
         //create hit
-        hits[i] = createHit(ray.photons[i]);
+        Photon ph = ray.photons[i];
+        float contrib = exp(ph.log_contrib) * ph.lin_contrib;
+        hits[i] = PhotonHit(ph.wavelength, ph.time, contrib);
     }
     //bounds check: max time
     if (!anyBelowMaxTime)
@@ -129,7 +133,7 @@ void main() {
     //elect one invocation to update counter in queue
     uint oldCount = 0;
     if (subgroupElect()) {
-        oldCount = atomicAdd(responseCount, n);
+        oldCount = atomicAdd(hitCount, n);
     }
     //only the first(i.e. elected) one has correct oldCount value -> broadcast
     oldCount = subgroupBroadcastFirst(oldCount);
@@ -138,7 +142,6 @@ void main() {
     //order the active invocations so each can write at their own spot
     uint id = subgroupExclusiveAdd(1);
     //create response item
-    responseItems[oldCount + id] = RayHit(
-        objPos, objDir, objNormal, hits
-    );
+    idx = oldCount + id;
+    SAVE_HIT(objPos, objDir, objNormal, hits, hitQueue, idx)
 }

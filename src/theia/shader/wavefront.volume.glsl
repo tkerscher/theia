@@ -16,17 +16,17 @@
 
 layout(local_size_x = LOCAL_SIZE) in;
 
-layout(scalar) readonly buffer VolumeScatterQueue {
+layout(scalar) readonly buffer VolumeScatterQueueBuffer {
     uint volumeCount;
-    VolumeScatterItem volumeItems[];
+    VolumeScatterQueue volumeQueue;
 };
-layout(scalar) writeonly buffer RayQueue {
+layout(scalar) writeonly buffer RayQueueBuffer {
     uint rayCount;
-    Ray rayItems[];
+    RayQueue rayQueue;
 };
-layout(scalar) writeonly buffer ShadowQueue {
+layout(scalar) writeonly buffer ShadowQueueBuffer {
     uint shadowCount;
-    ShadowRayItem shadowItems[];
+    ShadowRayQueue shadowQueue;
 };
 
 layout(scalar) readonly buffer Detectors {
@@ -42,11 +42,12 @@ void main() {
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= volumeCount)
         return;
-    VolumeScatterItem item = volumeItems[idx];
-    Ray ray = item.ray;
+    //load ray
+    LOAD_RAY(ray, volumeQueue.rays, idx)
+    float dist = volumeQueue.dist[idx];
 
     //calc new position
-    ray.position = ray.position + ray.direction * item.dist;
+    ray.position = ray.position + ray.direction * dist;
     //boundary check
     if (any(lessThan(ray.position, params.lowerBBoxCorner)) ||
         any(greaterThan(ray.position, params.upperBBoxCorner)))
@@ -66,15 +67,15 @@ void main() {
         //  -> log(delta) = (mu_e-lambda)*dist
         float mu_e = ray.photons[i].constants.mu_e;
         //write out multplication in hope to prevent catastrophic cancelation
-        ray.photons[i].log_contribution += lambda * item.dist - mu_e * item.dist;
-        ray.photons[i].lin_contribution /= lambda;
+        ray.photons[i].log_contrib += lambda * dist - mu_e * dist;
+        ray.photons[i].lin_contrib /= lambda;
 
         //scattereing is mu_s*p(theta) -> mu_s shared by all processes
         float mu_s = ray.photons[i].constants.mu_s;
-        ray.photons[i].lin_contribution *= mu_s;
+        ray.photons[i].lin_contrib *= mu_s;
 
         //update traveltime
-        ray.photons[i].time += item.dist / ray.photons[i].constants.vg;
+        ray.photons[i].time += dist / ray.photons[i].constants.vg;
         //bounds check
         if (ray.photons[i].time <= params.maxTime)
             anyBelowMaxTime = true;
@@ -119,10 +120,10 @@ void main() {
     //update photons
     for (int i = 0; i < N_PHOTONS; ++i) {
         //update scattered sample
-        ray.photons[i].lin_contribution *= w_scatter;
+        ray.photons[i].lin_contrib *= w_scatter;
 
         //update target sample
-        targetRay.photons[i].lin_contribution *= pSD * w_target;
+        targetRay.photons[i].lin_contrib *= pSD * w_target;
     }
     //update target direction
     targetRay.direction = targetDir;
@@ -141,12 +142,15 @@ void main() {
     //order the active invocations so each can write at their own spot
     uint id = subgroupExclusiveAdd(1);
     //create and save item
-    rayItems[oldCount + id] = ray;
+    idx = oldCount + id;
+    SAVE_RAY(ray, rayQueue, idx)
 
     //Now do the same with the shadow rays
     if (subgroupElect()) {
         oldCount = atomicAdd(shadowCount, n);
     }
     oldCount = subgroupBroadcastFirst(oldCount);
-    shadowItems[oldCount + id] = ShadowRayItem(targetRay, targetDist);
+    idx = oldCount + id;
+    SAVE_RAY(targetRay, shadowQueue.rays, idx)
+    shadowQueue.dist[idx] = targetDist;
 }

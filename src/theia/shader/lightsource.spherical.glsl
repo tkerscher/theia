@@ -8,20 +8,22 @@
 layout(scalar) uniform LightParams {
     vec3 position;
     float lambda_min;
-    float lambdaRange;
-    float t0;
-    float timeRange;
+    float lambda_max;
+    float t_min;
+    float t_max;
     //1/r^2 needed for intensity->radiance cancels with sampling => const
     float contribution; // intensity / prob
 } lightParams;
 
 SourceRay sampleLight() {
     uint rngStream = gl_GlobalInvocationID.x;
+    float delta_lambda = lightParams.lambda_max - lightParams.lambda_min;
+    float delta_time = lightParams.t_max - lightParams.t_min;
     //float prob = INV_4PI / dLam / time_duration;
     SourcePhoton photons[N_PHOTONS];
     for (int i = 0; i < N_PHOTONS; ++i) {
-        float lambda = lightParams.lambda_min + lightParams.lambdaRange * random();
-        float t = lightParams.t0 + lightParams.timeRange * random();
+        float lambda = lightParams.lambda_min + delta_lambda * random();
+        float t = lightParams.t_min + delta_time * random();
 
         photons[i] = SourcePhoton(
             lambda,

@@ -1,20 +1,29 @@
 import numpy as np
 import hephaistos as hp
+
+from ctypes import *
+from hephaistos.glsl import vec3, uvec2, stackVector
+
 import theia.material
 import theia.random
 
 from common.items import *
 from common.models import WaterModel
 
-from ctypes import *
-from hephaistos.glsl import vec3, uvec2, stackVector
 from numpy.lib.recfunctions import structured_to_unstructured
 from theia.util import packUint64
 
 
-def test_scatterDir(rng, shaderUtil):
-    N = 32 * 1024
+NPH = 4
+N = 32 * 1024
 
+preamble = f"""
+#define N_PHOTONS {NPH}
+#define QUEUE_SIZE {N}
+"""
+
+
+def test_scatterDir(rng, shaderUtil):
     # reserve memory
     class Query(Structure):
         _fields_ = [("inDir", vec3), ("cos_theta", c_float), ("phi", c_float)]
@@ -35,7 +44,7 @@ def test_scatterDir(rng, shaderUtil):
     queries["phi"] = 2.0 * np.pi * rng.random(N)
 
     # create and run test
-    program = shaderUtil.createTestProgram("scatter.scatterDir.test.glsl")
+    program = shaderUtil.createTestProgram("scatter.scatterDir.test.glsl", preamble)
     program.bindParams(QueryBuffer=query_tensor, ResultBuffer=result_tensor)
     (
         hp.beginSequence()
@@ -169,7 +178,6 @@ def prepareRayQueries(N, rng):
 
 
 def test_reflectance(rng, shaderUtil):
-    N = 32 * 1024
     query_buffer, scene, n_i, n_t, r, mat_tensor = prepareRayQueries(N, rng)
 
     # reserve memory
@@ -178,7 +186,7 @@ def test_reflectance(rng, shaderUtil):
     result_tensor = hp.FloatTensor(N)
 
     # create program and run it
-    program = shaderUtil.createTestProgram("scatter.reflectance.test.glsl")
+    program = shaderUtil.createTestProgram("scatter.reflectance.test.glsl", preamble)
     program.bindParams(QueryBuffer=query_tensor, ResultBuffer=result_tensor)
     (
         hp.beginSequence()
@@ -198,7 +206,6 @@ def test_reflectance(rng, shaderUtil):
 
 
 def test_volumeScatter(rng, shaderUtil):
-    N = 32 * 2048
     N_EMPTY = 32 * 64
 
     # create medium
@@ -231,7 +238,7 @@ def test_volumeScatter(rng, shaderUtil):
     # create program
     headers = {"rng.glsl": philox.sourceCode}
     program = shaderUtil.createTestProgram(
-        "scatter.volume.scatter.test.glsl", headers=headers
+        "scatter.volume.scatter.test.glsl", preamble, headers=headers
     )
     # bind params
     philox.bindParams(program, 0)
@@ -323,7 +330,7 @@ def test_volumeScatterProb(rng, shaderUtil):
     outputTensor = hp.FloatTensor(N)
 
     # create program
-    program = shaderUtil.createTestProgram("scatter.volume.prob.test.glsl")
+    program = shaderUtil.createTestProgram("scatter.volume.prob.test.glsl", preamble)
     # bind params
     program.bindParams(Input=inputTensor, Output=outputTensor)
 

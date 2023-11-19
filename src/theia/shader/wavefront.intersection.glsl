@@ -9,6 +9,7 @@
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_basic : require
 
+#include "hits.glsl"
 #include "scatter.surface.glsl"
 #include "wavefront.common.glsl"
 
@@ -16,17 +17,17 @@ layout(local_size_x = LOCAL_SIZE) in;
 
 #include "scene.glsl"
 
-layout(scalar) readonly buffer IntersectionQueue {
+layout(scalar) readonly buffer IntersectionQueueBuffer {
     uint intersectionCount;
-    IntersectionItem intersectionItems[];
+    IntersectionQueue intersectionQueue;
 };
-layout(scalar) writeonly buffer RayQueue {
+layout(scalar) writeonly buffer RayQueueBuffer {
     uint rayCount;
-    Ray rayItems[];
+    RayQueue rayQueue;
 };
-layout(scalar) writeonly buffer ResponseQueue {
-    uint responseCount;
-    RayHit responseItems[];
+layout(scalar) writeonly buffer HitQueueBuffer {
+    uint hitCount;
+    HitQueue hitQueue;
 };
 
 layout(scalar) uniform Params {
@@ -56,30 +57,66 @@ void main() {
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= intersectionCount)
         return;
-    IntersectionItem item = intersectionItems[idx];
-    //create modifyable copy
-    Ray ray = item.ray;
+    //load ray
+    LOAD_RAY(ray, intersectionQueue.rays, idx)
     //just to be safe
     vec3 dir = normalize(ray.direction);
 
+    //load rest of item
+    int geometryIdx = intersectionQueue.geometryIdx[idx];
+    int customIdx = intersectionQueue.customIdx[idx];
+    int triangleIdx = intersectionQueue.triangleIdx[idx];
+    vec2 barys = vec2(intersectionQueue.baryU[idx], intersectionQueue.baryV[idx]);
+    mat4x3 obj2World = mat4x3(
+        //note that glsl is column major
+        intersectionQueue.obj2World00[idx],
+        intersectionQueue.obj2World01[idx],
+        intersectionQueue.obj2World02[idx],
+        intersectionQueue.obj2World10[idx],
+        intersectionQueue.obj2World11[idx],
+        intersectionQueue.obj2World12[idx],
+        intersectionQueue.obj2World20[idx],
+        intersectionQueue.obj2World21[idx],
+        intersectionQueue.obj2World22[idx],
+        intersectionQueue.obj2World30[idx],
+        intersectionQueue.obj2World31[idx],
+        intersectionQueue.obj2World32[idx]
+    );
+    mat4x3 world2Obj = mat4x3(
+        //note that glsl is column major
+        intersectionQueue.world2Obj00[idx],
+        intersectionQueue.world2Obj01[idx],
+        intersectionQueue.world2Obj02[idx],
+        intersectionQueue.world2Obj10[idx],
+        intersectionQueue.world2Obj11[idx],
+        intersectionQueue.world2Obj12[idx],
+        intersectionQueue.world2Obj20[idx],
+        intersectionQueue.world2Obj21[idx],
+        intersectionQueue.world2Obj22[idx],
+        intersectionQueue.world2Obj30[idx],
+        intersectionQueue.world2Obj31[idx],
+        intersectionQueue.world2Obj32[idx]
+    );
+
+
     //reconstruct hit triangle
-    Geometry geom = geometries[item.geometryIdx];
-    ivec3 index = geom.indices[item.triangleIdx].idx;
+    Geometry geom = geometries[geometryIdx];
+    ivec3 index = geom.indices[triangleIdx].idx;
     Vertex v0 = geom.vertices[index.x];
     Vertex v1 = geom.vertices[index.y];
     Vertex v2 = geom.vertices[index.z];
     precise vec3 e1 = v1.position - v0.position;
     precise vec3 e2 = v2.position - v0.position;
-    precise vec3 objPos = v0.position + fma(vec3(item.barys.x), e1, item.barys.y * e2);
+    precise vec3 objPos = v0.position + fma(vec3(barys.x), e1, barys.y * e2);
     vec3 geoNormal = cross(e1, e2); //used for offsetting
     //interpolate normal
     precise vec3 n1 = v1.normal - v0.normal;
     precise vec3 n2 = v2.normal - v0.normal;
-    precise vec3 objNormal = v0.normal + fma(vec3(item.barys.x), n1, item.barys.y * n2);
+    precise vec3 objNormal = v0.normal + fma(vec3(barys.x), n1, barys.y * n2);
     //translate from object to world space
     //vec3 worldPos = vec3(item.obj2World * vec4(objPos, 1.0));
-    vec3 worldNrm = normalize(vec3(objNormal * item.world2Obj));
-    geoNormal = normalize(vec3(geoNormal * item.world2Obj));
+    vec3 worldNrm = normalize(vec3(objNormal * world2Obj));
+    geoNormal = normalize(vec3(geoNormal * world2Obj));
     
     //light models are generally unaware of the scene's geometry and might have
     //sampled a light ray inside a geometry
@@ -92,7 +129,7 @@ void main() {
 
     //do matrix multiplication manually to improve error
     //See: https://developer.nvidia.com/blog/solving-self-intersection-artifacts-in-directx-raytracing/
-    mat4x3 m = item.obj2World;
+    mat4x3 m = obj2World;
     precise vec3 worldPos;
     worldPos.x = m[3][0] + fma(m[0][0], objPos.x, fma(m[1][0], objPos.y, m[2][0] * objPos.z));
     worldPos.y = m[3][1] + fma(m[0][1], objPos.x, fma(m[1][1], objPos.y, m[2][1] * objPos.z));
@@ -115,7 +152,7 @@ void main() {
         //attenuation is simply Beer's law
         float mu_e = ray.photons[i].constants.mu_e;
         //write out multplication in hope to prevent catastrophic cancelation
-        ray.photons[i].log_contribution += lambda * dist - mu_e * dist;
+        ray.photons[i].log_contrib += lambda * dist - mu_e * dist;
 
         //update travel time
         ray.photons[i].time += dist / ray.photons[i].constants.vg;
@@ -128,25 +165,26 @@ void main() {
         return;
     
     //If hit target -> create response item
-    if (item.customIdx == params.targetIdx &&
+    if (customIdx == params.targetIdx &&
         (geom.material.flags & MATERIAL_TARGET_BIT) != 0
     ) {
         //create hits
         PhotonHit hits[N_PHOTONS];
         for (int i = 0; i < N_PHOTONS; ++i) {
-            hits[i] = createHit(ray.photons[i]);
+            Photon ph = ray.photons[i];
             //attenuate by transmission
-            hits[i].contribution *= (1.0 - r[i]);
+            float contrib = exp(ph.log_contrib) * ph.lin_contrib * (1.0 - r[i]);
+            hits[i] = PhotonHit(ph.wavelength, ph.time, contrib);
         }
         //transform direction to object space
-        vec3 objDir = normalize(mat3(item.world2Obj) * item.ray.direction);
+        vec3 objDir = normalize(mat3(world2Obj) * ray.direction);
 
         //count how many items we will be adding in this subgroup
         uint n = subgroupAdd(1);
         //elect one invocation to update counter in queue
         uint oldCount = 0;
         if (subgroupElect()) {
-            oldCount = atomicAdd(responseCount, n);
+            oldCount = atomicAdd(hitCount, n);
         }
         //only the first(i.e. elected) one has correct oldCount value -> broadcast
         oldCount = subgroupBroadcastFirst(oldCount);
@@ -155,9 +193,8 @@ void main() {
         //order the active invocations so each can write at their own spot
         uint id = subgroupExclusiveAdd(1);
         //create response item
-        responseItems[oldCount + id] = RayHit(
-            objPos, objDir, objNormal, hits
-        );
+        idx = oldCount + id;
+        SAVE_HIT(objPos, objDir, objNormal, hits, hitQueue, idx)
     }
 
     //update photons
@@ -165,7 +202,7 @@ void main() {
     float lambert = -dot(dir, worldNrm);
     for (int i = 0; i < N_PHOTONS; ++i) {
         //and attenuate by reflectance
-        ray.photons[i].lin_contribution *= r[i] * lambert;
+        ray.photons[i].lin_contrib *= r[i] * lambert;
     }
 
     //update ray
@@ -189,5 +226,6 @@ void main() {
     //order the active invocations so each can write at their own spot
     uint id = subgroupExclusiveAdd(1);
     //create item on the tracing queue
-    rayItems[oldCount + id] = ray;
+    idx = oldCount + id;
+    SAVE_RAY(ray, rayQueue, idx)
 }

@@ -1,11 +1,14 @@
 from __future__ import annotations
+
 import hephaistos as hp
+from hephaistos.glsl import vec2, vec3
 import numpy as np
+
 import importlib.resources
 import os.path
 import trimesh
+
 from ctypes import Structure, c_float, c_uint64
-from hephaistos.glsl import vec2, vec3
 from numpy.typing import NDArray, ArrayLike
 from typing import Iterable, Optional, Tuple, Union
 

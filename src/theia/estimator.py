@@ -1,16 +1,17 @@
 from __future__ import annotations
+
 import hephaistos as hp
+from hephaistos.queue import QueueBuffer, QueueTensor, QueueView
+from hephaistos.pipeline import PipelineStage
 
-from ctypes import Structure, c_float, c_uint32, sizeof
-from hephaistos.glsl import vec3
-from theia.scheduler import CachedPipelineStage, PipelineStage
-from numpy.ctypeslib import as_array
-from numpy.typing import NDArray
+from theia.items import createHitQueueItem
+from theia.util import compileShader, loadShader
+
+from ctypes import Structure, c_float, c_uint32
 from typing import Callable, Dict, List, Optional, Type, Union
-from .util import compileShader, loadShader
 
 
-class HistogramReducer(CachedPipelineStage):
+class HistogramReducer(PipelineStage):
     """
     Helper program for reducing local histograms into a single one.
 
@@ -22,8 +23,6 @@ class HistogramReducer(CachedPipelineStage):
     histOut: Optional[hp.Tensor], default=None
         Tensor containing the histogram where the result will be stored.
         Must be set before sampling.
-    nConfigs: int, default=2
-        Number of pipeline configurations
     nHist: int, default=1
         Number of histograms to reduce
     nBins: int, default=256
@@ -38,6 +37,8 @@ class HistogramReducer(CachedPipelineStage):
         If None, the code get's compiled from source.
     """
 
+    name = "Histogram Reducer"
+
     class Params(Structure):
         """Structure matching the parameter uniform"""
 
@@ -51,14 +52,13 @@ class HistogramReducer(CachedPipelineStage):
         *,
         histIn: Optional[hp.Tensor] = None,
         histOut: Optional[hp.Tensor] = None,
-        nConfigs: int = 2,
         nHist: int = 1,
         nBins: int = 256,
         normalization: float = 1.0,
         blockSize: int = 128,
         code: Optional[bytes] = None,
     ) -> None:
-        super().__init__({"Params": self.Params}, nConfigs)
+        super().__init__({"Params": self.Params})
 
         # work group size
         self._groupSize = -(nBins // -blockSize)
@@ -78,12 +78,11 @@ class HistogramReducer(CachedPipelineStage):
 
         # save params
         self._nBins = nBins
-        self.nHist = nHist
-        self.normalization = normalization
         if histIn is not None:
             self.histIn = histIn
         if histOut is not None:
             self.histOut = histOut
+        self.setParams(norm=normalization, nHist=nHist)
 
     @property
     def histIn(self) -> hp.Tensor:
@@ -111,24 +110,6 @@ class HistogramReducer(CachedPipelineStage):
         return self._nBins
 
     @property
-    def nHist(self) -> int:
-        """Number of histograms to reduce"""
-        return self._getParam("Params", "nHist")
-
-    @nHist.setter
-    def nHist(self, value: int) -> None:
-        self._setParam("Params", "nHist", value)
-
-    @property
-    def normalization(self) -> float:
-        """Normalization constant each bin gets multiplied with"""
-        return self._getParam("Params", "norm")
-
-    @normalization.setter
-    def normalization(self, value: float) -> None:
-        self._setParam("Params", "norm", value)
-
-    @property
     def code(self) -> bytes:
         """Compiled source code for given configuration"""
         return self._code
@@ -136,11 +117,11 @@ class HistogramReducer(CachedPipelineStage):
     # pipeline stage api
 
     def run(self, i: int) -> List[hp.Command]:
-        self._bindConfigs(self._program, i)
+        self._bindParams(self._program, i)
         return [self._program.dispatch(self._groupSize)]
 
 
-class HistogramEstimator(CachedPipelineStage):
+class HistogramEstimator(PipelineStage):
     """
     Estimator producing a light curve by computing the histogram of samples.
 
@@ -155,8 +136,6 @@ class HistogramEstimator(CachedPipelineStage):
         might differ on different machines.
     nBins: int, default=256
         Number of bins in the histogram
-    nConfigs: int, default=2
-        Number of pipeline configurations
     nPhotons: int, default=4
         Number of photons in single ray hit
     t0: float, default=0.0
@@ -168,6 +147,8 @@ class HistogramEstimator(CachedPipelineStage):
     blockSize: int, default=128
         number of threads in a single local work group (block size in CUDA)
     """
+
+    name = "Histogram Estimator"
 
     class Params(Structure):
         """Struct defining parameter uniform"""
@@ -186,14 +167,13 @@ class HistogramEstimator(CachedPipelineStage):
         *,
         detectorId: int = 0,
         nBins: int = 256,
-        nConfigs: int = 2,
         nPhotons: int = 4,
         t0: float = 0.0,
         binSize: float = 1.0,
         normalization: float = 1.0,
         blockSize: int = 128,
     ) -> None:
-        super().__init__({"Parameters": self.Params}, nConfigs)
+        super().__init__({"Parameters": self.Params}, {"norm"})
         # allocate histograms
         self._nHist = -(maxSamples // -blockSize)  # ceil division
         self._gpuHist = hp.FloatTensor(self._nHist * nBins)
@@ -205,6 +185,7 @@ class HistogramEstimator(CachedPipelineStage):
         if type(code) is str:
             # create preamble
             preamble = ""
+            preamble += f"#define HIT_QUEUE_SIZE {maxSamples}\n"
             preamble += f"#define BATCH_SIZE {blockSize}\n"
             preamble += f"#define N_BINS {nBins}\n"
             preamble += f"#define N_PHOTONS {nPhotons}\n\n"
@@ -217,7 +198,6 @@ class HistogramEstimator(CachedPipelineStage):
             histIn=self._gpuHist,
             histOut=self._reducedHist,
             nHist=self._nHist,
-            nConfigs=nConfigs,
             nBins=nBins,
             normalization=normalization,
             blockSize=blockSize,
@@ -227,17 +207,14 @@ class HistogramEstimator(CachedPipelineStage):
         self._code = code
         # create program
         self._program = hp.Program(code["hist"])
-        self._program.bindParams(Histograms=self._gpuHist, ResponseQueue=queue)
+        self._program.bindParams(Histograms=self._gpuHist, HitQueueBuffer=queue)
 
         # save params
         self._maxSamples = maxSamples
         self._nBins = nBins
         self._nPhotons = nPhotons
         self._queue = queue
-        self.binSize = binSize
-        self.detectorId = detectorId
-        # self.normalization = normalization
-        self.t0 = t0
+        self.setParams(binSize=binSize, detectorId=detectorId, t0=t0)
 
     @property
     def code(self) -> Dict[str, bytes]:
@@ -245,48 +222,18 @@ class HistogramEstimator(CachedPipelineStage):
         return self._code
 
     @property
-    def binSize(self) -> float:
-        """Width of a single bin"""
-        return self._getParam("Parameters", "binSize")
-
-    @binSize.setter
-    def binSize(self, value: float) -> None:
-        self._setParam("Parameters", "binSize", value)
-
-    @property
-    def detectorId(self) -> int:
-        """
-        Id of the detector the estimate is created for.
-        May be used by the response function.
-        """
-        self._getParam("Parameters", "detectorId")
-
-    @detectorId.setter
-    def detectorId(self, value: int) -> None:
-        self._setParam("Parameters", "detectorId", value)
-
-    @property
-    def normalization(self) -> float:
+    def norm(self) -> float:
         """common factor each bin gets multiplied with"""
-        return self._reducer.normalization
+        return self._reducer.getParam("norm")
 
-    @normalization.setter
-    def normalization(self, value: float) -> None:
-        self._reducer.normalization = value
+    @norm.setter
+    def norm(self, value: float) -> None:
+        self._reducer.setParam("norm", value)
 
     @property
     def queue(self) -> hp.Tensor:
         """Queue containing the samples"""
         return self._queue
-
-    @property
-    def t0(self) -> float:
-        """First edge of the histogram"""
-        return self._getParam("Parameters", "t0")
-
-    @t0.setter
-    def t0(self, value: float) -> None:
-        self._setParam("Parameters", "t0", value)
 
     @property
     def histogram(self) -> hp.Tensor:
@@ -319,7 +266,7 @@ class HistogramEstimator(CachedPipelineStage):
         super().update(i)
 
     def run(self, i: int) -> List[hp.Command]:
-        self._bindConfigs(self._program, i)
+        self._bindParams(self._program, i)
         return [
             hp.clearTensor(self._reducedHist),
             self._program.dispatch(self._nHist),
@@ -341,60 +288,30 @@ class HostEstimator(PipelineStage):
         Number of photons in single ray hit
     queue: hp.Tensor
         Tensor containing the response queue from which to copy the samples.
-    nBuffers: int, default=2
-        Number of buffers
     """
 
-    def __init__(
-        self, capacity: int, nPhotons: int, queue: hp.Tensor, *, nBuffers: int = 2
-    ) -> None:
-        super().__init__(nBuffers)
+    name = "Host Estimator"
+
+    def __init__(self, capacity: int, nPhotons: int, queue: hp.Tensor) -> None:
+        super().__init__({})
         # save params
         self._capacity = capacity
         self._nPhotons = nPhotons
         self._queue = queue
 
-        # build sample type
-        class PhotonHit(Structure):
-            _fields_ = [
-                ("wavelength", c_float),
-                ("time", c_float),
-                ("contribution", c_float),
-            ]
-
-        class RayHit(Structure):
-            _fields_ = [
-                ("position", vec3),
-                ("direction", vec3),
-                ("normal", vec3),
-                ("hits", PhotonHit * nPhotons),
-            ]
-
-        # calculate queue size
-        itemSize = sizeof(RayHit)
-        totalSize = 4 + itemSize * capacity  # starts with int count
-        sampleFloats = 9 + 3 * nPhotons
-        totalFloats = sampleFloats * capacity
-        # allocate memory
-        self._buffers = [hp.RawBuffer(totalSize) for _ in range(nBuffers)]
-        # pointer to counts
-        adrs = [b.address for b in self._buffers]
-        self._counts = [c_uint32.from_address(adr) for adr in adrs]
-        self._sampleType = RayHit * capacity
-        self._structured = [
-            as_array((self._sampleType).from_address(adr + 4)) for adr in adrs
-        ]
-        self._flat = [
-            as_array((c_float * totalFloats).from_address(adr + 4)).reshape(
-                (-1, sampleFloats)
-            )
-            for adr in adrs
-        ]
+        # create queue
+        self._item = createHitQueueItem(nPhotons)
+        self._buffers = [QueueBuffer(self._item, capacity) for _ in range(2)]
 
     @property
     def capacity(self) -> int:
         """Maximum number of samples the estimator can process in a single run"""
         return self._capacity
+
+    @property
+    def item(self) -> Type[Structure]:
+        """Structure describing a single item in the queue"""
+        return self._item
 
     @property
     def nPhotons(self) -> int:
@@ -414,20 +331,9 @@ class HostEstimator(PipelineStage):
         """
         return self._queue
 
-    def numpy(self, i: int, structured: bool = True) -> NDArray:
-        """
-        Returns the numpy array using the memory of the i-th buffer containing
-        the last retrieved samples.
-        If structured is True, returns a structured numpy array, else a 2D float
-        matrix with one row per sample. Each row has the following layout:
-
-        | position | direction | normal | hits[nPhotons]:
-            (wavelength | time | contribution)
-        """
-        if structured:
-            return self._structured[i][: self._counts[i].value]
-        else:
-            return self._flat[i][: self._counts[i].value]
+    def view(self, i: int) -> QueueView:
+        """Returns the view into the i-th queue buffer"""
+        return self._buffers[i].view
 
     # pipeline stage api
 
@@ -450,64 +356,30 @@ class CachedSampleSource(PipelineStage):
         Optional function to be called before a task is run on the pipeline.
         Called with this object and the index of the buffer to fill.
         May be used to load data
-    nBuffers: int, default=2
-        Number of buffers
     """
+
+    name = "Cached Sample Source"
 
     def __init__(
         self,
         capacity: int,
         nPhotons: int,
         updateFn: Optional[Callable[[CachedSampleSource, int], None]] = None,
-        *,
-        nBuffers: int = 2,
     ) -> None:
-        super().__init__(nBuffers)
+        super().__init__({})
         # save params
         self._capacity = capacity
         self._nPhotons = nPhotons
         self._updateFn = updateFn
 
-        # build sample type
-        class PhotonHit(Structure):
-            _fields_ = [
-                ("wavelength", c_float),
-                ("time", c_float),
-                ("contribution", c_float),
-            ]
+        # create queue
+        self._item = createHitQueueItem(nPhotons)
+        self._buffers = [QueueBuffer(self._item, capacity) for _ in range(2)]
+        self._tensor = QueueTensor(self._item, capacity)
 
-        class RayHit(Structure):
-            _fields_ = [
-                ("position", vec3),
-                ("direction", vec3),
-                ("normal", vec3),
-                ("hits", PhotonHit * nPhotons),
-            ]
-
-        # calculate queue size
-        itemSize = sizeof(RayHit)
-        totalSize = 4 + itemSize * capacity  # starts with int count
-        sampleFloats = 9 + 3 * nPhotons
-        totalFloats = sampleFloats * capacity
-        # allocate memory
-        self._tensor = hp.ByteTensor(totalSize)
-        self._buffers = [hp.RawBuffer(totalSize) for _ in range(nBuffers)]
-        # pointer to counts
-        adrs = [b.address for b in self._buffers]
-        self._counts = [c_uint32.from_address(adr) for adr in adrs]
-        self._sampleType = RayHit * capacity
-        self._structured = [
-            as_array((self._sampleType).from_address(adr + 4)) for adr in adrs
-        ]
-        self._flat = [
-            as_array((c_float * totalFloats).from_address(adr + 4)).reshape(
-                (-1, sampleFloats)
-            )
-            for adr in adrs
-        ]
         # by default, copy whole buffer
-        for i in range(nBuffers):
-            self.setCount(i, capacity)
+        for i in range(2):
+            self.view(i).count = capacity
 
     @property
     def capacity(self) -> int:
@@ -524,24 +396,9 @@ class CachedSampleSource(PipelineStage):
         """Tensor containing the cached samples on the GPU"""
         return self._tensor
 
-    def setCount(self, i: int, count: int) -> int:
-        """Set the number of samples in the i-th buffer."""
-        self._counts[i].value = count
-
-    def numpy(self, i: int, structured: bool = True) -> NDArray:
-        """
-        Returns the numpy array of the i-th buffer containing the last retrieved
-        samples.
-        If structured is True, returns a structured numpy array, else a 2D float
-        matrix with one row per sample. Each row has the following layout:
-
-        | position | direction | normal | hits[nPhotons]:
-            (wavelength | time | contribution)
-        """
-        if structured:
-            return self._structured[i]
-        else:
-            return self._flat[i]
+    def view(self, i: int) -> QueueView:
+        """Returns the view into the i-th queue"""
+        return self._buffers[i].view
 
     # pipeline stage api
 

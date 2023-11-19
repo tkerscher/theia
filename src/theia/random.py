@@ -1,35 +1,31 @@
 import hephaistos as hp
 
 from ctypes import Structure, c_uint32
-from hephaistos.glsl import uvec2, uvec4
-from theia.scheduler import CachedPipelineStage
 from os import urandom
-from typing import Dict, List, Optional, Tuple, Type
-from .util import (
-    compileShader,
-    loadShader,
-    intToUvec4,
-    uvec4ToInt,
-    packUint64,
-    unpackUint64,
-)
+
+from hephaistos.pipeline import PipelineStage
+from theia.util import compileShader, loadShader
+
+from typing import Dict, List, Optional, Set, Tuple, Type
 
 
-class RNG(CachedPipelineStage):
+class RNG(PipelineStage):
     """
     Base class for random number generator used in pipeline stages.
     Running this as a stage inside a pipeline updates following stages.
     """
 
+    name = "RNG"
+
     def __init__(
         self,
         sourceCode: str,
         params: Dict[str, Type[Structure]] = {},
+        extras: Set[str] = set(),
         *,
-        nConfigs: int = 2,
         alignment: int = 1,
     ) -> None:
-        super().__init__(params, nConfigs)
+        super().__init__(params, extras)
         self._sourceCode = sourceCode
         self._alignment = alignment
 
@@ -50,24 +46,26 @@ class RNG(CachedPipelineStage):
         """
         Binds params used by the generator to the program for the given configuration
         """
-        self._bindConfigs(program, i)
+        self._bindParams(program, i)
 
     def run(self, i: int) -> List[hp.Command]:
         # RNG are most likely config only
         return []
 
 
-class RNGBufferSink(CachedPipelineStage):
+class RNGBufferSink(PipelineStage):
     """
     Helper class for filling a tensor with random numbers from a generator
     """
+
+    name = "RNG Sink"
 
     class Params(Structure):
         _fields_ = [
             ("baseStream", c_uint32),
             ("baseCount", c_uint32),
-            ("streams", c_uint32),
-            ("samples", c_uint32),
+            ("_streams", c_uint32),
+            ("_samples", c_uint32),
         ]
 
     def __init__(
@@ -81,16 +79,18 @@ class RNGBufferSink(CachedPipelineStage):
         blockSize: Tuple[int, int, int] = (32, 4, 16),
         code: Optional[bytes] = None,
     ) -> None:
-        super().__init__({"Params": self.Params}, generator.nConfigs)
+        super().__init__({"Params": self.Params})
         # save params
         capacity = streams * samples
-        self._setParam("Params", "streams", streams)
-        self._setParam("Params", "samples", samples)
         self._capacity = capacity
         self._generator = generator
-        self.baseStream = baseStream
-        self.baseCount = baseCount
         self._blockSize = blockSize
+        self.setParams(
+            baseStream=baseStream,
+            baseCount=baseCount,
+            _streams=streams,
+            _samples=samples,
+        )
 
         # create code if needed
         if code is None:
@@ -115,12 +115,12 @@ class RNGBufferSink(CachedPipelineStage):
     @property
     def streams(self) -> int:
         """Total number of streams"""
-        return self._getParam("Params", "streams")
+        return self.getParam("_streams")
 
     @property
     def samples(self) -> int:
         """Number of samples drawn per stream"""
-        return self._getParam("Params", "samples")
+        return self.getParam("_samples")
 
     @property
     def capacity(self) -> int:
@@ -142,31 +142,36 @@ class RNGBufferSink(CachedPipelineStage):
         """Block size used by the shader: (streams, batches, draws per invocation)"""
         return self._blockSize
 
-    @property
-    def baseStream(self) -> int:
-        """Offset added to the streams"""
-        return self._getParam("Params", "baseStream")
-
-    @baseStream.setter
-    def baseStream(self, value: int) -> None:
-        self._setParam("Params", "baseStream", value)
-
-    @property
-    def baseCount(self) -> int:
-        """Offset into a single stream"""
-        return self._getParam("Params", "baseCount")
-
-    @baseCount.setter
-    def baseCount(self, value: int) -> None:
-        self._setParam("Params", "baseCount", value)
-
-    def update(self, i: int) -> None:
-        super().update(i)
-
     def run(self, i: int) -> List[hp.Command]:
-        self._bindConfigs(self._program, i)
+        self._bindParams(self._program, i)
         self.generator.bindParams(self._program, i)
         return [self._program.dispatch(*self._dispatchSize)]
+
+
+class Key(Structure):
+    _fields_ = [("lo", c_uint32), ("hi", c_uint32)]
+
+    @property
+    def value(self) -> int:
+        return self.lo + (self.hi << 32)
+
+    @value.setter
+    def value(self, value: int) -> None:
+        self.lo = value & 0xFFFFFFFF
+        self.hi = value >> 32 & 0xFFFFFFFF
+
+
+class Counter(Structure):
+    _fields_ = [("word", c_uint32 * 4)]
+
+    @property
+    def value(self) -> int:
+        return sum(self.word[i] << (32 * i) for i in range(4))
+
+    @value.setter
+    def value(self, value: int) -> None:
+        for i in range(4):
+            self.word[i] = value >> (32 * i) & 0xFFFFFFFF
 
 
 class PhiloxRNG(RNG):
@@ -183,38 +188,16 @@ class PhiloxRNG(RNG):
     """
 
     class PhiloxParams(Structure):
-        _fields_ = [("key", uvec2), ("baseCount", uvec4)]
+        _fields_ = [("key", Key), ("offset", Counter)]
 
-    def __init__(
-        self, *, key: Optional[int] = None, offset: int = 0, nConfigs: int = 2
-    ) -> None:
+    def __init__(self, *, key: Optional[int] = None, offset: int = 0) -> None:
         super().__init__(
             loadShader("random.philox.glsl"),
             {"PhiloxParams": self.PhiloxParams},
-            nConfigs=nConfigs,
             alignment=4,
         )
 
         # save params
         if key is None:
             key = urandom(8)
-        self.key = key
-        self.offset = offset
-
-    @property
-    def key(self) -> int:
-        """Base key used for Philox. Consecutive streams differ in their keys by one."""
-        return unpackUint64(self._getParam("PhiloxParams", "baseCount"))
-
-    @key.setter
-    def key(self, value: int) -> None:
-        self._setParam("PhiloxParams", "key", packUint64(value))
-
-    @property
-    def offset(self) -> int:
-        """Offset into each stream. Can be used to advance the generator."""
-        return uvec4ToInt(self._getParam("PhiloxParams", "baseCount"))
-
-    @offset.setter
-    def offset(self, value: int) -> None:
-        self._setParam("PhiloxParams", "baseCount", intToUvec4(value))
+        self.setParams(key=key, offset=offset)

@@ -1,20 +1,18 @@
 from __future__ import annotations
 import hephaistos as hp
 
-from ctypes import Structure, c_float, c_uint32, addressof
-from hephaistos.glsl import vec3, uvec2
-from numpy.ctypeslib import as_array
+from hephaistos.glsl import vec2, vec3, buffer_reference
+from hephaistos.pipeline import PipelineStage
+from hephaistos.queue import QueueBuffer, QueueTensor, QueueView
 
-from theia.queue import QueueBuffer, QueueTensor, QueueView
 from theia.random import RNG
-from theia.scheduler import CachedPipelineStage
-from .util import compileShader, loadShader, unpackUint64, packUint64
+from theia.util import compileShader, loadShader
 
-from numpy.typing import NDArray
-from typing import Callable, Dict, List, Optional, Union, Tuple, Type
+from ctypes import Structure, c_float, c_uint32
+from typing import Callable, Dict, List, Optional, Union, Set, Tuple, Type
 
 
-class LightSource(CachedPipelineStage):
+class LightSource(PipelineStage):
     """
     Source generating light rays used for tracing.
 
@@ -31,8 +29,6 @@ class LightSource(CachedPipelineStage):
     count: int | None, default=None
         number of samples to draw in the next run
         If None, equals to capacity
-    nConfigs: int, default=2
-        Number of pipeline configurations
     nPhotons: int, default=4
         number of photons(wavelengths) a single ray carries
     medium: int, default=0
@@ -49,11 +45,13 @@ class LightSource(CachedPipelineStage):
         number of threads in a single local work group (block size in CUDA)
     """
 
+    name = "Light Source"
+
     class SampleParameters(Structure):
         """Description of the shaders params uniform"""
 
         _fields_ = [
-            ("medium", uvec2),
+            ("medium", buffer_reference),
             ("count", c_uint32),
         ]
 
@@ -64,18 +62,18 @@ class LightSource(CachedPipelineStage):
         *,
         count: Optional[int] = None,
         rayQueue: Optional[hp.Tensor] = None,
-        nConfigs: int = 2,
         nPhotons: int = 4,
         medium: int = 0,
         rng: Optional[RNG] = None,
         rngSamples: int = 0,
         params: Dict[str, Type[Structure]] = {},
+        extras: Set[str] = set(),
         headers: Dict[str, str] = {},
         blockSize: int = 128,
     ) -> None:
         # collect all params structures
         params = {**params, "SampleParams": self.SampleParameters}
-        super().__init__(params, nConfigs)
+        super().__init__(params, extras)
         # calculate number of work groups per batch
         self._groupSize = -(capacity // -blockSize)  # ceil division
 
@@ -85,6 +83,7 @@ class LightSource(CachedPipelineStage):
             preamble = ""
             if rng is None:
                 preamble += "#define NO_RNG 1\n"
+            preamble += f"#define QUEUE_SIZE {capacity}\n"
             preamble += f"#define LOCAL_SIZE {blockSize}\n"
             preamble += f"#define N_PHOTONS {nPhotons}\n\n"
             # create program
@@ -104,8 +103,9 @@ class LightSource(CachedPipelineStage):
         self._nPhotons = nPhotons
         self._rng = rng
         self._rngSamples = rngSamples
-        self.count = count if count is not None else capacity
-        self.medium = medium
+        if count is None:
+            count = capacity
+        self.setParams(count=count, medium=medium)
         if rayQueue is not None:
             self.rayQueue = rayQueue
         else:
@@ -115,15 +115,6 @@ class LightSource(CachedPipelineStage):
     def capacity(self) -> int:
         """maximum number of light samples processed per run"""
         return self._capacity
-
-    @property
-    def count(self) -> int:
-        """number of samples to draw in the next run"""
-        return self._getParam("SampleParams", "count")
-
-    @count.setter
-    def count(self, value: int) -> None:
-        self._setParam("SampleParams", "count", value)
 
     @property
     def code(self) -> bytes:
@@ -136,15 +127,6 @@ class LightSource(CachedPipelineStage):
         return self._nPhotons
 
     @property
-    def medium(self) -> int:
-        """address of the medium the rays starts in"""
-        return unpackUint64(self._getParam("SampleParams", "medium"))
-
-    @medium.setter
-    def medium(self, value) -> int:
-        self._setParam("SampleParams", "medium", packUint64(value))
-
-    @property
     def rayQueue(self) -> hp.Tensor:
         """
         Tensor containing the ray queue the light source populates.
@@ -155,7 +137,7 @@ class LightSource(CachedPipelineStage):
     @rayQueue.setter
     def rayQueue(self, value: hp.Tensor) -> None:
         self._rayQueue = value
-        self._program.bindParams(RayQueue=value)
+        self._program.bindParams(RayQueueBuffer=value)
 
     @property
     def rng(self) -> Optional[RNG]:
@@ -174,7 +156,7 @@ class LightSource(CachedPipelineStage):
     # pipeline stage api
 
     def run(self, i: int) -> List[hp.Command]:
-        self._bindConfigs(self._program, i)
+        self._bindParams(self._program, i)
         if self.rng is not None:
             self.rng.bindParams(self._program, i)
         return [self._program.dispatch(self._groupSize)]
@@ -191,8 +173,6 @@ class HostLightSource(LightSource):
     rayQueue: hp.Tensor|None, default=None
         tensor containing the ray queue this light source populates.
         must be set before sampling.
-    nBuffers: int, default=2
-        number of local buffers
     nPhotons: int, default=4
         number of photons(wavelengths) a single ray carries
     medium: int, default=0
@@ -212,7 +192,6 @@ class HostLightSource(LightSource):
         capacity: int,
         *,
         rayQueue: Optional[hp.Tensor] = None,
-        nBuffers: int = 2,
         nPhotons: int = 4,
         medium: int = 0,
         updateFn: Optional[Callable[[HostLightSource, int], None]] = None,
@@ -227,7 +206,6 @@ class HostLightSource(LightSource):
             capacity,
             code,
             rayQueue=rayQueue,
-            nConfigs=nBuffers,
             nPhotons=nPhotons,
             medium=medium,
             blockSize=blockSize,
@@ -237,28 +215,23 @@ class HostLightSource(LightSource):
         self._updateFn = updateFn
 
         # define GLSL types (depends on nPhotons)
-        class SourcePhoton(Structure):
-            _fields_ = [
-                ("wavelength", c_float),
-                ("startTime", c_float),
-                ("lin_contrib", c_float),
-                ("log_contrib", c_float),
-            ]
-
         class SourceRay(Structure):
             _fields_ = [
-                ("position", vec3),
-                ("direction", vec3),
-                ("photons", SourcePhoton * nPhotons),
+                ("position", c_float * 3),
+                ("direction", c_float * 3),
+                ("wavelength", c_float * nPhotons),
+                ("startTime", c_float * nPhotons),
+                ("lin_contrib", c_float * nPhotons),
+                ("log_contrib", c_float * nPhotons),
             ]
 
         # allocate memory
         self._buffers = [
-            QueueBuffer(SourceRay, capacity, skipHeader=True) for _ in range(nBuffers)
+            QueueBuffer(SourceRay, capacity, skipHeader=True) for _ in range(2)
         ]
         self._tensor = QueueTensor(SourceRay, capacity, skipHeader=True)
         # bind memory
-        self.bindParams(Rays=self._tensor)
+        self.bindParams(SourceRayQueue=self._tensor)
 
     @property
     def address(self, i: int) -> int:
@@ -313,7 +286,7 @@ class SphericalLightSource(LightSource):
         must be set before sampling.
     position: (float,float,float), default=(0.0, 0.0, 0.0)
         position of the light source
-    wavelengthRange: (float, float), default=(300.0, 700.0)
+    lambdaRange: (float, float), default=(300.0, 700.0)
         min and max wavelength the source emits
     timeRange: (float, float), default=(0.0, 100.0)
         start and stop time of the light source
@@ -324,7 +297,7 @@ class SphericalLightSource(LightSource):
     medium: int, default=0
         address of the medium the rays starts in. Zero represents vacuum
     blockSize: int, default=128
-        number of threads in a single local work grouop (block size in CUDA)
+        number of threads in a single local work group (block size in CUDA)
     code: bytes | None, default=None
         Compiled version of the light source. If None, compiles from source.
         Note, that the compiled code may differ on different machines
@@ -335,11 +308,9 @@ class SphericalLightSource(LightSource):
 
         _fields_ = [
             ("position", vec3),
-            ("lambda_min", c_float),
-            ("lambdaRange", c_float),
-            ("t0", c_float),
-            ("timeRange", c_float),
-            ("contribution", c_float),
+            ("lambdaRange", vec2),
+            ("timeRange", vec2),
+            ("_contribution", c_float),
         ]
 
     def __init__(
@@ -349,10 +320,9 @@ class SphericalLightSource(LightSource):
         rng: RNG,
         rayQueue: Optional[hp.Tensor] = None,
         position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
-        wavelengthRange: Tuple[float, float] = (300.0, 700.0),
+        lambdaRange: Tuple[float, float] = (300.0, 700.0),
         timeRange: Tuple[float, float] = (0.0, 100.0),
         intensity: float = 1.0,
-        nConfigs: int = 2,
         nPhotons: int = 4,
         medium: int = 0,
         blockSize: int = 128,
@@ -367,75 +337,41 @@ class SphericalLightSource(LightSource):
             capacity,
             code,
             rayQueue=rayQueue,
-            nConfigs=nConfigs,
             nPhotons=nPhotons,
             rng=rng,
             rngSamples=rngSamples,
             params={"LightParams": self.LightParams},
+            extras={"intensity"},
             medium=medium,
             blockSize=blockSize,
         )
 
         # save params
-        self.position = position
-        self.intensity = intensity  # ! must be first !
-        self.wavelengthRange = wavelengthRange
-        self.timeRange = timeRange
-
-    # helper for updating contribution
-    def _updateContribution(self) -> None:
-        # calculate const contribution
-        c = self.intensity
-        lr = self._getParam("LightParams", "lambdaRange")
-        tr = self._getParam("LightParams", "timeRange")
-        if lr != 0.0:
-            c /= lr
-        if tr != 0.0:
-            c /= tr
-        # set contribution
-        self._setParam("LightParams", "contribution", c)
-
-    @property
-    def position(self) -> Tuple[float, float, float]:
-        """position of the light source"""
-        pos = self._getParam("LightParams", "position")
-        return (pos.x, pos.y, pos.z)
-
-    @position.setter
-    def position(self, value: Tuple[float, float, float]) -> None:
-        pos = self._getParam("LightParams", "position")
-        pos.x, pos.y, pos.z = value
-
-    @property
-    def wavelengthRange(self) -> Tuple[float, float]:
-        """min and max wavelength the source emits"""
-        lambdaMin = self._getParam("LightParams", "lambda_min")
-        lambdaRange = self._getParam("LightParams", "lambdaRange")
-        return (lambdaMin, lambdaMin + lambdaRange)
-
-    @wavelengthRange.setter
-    def wavelengthRange(self, value: Tuple[float, float]) -> None:
-        self._setParam("LightParams", "lambda_min", value[0])
-        self._setParam("LightParams", "lambdaRange", value[1] - value[0])
-        self._updateContribution()
-
-    @property
-    def timeRange(self) -> Tuple[float, float]:
-        """start and stop time of the light source"""
-        return (self._params.t0, self._params.t0 + self._params.timeDuration)
-
-    @timeRange.setter
-    def timeRange(self, value: Tuple[float, float]) -> None:
-        self._setParam("LightParams", "t0", value[0])
-        self._setParam("LightParams", "timeRange", value[1] - value[0])
-        self._updateContribution()
+        self.setParams(
+            position=position,
+            lambdaRange=lambdaRange,
+            timeRange=timeRange,
+            intensity=intensity,
+        )
 
     @property
     def intensity(self) -> float:
         """intensity of the light source"""
-        return self._getParam("LightParams", "intensity")
+        return self._intensity
 
     @intensity.setter
     def intensity(self, value: float) -> None:
-        self._setParam("LightParams", "intensity", value)
-        self._updateContribution()
+        self._intensity = value
+
+    def _finishParams(self, i: int) -> None:
+        # calculate const contribution
+        c = self.intensity
+        lr = self.getParam("lambdaRange")
+        lr = lr[1] - lr[0]
+        if lr != 0.0:
+            c /= lr
+        tr = self.getParam("timeRange")
+        tr = tr[1] - tr[0]
+        if tr != 0.0:
+            c /= tr
+        self.setParam("_contribution", c)

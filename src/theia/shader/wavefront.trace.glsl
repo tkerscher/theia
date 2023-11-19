@@ -14,17 +14,17 @@
 
 layout(local_size_x = LOCAL_SIZE) in;
 
-layout(scalar) readonly buffer RayQueue {
+layout(scalar) readonly buffer RayQueueBuffer {
     uint rayCount;
-    Ray rayItems[];
+    RayQueue rayQueue;
 };
-layout(scalar) writeonly buffer IntersectionQueue {
+layout(scalar) writeonly buffer IntersectionQueueBuffer {
     uint intersectionCount;
-    IntersectionItem intersectionItems[];
+    IntersectionQueue intersectionQueue;
 };
-layout(scalar) writeonly buffer VolumeScatterQueue {
+layout(scalar) writeonly buffer VolumeScatterQueueBuffer {
     uint volumeCount;
-    VolumeScatterItem volumeItems[];
+    VolumeScatterQueue volumeQueue;
 };
 
 uniform accelerationStructureEXT tlas;
@@ -38,8 +38,8 @@ void main() {
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= rayCount)
         return;
-    //create editable copy
-    Ray ray = rayItems[idx];
+    //load ray
+    LOAD_RAY(ray, rayQueue, idx)
 
     //just to be safe
     vec3 dir = normalize(ray.direction);
@@ -87,16 +87,40 @@ void main() {
         //order the active invocations so each can write at their own spot
         uint id = subgroupExclusiveAdd(1);
         //create and save item
-        intersectionItems[oldCount + id] = IntersectionItem(
-            ray,
+        idx = oldCount + id;
+        SAVE_RAY(ray, intersectionQueue.rays, idx)
 
-            instanceId,
-            customId,
-            triangleId,
-            baryc,
-            obj2World,
-            world2Obj
-        );
+        intersectionQueue.geometryIdx[idx] = instanceId;
+        intersectionQueue.customIdx[idx] = customId;
+        intersectionQueue.triangleIdx[idx] = triangleId;
+        intersectionQueue.baryU[idx] = baryc.x;
+        intersectionQueue.baryV[idx] = baryc.y;
+        //mat4x3 obj2World matrix ij -> i-th column, j-th row
+        intersectionQueue.obj2World00[idx] = obj2World[0][0];
+        intersectionQueue.obj2World01[idx] = obj2World[0][1];
+        intersectionQueue.obj2World02[idx] = obj2World[0][2];
+        intersectionQueue.obj2World10[idx] = obj2World[1][0];
+        intersectionQueue.obj2World11[idx] = obj2World[1][1];
+        intersectionQueue.obj2World12[idx] = obj2World[1][2];
+        intersectionQueue.obj2World20[idx] = obj2World[2][0];
+        intersectionQueue.obj2World21[idx] = obj2World[2][1];
+        intersectionQueue.obj2World22[idx] = obj2World[2][2];
+        intersectionQueue.obj2World30[idx] = obj2World[3][0];
+        intersectionQueue.obj2World31[idx] = obj2World[3][1];
+        intersectionQueue.obj2World32[idx] = obj2World[3][2];
+        //mat4x3 world2Obj matrix ij -> i-th column, j-th row
+        intersectionQueue.world2Obj00[idx] = world2Obj[0][0];
+        intersectionQueue.world2Obj01[idx] = world2Obj[0][1];
+        intersectionQueue.world2Obj02[idx] = world2Obj[0][2];
+        intersectionQueue.world2Obj10[idx] = world2Obj[1][0];
+        intersectionQueue.world2Obj11[idx] = world2Obj[1][1];
+        intersectionQueue.world2Obj12[idx] = world2Obj[1][2];
+        intersectionQueue.world2Obj20[idx] = world2Obj[2][0];
+        intersectionQueue.world2Obj21[idx] = world2Obj[2][1];
+        intersectionQueue.world2Obj22[idx] = world2Obj[2][2];
+        intersectionQueue.world2Obj30[idx] = world2Obj[3][0];
+        intersectionQueue.world2Obj31[idx] = world2Obj[3][1];
+        intersectionQueue.world2Obj32[idx] = world2Obj[3][2];
     }
     else {
         //we hit nothing -> create a volume scatter item
@@ -117,6 +141,8 @@ void main() {
         //order the active invocations so each can write at their own spot
         uint id = subgroupExclusiveAdd(1);
         //create and save item
-        volumeItems[oldCount + id] = VolumeScatterItem(ray, dist);
+        idx = oldCount + id;
+        SAVE_RAY(ray, volumeQueue.rays, idx)
+        volumeQueue.dist[idx] = dist;
     }
 }

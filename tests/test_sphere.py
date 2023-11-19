@@ -2,9 +2,9 @@ import numpy as np
 import hephaistos as hp
 from ctypes import Structure, c_float
 from hephaistos.glsl import vec3, stackVector
+from hephaistos.pipeline import runPipelineStage
 from numpy.lib.recfunctions import structured_to_unstructured
 from theia.random import PhiloxRNG, RNGBufferSink
-from theia.scheduler import runPipelineStage
 
 
 def test_sampleSphere(rng, shaderUtil):

@@ -54,10 +54,10 @@ struct SourceRay{
 #include "light.glsl"
 
 //ray queue
-layout(scalar) writeonly buffer RayQueue {
-    uint count;
-    Ray rays[];
-} queue;
+layout(scalar) writeonly buffer RayQueueBuffer {
+    uint rayCount;
+    RayQueue rayQueue;
+};
 
 //sample params
 layout(scalar) uniform SampleParams {
@@ -90,17 +90,18 @@ void main() {
     //create ray and place it on the queue
     //we assume that we fill an empty queue
     // -> no need for atomic counting
-    queue.rays[idx] = Ray(
+    Ray ray = Ray(
         sourceRay.position,
         normalize(sourceRay.direction), //just to be safe
         idx, rng_samples,    // stream, count
         sampleParams.medium,
         photons
     );
+    SAVE_RAY(ray, rayQueue, idx)
 
     //save the item count exactly once
     if (idx == 0) {
-        queue.count = sampleParams.count;
+        rayCount = sampleParams.count;
     }
 }
 
