@@ -420,7 +420,7 @@ class Scene:
         self.medium = medium
         # save bbox
         if bbox is None:
-            bbox = RectBBox((1000,) * 3, (1000,) * 3)
+            bbox = RectBBox((-1000,) * 3, (1000,) * 3)
         self.bbox = bbox
 
     @property
