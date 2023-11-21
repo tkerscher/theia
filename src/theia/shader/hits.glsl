@@ -6,7 +6,7 @@
 #error "missing macro setting: N_PHOTONS"
 #endif
 #ifndef HIT_QUEUE_SIZE
-#error "missing macro settings: QUEUE_SIZE"
+#error "missing macro settings: HIT_QUEUE_SIZE"
 #endif
 
 struct PhotonHit {
