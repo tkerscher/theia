@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hephaistos as hp
-from hephaistos.queue import QueueBuffer, QueueTensor, QueueView
+from hephaistos.queue import QueueBuffer, QueueTensor, QueueView, clearQueue
 from hephaistos.pipeline import PipelineStage
 
 from theia.items import createHitQueueItem
@@ -129,6 +129,8 @@ class HistogramEstimator(PipelineStage):
     ----------
     maxSamples: int
         Maximum number of samples the estimator can process in a single run.
+    queue: hp.Tensor
+        Tensor containing the hit queue to be processed
     code: str | Dict[str, bytes] | None
         Either the source code for the response function or the dict of
         compiled shaders. If None, the default Lambertian response function is
@@ -144,6 +146,9 @@ class HistogramEstimator(PipelineStage):
         size of a single bin (unit of time)
     normalization: float, default=1.0
         common factor each bin gets multiplied with
+    clearQueue: bool, default=True
+        True, if the queue should be reset/cleared after the estimator processed
+        it.
     blockSize: int, default=128
         number of threads in a single local work group (block size in CUDA)
     """
@@ -171,6 +176,7 @@ class HistogramEstimator(PipelineStage):
         t0: float = 0.0,
         binSize: float = 1.0,
         normalization: float = 1.0,
+        clearQueue: bool = True,
         blockSize: int = 128,
     ) -> None:
         super().__init__({"Parameters": self.Params}, {"norm"})
@@ -214,6 +220,7 @@ class HistogramEstimator(PipelineStage):
         self._nBins = nBins
         self._nPhotons = nPhotons
         self._queue = queue
+        self._clearQueue = clearQueue
         self.setParams(binSize=binSize, detectorId=detectorId, t0=t0)
 
     @property
@@ -229,6 +236,18 @@ class HistogramEstimator(PipelineStage):
     @norm.setter
     def norm(self, value: float) -> None:
         self._reducer.setParam("norm", value)
+    
+    @property
+    def clearQueue(self) -> bool:
+        """
+        True, if the queue should be reset/cleared after the estimator processed
+        it.
+        """
+        return self._clearQueue
+    
+    @clearQueue.setter
+    def clearQueue(self, value: bool) -> None:
+        self._clearQueue = value
 
     @property
     def queue(self) -> hp.Tensor:
@@ -270,6 +289,7 @@ class HistogramEstimator(PipelineStage):
         return [
             hp.clearTensor(self._reducedHist),
             self._program.dispatch(self._nHist),
+            *([clearQueue(self.queue)] if self.clearQueue else []),
             hp.flushMemory(),
             *self._reducer.run(i),
         ]
@@ -288,16 +308,27 @@ class HostEstimator(PipelineStage):
         Number of photons in single ray hit
     queue: hp.Tensor
         Tensor containing the response queue from which to copy the samples.
+    clearQueue: bool, default=True
+        True, if the queue should be reset/cleared after the estimator processed
+        it.
     """
 
     name = "Host Estimator"
 
-    def __init__(self, capacity: int, nPhotons: int, queue: hp.Tensor) -> None:
+    def __init__(
+            self,
+            capacity: int,
+            nPhotons: int,
+            queue: hp.Tensor,
+            *,
+            clearQueue: bool = True
+        ) -> None:
         super().__init__({})
         # save params
         self._capacity = capacity
         self._nPhotons = nPhotons
         self._queue = queue
+        self._clearQueue = clearQueue
 
         # create queue
         self._item = createHitQueueItem(nPhotons)
@@ -330,6 +361,18 @@ class HostEstimator(PipelineStage):
         Must be set before running
         """
         return self._queue
+        
+    @property
+    def clearQueue(self) -> bool:
+        """
+        True, if the queue should be reset/cleared after the estimator processed
+        it.
+        """
+        return self._clearQueue
+    
+    @clearQueue.setter
+    def clearQueue(self, value: bool) -> None:
+        self._clearQueue = value
 
     def view(self, i: int) -> QueueView:
         """Returns the view into the i-th queue buffer"""
@@ -338,7 +381,10 @@ class HostEstimator(PipelineStage):
     # pipeline stage api
 
     def run(self, i: int) -> List[hp.Command]:
-        return [hp.retrieveTensor(self.queue, self._buffers[i])]
+        return [
+            hp.retrieveTensor(self.queue, self._buffers[i]),
+            *([clearQueue(self.queue)] if self.clearQueue else []),
+        ]
 
 
 class CachedSampleSource(PipelineStage):
