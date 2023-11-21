@@ -2,7 +2,7 @@ import hephaistos as hp
 
 from hephaistos.glsl import vec3
 from hephaistos.pipeline import PipelineStage
-from hephaistos.queue import QueueTensor
+from hephaistos.queue import QueueTensor, clearQueue
 
 import theia.items
 from theia.scene import Scene
@@ -53,8 +53,8 @@ class WavefrontPathTracer(PipelineStage):
             ("targetIdx", c_uint32),
             ("scatterCoefficient", c_float),
             ("maxTime", c_float),
-            ("lowerBBoxCorner", vec3),
-            ("upperBBoxCorner", vec3),
+            ("_lowerBBoxCorner", vec3),
+            ("_upperBBoxCorner", vec3),
         ]
 
     def __init__(
@@ -77,10 +77,14 @@ class WavefrontPathTracer(PipelineStage):
         self._capacity = capacity
         self._nScattering = nScattering
         self._nPhotons = nPhotons
-        self.maxTime = maxTime
-        self.scatterCoefficient = scatterCoefficient
-        self.targetIdx = targetIdx
         self._scene = scene  # skip update code from setter
+        self.setParams(
+            targetIdx=targetIdx,
+            scatterCoefficient=scatterCoefficient,
+            maxTime=maxTime,
+            _lowerBBoxCorner=scene.bbox.glsl.lowerCorner,
+            _upperBBoxCorner=scene.bbox.glsl.upperCorner,
+        )
 
         # calculate dispatch size
         self._groupSize = -(capacity // -blockSize)
@@ -88,6 +92,7 @@ class WavefrontPathTracer(PipelineStage):
         # create common preamble
         preamble = ""
         preamble += f"#define QUEUE_SIZE {capacity}\n"
+        preamble += f"#define HIT_QUEUE_SIZE {capacity * nScattering}\n"
         preamble += f"#define N_PHOTONS {nPhotons}\n"
         preamble += f"#define LOCAL_SIZE {blockSize}\n\n"
         headers = {"rng.glsl": rng.sourceCode}
@@ -128,12 +133,12 @@ class WavefrontPathTracer(PipelineStage):
         params = {
             "Detectors": scene.detectors,
             "Geometries": scene.geometries,
-            "IntersectionQueue": self._intersectionQueue,
-            "RayQueue": self._rayQueue,
-            "ResponseQueue": self._hitsQueue,
-            "ShadowQueue": self._shadowQueue,
+            "HitQueueBuffer": self._hitsQueue,
+            "IntersectionQueueBuffer": self._intersectionQueue,
+            "RayQueueBuffer": self._rayQueue,
+            "ShadowQueueBuffer": self._shadowQueue,
             "tlas": scene.tlas,
-            "VolumeScatterQueue": self._volumeQueue,
+            "VolumeScatterQueueBuffer": self._volumeQueue,
         }
         self._trace.bindParams(**params)
         self._intersect.bindParams(**params)
@@ -175,15 +180,6 @@ class WavefrontPathTracer(PipelineStage):
         return self._rng
 
     @property
-    def maxTime(self) -> float:
-        """upper limit on the simulated elapsed time of photons"""
-        return self.getParam("Params", "maxTime")
-
-    @maxTime.setter
-    def maxTime(self, value: float) -> None:
-        self.setParam("Params", "maxTime", value)
-
-    @property
     def scene(self) -> Scene:
         """
         Scene the light rays are traced against.
@@ -195,8 +191,10 @@ class WavefrontPathTracer(PipelineStage):
     def scene(self, value: Scene) -> None:
         self._scene = value
         # update params
-        self.setParam("Params", "lowerBBoxCorner", value.bbox.glsl.lowerCorner)
-        self.setParam("Params", "upperBBoxCorner", value.bbox.glsl.upperCorner)
+        self.setParams(
+            _lowerBBoxCorner=value.bbox.glsl.lowerCorner,
+            _upperBBoxCorner=value.bbox.glsl.upperCorner,
+        )
         params = {
             "Detectors": value.detectors,
             "Geometries": value.geometries,
@@ -206,24 +204,6 @@ class WavefrontPathTracer(PipelineStage):
         self._intersect.bindParams(**params)
         self._shadow.bindParams(**params)
         self._volume.bindParams(**params)
-
-    @property
-    def scatteringCoefficient(self) -> float:
-        """Scattering coefficient used to sample ray lengths between scatter events"""
-        return self.getParam("Params", "scatteringCoefficient")
-
-    @scatteringCoefficient.setter
-    def scatteringCoefficient(self, value: float) -> None:
-        self.setParam("Params", "scatteringCoefficient", value)
-
-    @property
-    def targetIdx(self) -> int:
-        """idx of target detector"""
-        return self.getParam("Params", "targetIdx")
-
-    @targetIdx.setter
-    def targetIdx(self, value: int) -> None:
-        self.setParam("Params", "targetIdx", value)
 
     @property
     def rayQueue(self) -> hp.Tensor:
@@ -247,22 +227,25 @@ class WavefrontPathTracer(PipelineStage):
         return [
             # clear queues (init state of ray queue is externally handled)
             # it is enough to only reset the item count (first 4 bytes)
-            hp.clearTensor(self._intersectionQueue, size=4),
-            hp.clearTensor(self._shadowQueue, size=4),
-            hp.clearTensor(self._volumeQueue, size=4),
+            clearQueue(self._intersectionQueue),
+            clearQueue(self._shadowQueue),
+            clearQueue(self._volumeQueue),
             # simulate scattering
             *[
                 # trace rays
                 self._trace.dispatch(self._groupSize),
-                hp.clearTensor(self._rayQueue, size=4),
+                clearQueue(self._rayQueue),
+                hp.flushMemory(),
                 # volume and intersection can work in parallel
                 self._volume.dispatch(self._groupSize),
                 self._intersect.dispatch(self._groupSize),
-                hp.clearTensor(self._volumeQueue, size=4),
-                hp.clearTensor(self._intersectionQueue, size=4),
+                clearQueue(self._volumeQueue),
+                clearQueue(self._intersectionQueue),
+                hp.flushMemory(),
                 # lastly, the shadow queue
                 self._shadow.dispatch(self._groupSize),
-                hp.clearTensor(self._shadowQueue, size=4),
+                clearQueue(self._shadowQueue),
+                hp.flushMemory(),
             ]
             * self.nScattering,
         ]
