@@ -2,8 +2,8 @@
 #define _SCATTER_VOLUME_INCLUDE
 
 #include "cosy.glsl"
-#include "ray.glsl"
 #include "math.glsl"
+#include "material.glsl"
 
 vec3 scatterDir(vec3 prevDir, float cos_theta, float phi) {
     //sanitize just to be safe
@@ -26,11 +26,10 @@ vec3 scatterDir(vec3 prevDir, float cos_theta, float phi) {
     return normalize(trafo * localScattered);
 }
 
-vec3 scatter(inout Ray ray, vec2 rng, out float p) {
+vec3 scatter(const Medium medium, vec3 inDir, vec2 rng, out float p) {
     //importance sample scattering phase function
     float phi = rng.x * TWO_PI;
     float cos_theta;
-    Medium medium = Medium(ray.medium);
     if (uint64_t(medium.phase_sampling) != 0) {
         cos_theta = lookUp(medium.phase_sampling, rng.y);
         cos_theta = clamp(cos_theta, -1.0, 1.0);
@@ -44,26 +43,18 @@ vec3 scatter(inout Ray ray, vec2 rng, out float p) {
     }
 
     //scatter
-    ray.direction = scatterDir(ray.direction, cos_theta, phi);
-
-    //since we importance sampled the phase function they cancel,
-    //leaving us with only the scattering coefficient,
-    //which is handled outside the function
-
-    //return direction
-    return ray.direction;
+    return scatterDir(inDir, cos_theta, phi);
 }
 
-float scatterProb(const Ray ray, vec3 scatterDir) {
+float scatterProb(const Medium medium, vec3 inDir, vec3 scatterDir) {
     //check if we can sample the scattering
-    Medium medium = Medium(ray.medium);
     if (uint64_t(medium.log_phase) == 0) {
         //uniform scattering prob
         return INV_4PI;
     }
 
     //look up prob using scattered cos_theta
-    float cos_theta = dot(ray.direction, scatterDir); //[-1,1]
+    float cos_theta = dot(inDir, scatterDir); //[-1,1]
     float log_p = lookUp(medium.log_phase, 0.5 * (cos_theta + 1.0));
     return exp(log_p);
 }

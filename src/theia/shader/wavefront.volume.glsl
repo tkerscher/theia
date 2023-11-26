@@ -101,13 +101,15 @@ void main() {
     Ray targetRay = ray;
 
     //scatter
+    Medium = Medium(ray.medium);
     rng = random2D(ray.rngStream, ray.rngCount);
     ray.rngCount += 2;
     float pSS;
-    vec3 scatterDir = scatter(ray, rng, pSS);
+    vec3 scatterDir = scatter(medium, ray.direction, rng, pSS);
+    ray.direction = scatterDir;
 
     //calculate cross probs pSD, pDS
-    float pSD = scatterProb(targetRay, targetDir);
+    float pSD = scatterProb(medium, targetRay.direction, targetDir);
     float pDS = sampleSphereProb(detector, ray.position, scatterDir);
     //Note that pSD is also the phase function
 
