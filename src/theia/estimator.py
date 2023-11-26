@@ -236,7 +236,7 @@ class HistogramEstimator(PipelineStage):
     @norm.setter
     def norm(self, value: float) -> None:
         self._reducer.setParam("norm", value)
-    
+
     @property
     def clearQueue(self) -> bool:
         """
@@ -244,7 +244,7 @@ class HistogramEstimator(PipelineStage):
         it.
         """
         return self._clearQueue
-    
+
     @clearQueue.setter
     def clearQueue(self, value: bool) -> None:
         self._clearQueue = value
@@ -316,13 +316,8 @@ class HostEstimator(PipelineStage):
     name = "Host Estimator"
 
     def __init__(
-            self,
-            capacity: int,
-            nPhotons: int,
-            queue: hp.Tensor,
-            *,
-            clearQueue: bool = True
-        ) -> None:
+        self, capacity: int, nPhotons: int, queue: hp.Tensor, *, clearQueue: bool = True
+    ) -> None:
         super().__init__({})
         # save params
         self._capacity = capacity
@@ -361,7 +356,7 @@ class HostEstimator(PipelineStage):
         Must be set before running
         """
         return self._queue
-        
+
     @property
     def clearQueue(self) -> bool:
         """
@@ -369,7 +364,7 @@ class HostEstimator(PipelineStage):
         it.
         """
         return self._clearQueue
-    
+
     @clearQueue.setter
     def clearQueue(self, value: bool) -> None:
         self._clearQueue = value
