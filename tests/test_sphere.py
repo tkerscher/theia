@@ -187,3 +187,62 @@ def test_sampleProbNorm(rng, shaderUtil):
     # test if probability is normalized
     norm = 2.0 * np.pi * outputBuffer.numpy().sum() / N
     assert np.abs(norm - 1.0) < 1e-2  # large error since we dont use many samples
+
+
+def test_intersectSphere(rng, shaderUtil):
+    N = 32 * 256
+    pos, r = (-0.1, 0.2, 3.0), 2.0
+
+    # define types
+    class Query(Structure):
+        _fields_ = [("pos", vec3), ("dir", vec3)]
+
+    class Push(Structure):
+        _fields_ = [("pos", vec3), ("r", c_float)]
+
+    # allocate memory
+    inputBuffer = hp.ArrayBuffer(Query, N)
+    inputTensor = hp.ArrayTensor(Query, N)
+    resultBuffer = hp.FloatBuffer(N)
+    resultTensor = hp.FloatTensor(N)
+    push = Push(pos=vec3(*pos), r=r)
+
+    # create program
+    program = shaderUtil.createTestProgram("sphere.intersect.test.glsl")
+    program.bindParams(Queries=inputTensor, Result=resultTensor)
+
+    # fill input
+    x = 2.0 * rng.random(N) - 1.0
+    y = 2.0 * rng.random(N) - 1.0
+    z = 2.0 * rng.random(N) - 1.0
+    cos_theta = 1.0 - 0.5 * rng.random(N)  # limit to upper sphere
+    sin_theta = np.sqrt(1.0 - cos_theta**2)
+    phi = 2.0 * np.pi * rng.random(N)
+    queries = inputBuffer.numpy()
+    queries["pos"] = stackVector([x, y, z], vec3)
+    queries["dir"] = stackVector(
+        [sin_theta * np.cos(phi), sin_theta * np.sin(phi), cos_theta], vec3
+    )
+
+    # run test
+    (
+        hp.beginSequence()
+        .And(hp.updateTensor(inputBuffer, inputTensor))
+        .Then(program.dispatchPush(bytes(push), N // 32))
+        .Then(hp.retrieveTensor(resultTensor, resultBuffer))
+        .Submit()
+        .wait()
+    )
+
+    # calc expected result
+    center = np.array(pos)
+    pos = structured_to_unstructured(queries["pos"])
+    dir = structured_to_unstructured(queries["dir"])
+    f = pos - center
+    discrim = np.multiply(dir, f).sum(-1) ** 2 - np.square(f).sum(-1) + r**2
+    hit = discrim >= 0.0
+    # check results
+    t = resultBuffer.numpy()
+    hit_pos = (pos + dir * t[:, None])[hit]
+    assert np.all(np.isinf(t[~hit]))
+    assert np.allclose(np.square(hit_pos - center).sum(-1), r**2)
