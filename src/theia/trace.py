@@ -5,12 +5,260 @@ from hephaistos.pipeline import PipelineStage
 from hephaistos.queue import QueueTensor, clearQueue
 
 import theia.items
-from theia.scene import Scene
+from theia.scene import RectBBox, Scene, SphereBBox
 from theia.random import RNG
 from theia.util import compileShader
 
-from ctypes import Structure, c_float, c_uint32
-from typing import Dict, List
+from ctypes import Structure, c_float, c_int32, c_uint32
+from typing import Dict, List, Optional
+
+
+class EmptySceneTracer(PipelineStage):
+    """
+    Path tracer simulating light traveling through media originating at a light
+    source and ending at a detector. It does NOT check for any intersection
+    with a scene and assumes the target detector to be spherical. Can be run on
+    hardware without ray tracing support and may be faster.
+
+    Parameters
+    ----------
+    capacity: int
+        Maximum number of samples the tracer can process in a single run.
+    rng: RNG
+        Generator for creating random numbers.
+    nScattering: int, default=6
+        Number of simulated scattering events per ray and iteration.
+    nIterations: int, default=1
+        Number of iterations in the tracer. The tracer gets the chance to merge
+        diverging execution between iterations, which might improve performance.
+    target: SphereBBox, default=((0,0,0), r=1.0)
+        Sphere the tracer should target the rays to hit.
+    nPhotons: int, default=4
+        Number of photons (i.e. wavelengths) in a single ray
+    scatterCoefficient: float, default=10.0
+        Scattering coefficient used for sampling. Can be used to tune the time
+        distribution of ray hits
+    traceBBox: RectBBox, default=(-1000,1000)^3
+        Boundary bbox marking limits beyond tracing of an individual ray is
+        stopped.
+    maxTime: float, default=1000.0
+        Max time after which traversing a ray stops
+    clearHitQueue: bool, default=True
+        Wether to clear the hit queue before each batch.
+    keepRays: bool, default=False,
+        Wether to keep the last state of simulated rays that have not hit the
+        target yet.
+    blockSize: int, default=128
+        Number of threads in a single local work group (block size in CUDA)
+    code: Optional[bytes], default=None
+        cached compiled code. Must match the configuration and might be
+        different depending on the local machine.
+        If None, the code get's compiled from source.
+    """
+
+    name = "Empty Scene Tracer"
+
+    class TraceParams(Structure):
+        """Structure matching the shader's trace params"""
+
+        _fields_ = [
+            ("targetPosition", vec3),
+            ("targetRadius", c_float),
+            ("scatterCoefficient", c_float),
+            ("lowerBBoxCorner", vec3),
+            ("upperBBoxCorner", vec3),
+            ("maxTime", c_float),
+        ]
+
+    class Push(Structure):
+        """Structure matching the shader's push constants"""
+
+        _fields_ = [("saveRays", c_int32)]
+
+    def __init__(
+        self,
+        capacity: int,
+        *,
+        nScattering: int = 6,
+        nIterations: int = 1,
+        rng: RNG,
+        target: SphereBBox = SphereBBox((0.0,) * 3, 1.0),
+        nPhotons: int = 4,
+        scatterCoefficient: float = 10.0,
+        traceBBox: RectBBox = RectBBox((-1000.0,) * 3, (1000.0,) * 3),
+        maxTime: float = 1000.0,
+        clearHitQueue: bool = True,
+        keepRays: bool = False,
+        blockSize: int = 128,
+        code: Optional[bytes] = None,
+    ) -> None:
+        super().__init__({"TraceParams": self.TraceParams})
+        # save params
+        self._rng = rng
+        self._capacity = capacity
+        self._nScattering = nScattering
+        self._nIterations = nIterations
+        self._nPhotons = nPhotons
+        self.setParams(
+            targetPosition=target.center,
+            targetRadius=target.radius,
+            scatterCoefficient=scatterCoefficient,
+            maxTime=maxTime,
+            lowerBBoxCorner=traceBBox.lowerCorner,
+            upperBBoxCorner=traceBBox.upperCorner,
+        )
+
+        # calculate sizes
+        self._groupSize = -(capacity // -blockSize)
+        self._maxSamples = capacity * nScattering * nIterations
+        # ray queue buffer flag
+        self._clearHitQueue = clearHitQueue
+        self._keepRays = keepRays
+        bufferRayQueue = keepRays or nIterations > 1
+
+        # compile code if needed
+        if code is None:
+            # create preamble
+            preamble = ""
+            preamble += f"#define BATCH_SIZE {blockSize}\n"
+            preamble += f"#define HIT_QUEUE_SIZE {self._maxSamples}\n"
+            preamble += f"#define N_PHOTONS {nPhotons}\n"
+            preamble += f"#define N_SCATTER {nScattering}\n"
+            preamble += f"#define QUEUE_SIZE {capacity}\n"
+            if bufferRayQueue:
+                preamble += f"#define OUTPUT_RAYS\n"
+            # compile source code
+            headers = {"rng.glsl": rng.sourceCode}
+            code = compileShader("tracer.volume.glsl", preamble, headers)
+        # save code
+        self._code = code
+        # create program
+        self._program = hp.Program(code)
+
+        # create queue items
+        rayItem = theia.items.createRayQueueItem(nPhotons)
+        hitItem = theia.items.createHitQueueItem(nPhotons)
+        # create queues
+        if bufferRayQueue:
+            self._rayQueue = [QueueTensor(rayItem, capacity) for _ in range(2)]
+        else:
+            self._rayQueue = [QueueTensor(rayItem, capacity)]
+        self._hitQueue = QueueTensor(hitItem, self._maxSamples)
+        self._program.bindParams(HitQueueBuffer=self._hitQueue)
+
+    @property
+    def capacity(self) -> int:
+        """number of light samples processed per run"""
+        return self._capacity
+
+    @property
+    def code(self) -> Dict[str, bytes]:
+        """
+        Dictionary containing the compiled source codes used in the pipeline.
+        Can be used to cache code allowing to skip the compilation.
+        The configuration must match.
+        """
+        return self._code
+
+    @property
+    def nIterations(self) -> int:
+        """
+        Number of iterations in the tracer. The tracer gets the chance to merge
+        diverging execution between iterations, which might improve performance.
+        """
+        return self._nIterations
+
+    @property
+    def nScattering(self) -> int:
+        """max number of scattering events per ray"""
+        return self._nScattering
+
+    @property
+    def nPhotons(self) -> int:
+        """number of photons (wavelengths) per light ray/sample"""
+        return self._nPhotons
+
+    @property
+    def maxSamples(self) -> int:
+        """Maximum number of samples produced per batch"""
+        return self.capacity * self.nScattering
+
+    @property
+    def rng(self) -> RNG:
+        """Generator used for sampling random numbers"""
+        return self._rng
+
+    @property
+    def rayQueueIn(self) -> hp.Tensor:
+        """Tensor containing the ray queue the tracing starts with"""
+        return self._rayQueue[0]
+
+    @property
+    def rayQueueOut(self) -> Optional[hp.Tensor]:
+        """
+        Tensor containing the final rays the tracer stopped tracing,
+        i.e. the initial rays minus the ones that directly hit the target.
+        None, if the tracer does not save the
+        """
+        if self._keepRays:
+            return self._rayQueue[(self._nIterations + 1) % 2]
+        else:
+            return None
+
+    @property
+    def keepRays(self) -> bool:
+        """
+        True, if the tracer saves the final rays the tracer stopped tracing,
+        i.e. the initial rays minus the ones that directly hit the target.
+        """
+        return self._keepRays
+
+    @property
+    def clearHitQueue(self) -> bool:
+        """Wether to clear the hit queue before each batch."""
+        return self._clearHitQueue
+
+    @property
+    def hitQueue(self) -> hp.Tensor:
+        """Tensor containing the hit queue"""
+        return self._hitQueue
+
+    # pipeline stage api
+
+    def run(self, i: int) -> List[hp.Command]:
+        cmd = []
+        self._bindParams(self._program, i)
+        self.rng.bindParams(self._program, i)
+        # clear queue if needed
+        if self.clearHitQueue:
+            cmd.append(clearQueue(self.hitQueue))
+        # check if we need the double buffering
+        if not self.keepRays and self.nIterations == 1:
+            self._program.bindParams(RayQueueBuffer=self._rayQueue[0])
+            cmd.extend(
+                [
+                    self._program.dispatch(self._groupSize),
+                    hp.flushMemory(),
+                ]
+            )
+        else:
+            # swap buffers as needed
+            for it in range(self.nIterations):
+                self._program.bindParams(
+                    RayQueueBuffer=self._rayQueue[it % 2],
+                    OutRayQueueBuffer=self._rayQueue[(it + 1) % 2],
+                )
+                save = self.keepRays or it < self.nIterations - 1
+                push = self.Push(saveRays=(1 if save else 0))
+                cmd.extend(
+                    [
+                        clearQueue(self._rayQueue[(it + 1) % 2]),
+                        self._program.dispatchPush(bytes(push), self._groupSize),
+                        hp.flushMemory(),
+                    ]
+                )
+        # done
+        return cmd
 
 
 class WavefrontPathTracer(PipelineStage):
