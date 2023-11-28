@@ -181,7 +181,7 @@ class EmptySceneTracer(PipelineStage):
     @property
     def maxSamples(self) -> int:
         """Maximum number of samples produced per batch"""
-        return self.capacity * self.nScattering
+        return self.capacity * self.nScattering * self.nIterations
 
     @property
     def rng(self) -> RNG:
