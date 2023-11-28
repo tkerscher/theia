@@ -2,6 +2,7 @@ import numpy as np
 import hephaistos as hp
 import hephaistos.pipeline as pl
 
+import theia.estimator
 import theia.items
 import theia.light
 import theia.material
@@ -116,3 +117,73 @@ def test_emptyscenetracer_buffered():
     assert np.all((rays["time"] > 0.0) & (rays["time"] < tracer.getParam("maxTime")))
     assert np.all((rays["wavelength"] >= lamMin) & (rays["wavelength"] <= lamMax))
     # TODO: more sophisticated tests
+
+
+def test_emptyscenetracer_pipeline():
+    N = 32 * 256
+    N_BINS = 128
+    N_PHOTONS = 4
+    BIN_SIZE = 2.0
+    T0 = 30.0
+    T1 = T0 + N_BINS * BIN_SIZE
+    light_pos = (-1.0, -7.0, 0.0)
+    light_intensity = 1000.0
+    target_pos, target_radius = (5.0, 2.0, -8.0), 4.0
+    target = theia.scene.SphereBBox(target_pos, target_radius)
+
+    # create water medium
+    water = WaterModel().createMedium()
+    tensor, _, media = theia.material.bakeMaterials(media=[water])
+
+    # create pipeline stages
+    philox = PhiloxRNG(key=0xC0FFEEC0FFEE)
+    tracer = theia.trace.EmptySceneTracer(
+        N,
+        nPhotons=N_PHOTONS,
+        rng=philox,
+        target=target,
+        nScattering=3,
+        nIterations=2,
+        keepRays=True,
+    )
+    light = theia.light.SphericalLightSource(
+        N,
+        nPhotons=N_PHOTONS,
+        medium=media["water"],
+        rng=philox,
+        rayQueue=tracer.rayQueueIn,
+        position=light_pos,
+        intensity=light_intensity,
+    )
+    estimator = theia.estimator.HistogramEstimator(
+        tracer.maxSamples,
+        tracer.hitQueue,
+        detectorId=0,
+        t0=T0,
+        nBins=N_BINS,
+        binSize=BIN_SIZE,
+        clearQueue=False,
+        normalization=1.0 / N,
+    )
+    fetch_hits = pl.RetrieveTensorStage(tracer.hitQueue)
+    fetch_hist = pl.RetrieveTensorStage(estimator.histogram)
+    # assemble pipeline
+    pipeline = pl.Pipeline([philox, light, tracer, fetch_hits, estimator, fetch_hist])
+    # run pipeline once
+    pipeline.run(0)
+
+    # fetch results
+    hitItem = theia.items.createHitQueueItem(N_PHOTONS)
+    hits = as_queue(fetch_hits.buffer(0), hitItem)
+    hist = fetch_hist.view(0)
+    # check for degenerate case
+    assert hits.count > 0
+
+    # calculated expected result
+    cosine = -np.multiply(hits["normal"], hits["direction"]).sum(-1)
+    weight = (hits["contribution"] * cosine[:, None]).flatten()
+    t = hits["time"].flatten()
+    hist_exp, _ = np.histogram(t, N_BINS, (T0, T1), weights=weight)
+    hist_exp = hist_exp * estimator.norm
+    # check result
+    assert np.allclose(hist, hist_exp)
