@@ -1,6 +1,7 @@
 #extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_EXT_control_flow_attributes : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
@@ -74,7 +75,7 @@ bool updateRay(inout Ray ray, vec3 dir, float dist, bool hit) {
     //update all photons
     float lambda = params.scatterCoefficient;
     bool anyBelowMaxTime = false;
-    for (uint i = 0; i < N_PHOTONS; ++i) {
+    [[unroll]] for (uint i = 0; i < N_PHOTONS; ++i) {
         float mu_e = ray.photons[i].constants.mu_e;
         ray.photons[i].log_contrib += lambda * dist - mu_e * dist;
         ray.photons[i].time += dist / ray.photons[i].constants.vg;
@@ -124,7 +125,7 @@ bool trace(inout Ray ray) {
         nrm = normalize(ray.position - params.target.position);
         //transform pos to sphere local coords / recalc to improve float error
         pos = nrm * params.target.radius;
-        for (uint i = 0; i < N_PHOTONS; ++i) {
+        [[unroll]] for (uint i = 0; i < N_PHOTONS; ++i) {
             hits[i] = PhotonHit(
                 ray.photons[i].wavelength,
                 ray.photons[i].time,
@@ -176,7 +177,7 @@ bool trace(inout Ray ray) {
         //update ray
         ray.direction = scatterDir;
         //iterate photons to update and create hits
-        for (uint i = 0; i < N_PHOTONS; ++i) {
+        [[unroll]] for (uint i = 0; i < N_PHOTONS; ++i) {
             ray.photons[i].lin_contrib *= ray.photons[i].constants.mu_s;
             //create hits
             float mu_e = ray.photons[i].constants.mu_e;
@@ -225,7 +226,7 @@ void main() {
         return;    
 
     //trace loop
-    for (uint i = 0; i < N_SCATTER; ++i) {
+    [[unroll]] for (uint i = 0; i < N_SCATTER; ++i) {
         //trace() returns true, if we should stop tracing
         if (trace(ray)) return;
     }
