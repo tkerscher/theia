@@ -134,45 +134,47 @@ bool trace(inout Ray ray) {
         }
     }
     else {
-        //MIS both volume scatter and detector hit
-        //We'll use the following naming scheme: pXY, where
-        //X: sampled distribution
-        //Y: prob, distribution
-        //S: scatter, D: detector
-        //e.g. pSD: p_det(dir ~ scatter)
-        
-        //sample target
-        vec2 rng = random2D(ray.rngStream, ray.rngCount);
-        ray.rngCount += 2;
-        float pDD, targetDist;
-        vec3 targetDir = sampleSphere(params.target, ray.position, rng, targetDist, pDD);
-        targetDist = intersectSphere(params.target, ray.position, targetDir);
+        /***************************************************************************
+        * MIS: sample both scattering phase function & detector                   *
+        *                                                                         *
+        * We'll use the following naming scheme: pXY, where                       *
+        * X: prob, distribution                                                   *
+        * Y: sampled distribution                                                 *
+        * S: scatter, D: detector                                                 *
+        * e.g. pDS: p_det(dir ~ scatter)                                          *
+        **************************************************************************/
+
+        //sample detector
+        vec2 rng = random2D(ray.rngStream, ray.rngCount); ray.rngCount += 2;
+        float pDD, detDist;
+        vec3 detDir = sampleSphere(params.target, ray.position, rng, detDist, pDD);
+        detDist = intersectSphere(params.target, ray.position, detDir);
         //create hit params
-        //in the rare case, that we dit not hit the target: targetDist = +inf
+        //in the rare case, that we dit not hit the target: detDist = +inf
         //it's easier programming wise to check for this later and ignore the
         //corresponding hit. Due to branching there should not be any performance hit
-        pos = ray.position + targetDir * targetDist;
-        dir = targetDir;
+        pos = ray.position + detDir * detDist;
+        dir = detDir;
         nrm = normalize(pos - params.target.position);
         //transform pos to sphere local coords / recalc to improve float error
         pos = nrm * params.target.radius;
 
-        //scatter
+        //sample scatter phase function
         Medium medium = Medium(ray.medium);
-        rng = random2D(ray.rngStream, ray.rngCount);
-        ray.rngCount += 2;
+        rng = random2D(ray.rngStream, ray.rngCount); ray.rngCount += 2;
         float pSS;
         vec3 scatterDir = scatter(medium, ray.direction, rng, pSS);
 
         //calculate cross probs pSD, pDS
-        float pSD = scatterProb(medium, ray.direction, targetDir);
+        float pSD = scatterProb(medium, ray.direction, detDir);
         float pDS = sampleSphereProb(params.target, ray.position, scatterDir);
-
         //calculate MIS weights
         float w_scatter = pSS*pSS / (pSS*pSS + pSD*pSD);
-        float w_target = pDD / (pDD*pDD + pDS*pDS);
-        //^^^ Note that we already canceled out the extra pDD from the estimator
-        // -> f(x)/pDD * w_target
+        float w_det = pDD*pSD / (pDD*pDD + pDS*pDS);
+        //^^^ For the detector weight, two effects happen: attenuation due to phase
+        //    phase function (= pSD) and canceling of sampled distribution:
+        //      f(x)*phase(theta)/pDD * w_det = f(x)*pSD/pDD * w_det
+        //    Note that mu_s was already applied
 
         //update ray
         ray.direction = scatterDir;
@@ -182,10 +184,10 @@ bool trace(inout Ray ray) {
             //create hits
             float mu_e = ray.photons[i].constants.mu_e;
             float contrib = exp(ray.photons[i].log_contrib - mu_e * dist);
-            contrib *= ray.photons[i].lin_contrib * w_target;
+            contrib *= ray.photons[i].lin_contrib * w_det;
             hits[i] = PhotonHit(
                 ray.photons[i].wavelength,
-                ray.photons[i].time + targetDist / ray.photons[i].constants.vg,
+                ray.photons[i].time + detDist / ray.photons[i].constants.vg,
                 contrib
             );
             //update ray weight
@@ -194,7 +196,7 @@ bool trace(inout Ray ray) {
 
         //sanity check: did we actually hit the target after sampling it?
         //if not, do not create a hit, but keep tracing
-        if (isinf(targetDist))
+        if (isinf(detDist))
             return false;
     }
 
