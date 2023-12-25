@@ -16,7 +16,6 @@ layout(scalar) uniform LightParams {
 } lightParams;
 
 SourceRay sampleLight() {
-    uint rngStream = gl_GlobalInvocationID.x;
     float delta_lambda = lightParams.lambda_max - lightParams.lambda_min;
     float delta_time = lightParams.t_max - lightParams.t_min;
     //float prob = INV_4PI / dLam / time_duration;
