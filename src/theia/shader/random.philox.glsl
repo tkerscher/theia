@@ -47,8 +47,8 @@ void philox(uint stream, uint i) {
             key.y += 0xBB67AE85u;
         }
     }
-    //convert uint to float
-    philoxBuffer = uintBitsToFloat((state & 0x7fffffu) | 0x3f800000u) - 1.0;
+    //interpret lower 23 bit as new mantissa (excluding 2.0) with zero exponent
+    philoxBuffer = uintBitsToFloat(min(state & 0x7FFFFF, 0x7FFFFE) | 0x3F800000) - 1.0;
 }
 
 
