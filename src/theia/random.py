@@ -55,7 +55,22 @@ class RNG(PipelineStage):
 
 class RNGBufferSink(PipelineStage):
     """
-    Helper class for filling a tensor with random numbers from a generator
+    Helper class for filling a tensor with random numbers from a generator.
+
+    Samples are stored in tensor with consecutive numbers being in consecutive
+    streams.
+
+    Example
+    -------
+    >>> import numpy as np
+    >>> import theia.random
+    >>> from hephaistos.pipeline import RetrieveTensorStage, runPipeline
+    >>> gen = theia.random.PhiloxRNG()
+    >>> samples, streams = 1024, 8192
+    >>> sink = theia.random.RNGBufferSink(gen, streams, samples)
+    >>> ret = RetrieveTensorStage(sink.tensor)
+    >>> runPipeline([gen, sink, ret])
+    >>> samples = ret.view(0).reshape((samples, streams))
     """
 
     name = "RNG Sink"

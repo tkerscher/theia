@@ -28,41 +28,16 @@ layout(scalar) uniform Params {
     uint samples;
 };
 
-//Drawing numbers is consecutively faster (caching),
-//but saving them to memory is strided faster
-// -> buffer the result in shared memory
-shared float u_shared[PARALLEL_STREAMS][BATCH_SIZE * DRAWS];
-
 void main() {
     uint stream = baseStream + gl_GlobalInvocationID.x;
-    uint bufStream = gl_LocalInvocationID.x;
+    uint count = gl_WorkGroupID.y * DRAWS * BATCH_SIZE + gl_LocalInvocationID.y;
+    uint idx = gl_GlobalInvocationID.x * samples + count;
 
-    uint count = baseCount + gl_GlobalInvocationID.y * DRAWS;
-    uint bufIdx = gl_LocalInvocationID.y * DRAWS;
-
-    for (int i = 0; i < DRAWS; ++i, ++bufIdx, ++count) {
-        u_shared[bufStream][bufIdx] = random(stream, count);
-    }
-
-    //barrier to ensure local buffer finished
-    memoryBarrierShared();
-    barrier();
-
-    //discard streams that are not needed
-    //earlier not possible due to barrier()
-    if (gl_GlobalInvocationID.x > streams)
-        return;
-
-    //stride write to memory
-    uint streamIdx = gl_GlobalInvocationID.x * samples;
-    uint offset = gl_WorkGroupID.y * DRAWS * BATCH_SIZE + gl_LocalInvocationID.y;
-    uint idx = streamIdx + offset;
-    bufIdx = gl_LocalInvocationID.y;
     for (
         uint i = 0;
-        i < DRAWS && offset < samples;
-        ++i, idx += BATCH_SIZE, offset += BATCH_SIZE, bufIdx += BATCH_SIZE
+        i < DRAWS && count < samples;
+        ++i, idx += BATCH_SIZE, count += BATCH_SIZE
     ) {
-        u[idx] = u_shared[bufStream][bufIdx];
+        u[idx] = random(stream, count + baseCount);
     }
 }

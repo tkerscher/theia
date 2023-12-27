@@ -5,6 +5,34 @@ import theia.util
 from hephaistos.pipeline import RetrieveTensorStage, runPipeline
 
 
+shader = """\
+float random(uint stream, uint i) {
+    return 10000.0 * stream + i;
+}
+"""
+
+
+class DebugRNG(theia.random.RNG):
+    """Debug Shader for testing the RNGBufferSink"""
+
+    def __init__(self):
+        super().__init__(shader)
+
+
+def test_rngSink():
+    gen = DebugRNG()
+    sink = theia.random.RNGBufferSink(gen, 250, 800, baseStream=12, baseCount=316)
+    ret = RetrieveTensorStage(sink.tensor)
+    runPipeline([gen, sink, ret])
+
+    samples = ret.view(0)
+    streams = (np.arange(250) + 12) * 10000.0
+    counts = np.arange(800) + 316
+    expected = streams[:,None] + counts[None:,]
+
+    assert np.all(samples == expected.flatten())
+
+
 def test_philox():
     philox = theia.random.PhiloxRNG(key=0xC0FFEE)
     generator = theia.random.RNGBufferSink(philox, 4096, 8192)
