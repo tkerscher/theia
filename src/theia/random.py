@@ -1,6 +1,8 @@
+import importlib.resources
 import hephaistos as hp
+import numpy as np
 
-from ctypes import Structure, c_uint32
+from ctypes import Structure, c_float, c_uint32
 from os import urandom
 
 from hephaistos.pipeline import PipelineStage
@@ -216,3 +218,57 @@ class PhiloxRNG(RNG):
         if key is None:
             key = urandom(8)
         self.setParams(key=key, offset=offset)
+
+
+class SobolQRNG(RNG):
+    """
+    Sobol sequence optionally scrambled using fast Owen scrambling.
+
+    Parameters
+    ----------
+    seed: int | None, default=None
+        Base seed used for scrambling. If None, asks the system to create a
+        random one. Ignored if scrambled is False.
+    offset: int, default=0
+        Offset into the sequence. Can be used to split draws into multiple runs.
+        Should not be used to skip samples altogether.
+    scramble: bool, default=True
+        Wether to scramble the sequence
+
+    Note
+    ----
+    Only supports drawing samples up to dimension 1024
+    """
+
+    class SobolParams(Structure):
+        _fields_ = [("seed", c_uint32), ("offset", c_uint32)]
+
+    def __init__(
+        self, *, seed: Optional[int] = None, offset: int = 0, scrambled: bool = True
+    ) -> None:
+        code = loadShader("random.sobol.glsl")
+        # add define to disable scrambling if needed
+        # multiple #define are allowed so dont sweat about putting it before the
+        # include guard
+        if not scrambled:
+            code = "#define _SOBOL_NO_SCRAMBLE\n\n" + code
+
+        super().__init__(code, {"SobolParams": self.SobolParams})
+
+        # save params
+        if seed is None:
+            seed = urandom(4)
+        self.setParams(seed=seed, offset=offset)
+
+        # load sobol matrices
+        path = importlib.resources.files("theia").joinpath("data/sobolmatrices.npy")
+        matrices = np.load(path)
+        # upload to device
+        self._matrices = hp.IntTensor(matrices.flatten())
+        # while it would make sense to cache the matrices between instances,
+        # we'd have to somehow detect when the device was destroyed and recreate
+        # the tensor. Since it's not that big, this is far easier and safer
+
+    def bindParams(self, program: hp.Program, i: int) -> None:
+        super().bindParams(program, i)
+        program.bindParams(SobolMatrices=self._matrices)
