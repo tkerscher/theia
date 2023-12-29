@@ -16,7 +16,11 @@ class DebugRNG(theia.random.RNG):
     """Debug Shader for testing the RNGBufferSink"""
 
     def __init__(self):
-        super().__init__(shader)
+        super().__init__()
+    
+    @property
+    def sourceCode(self) -> str:
+        return shader
 
 
 def test_rngSink():

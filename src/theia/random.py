@@ -2,16 +2,16 @@ import importlib.resources
 import hephaistos as hp
 import numpy as np
 
-from ctypes import Structure, c_float, c_uint32
+from ctypes import Structure, c_uint32
 from os import urandom
 
-from hephaistos.pipeline import PipelineStage
+from hephaistos.pipeline import PipelineStage, SourceCodeMixin
 from theia.util import compileShader, loadShader
 
 from typing import Dict, List, Optional, Set, Tuple, Type
 
 
-class RNG(PipelineStage):
+class RNG(SourceCodeMixin):
     """
     Base class for random number generator used in pipeline stages.
     Running this as a stage inside a pipeline updates following stages.
@@ -21,38 +21,10 @@ class RNG(PipelineStage):
 
     def __init__(
         self,
-        sourceCode: str,
         params: Dict[str, Type[Structure]] = {},
         extras: Set[str] = set(),
-        *,
-        alignment: int = 1,
     ) -> None:
         super().__init__(params, extras)
-        self._sourceCode = sourceCode
-        self._alignment = alignment
-
-    @property
-    def alignment(self) -> int:
-        """Alignment each stream (i.e. idx offset) should have for optimal speed"""
-        return self._alignment
-
-    @property
-    def sourceCode(self) -> str:
-        """
-        Source to be used by the pipeline stage.
-        Can be shared among multiple stages.
-        """
-        return self._sourceCode
-
-    def bindParams(self, program: hp.Program, i: int) -> None:
-        """
-        Binds params used by the generator to the program for the given configuration
-        """
-        self._bindParams(program, i)
-
-    def run(self, i: int) -> List[hp.Command]:
-        # RNG are most likely config only
-        return []
 
 
 class RNGBufferSink(PipelineStage):
@@ -61,6 +33,34 @@ class RNGBufferSink(PipelineStage):
 
     Samples are stored in tensor with consecutive numbers being in consecutive
     streams.
+
+    Parameters
+    ----------
+    generator: RNG
+        The underlying random number generator samples are drawn from
+    streams: int
+        Total number of parallel streams
+    samples: int
+        Number of samples drawn per stream
+    baseStream: int, default=0
+        Index of first stream
+    baseCount: int, default=0
+        Offset into each stream
+    blockSize: (float, float, float), default=(32, 4, 16)
+        Dimension of a single work group in the shape of
+        (STREAMS, BATCHES, DRAWS PER BATCH)
+        Can be used to tune the performance to a specific device.
+    code: bytes | None, default=None
+        Compiled source code. If `None`, the byte code get's compiled from
+        source. Note, that the compiled code is not checked. You must ensure
+        it matches the configuration.
+
+    Stage Parameters
+    ----------------
+    baseStream: int, default=0
+        Index of first stream
+    baseCount: int, default=0
+        Offset into each stream
 
     Example
     -------
@@ -130,8 +130,28 @@ class RNGBufferSink(PipelineStage):
         self._program.bindParams(RngSink=self._tensor)
 
     @property
+    def blockSize(self) -> Tuple[float, float, float]:
+        """Block size used by the shader: (streams, batches, draws per invocation)"""
+        return self._blockSize
+
+    @property
+    def capacity(self) -> int:
+        """Number of total samples stored in the tensor"""
+        return self._capacity
+
+    @property
+    def code(self) -> bytes:
+        """Compiled source code. Can be used for caching"""
+        return self._code
+
+    @property
+    def generator(self) -> RNG:
+        """The underlying random number generator samples are drawn from"""
+        return self._generator
+
+    @property
     def streams(self) -> int:
-        """Total number of streams"""
+        """Total number of parallel streams"""
         return self.getParam("_streams")
 
     @property
@@ -140,24 +160,9 @@ class RNGBufferSink(PipelineStage):
         return self.getParam("_samples")
 
     @property
-    def capacity(self) -> int:
-        """Number of total samples stored in the tensor"""
-        return self._capacity
-
-    @property
     def tensor(self) -> hp.FloatTensor:
         """Tensor holding the drawn samples"""
         return self._tensor
-
-    @property
-    def generator(self) -> RNG:
-        """The underlying random number generator samples are drawn from"""
-        return self._generator
-
-    @property
-    def blockSize(self) -> Tuple[float, float, float]:
-        """Block size used by the shader: (streams, batches, draws per invocation)"""
-        return self._blockSize
 
     def run(self, i: int) -> List[hp.Command]:
         self._bindParams(self._program, i)
@@ -202,22 +207,34 @@ class PhiloxRNG(RNG):
         increment the key by one
     offset: int, default=0
         Offset into each stream. Can be used to advance the generator.
+
+    Stage Parameters
+    ----------------
+    key: int | None, default=None
+        Base key used by the random number generator. Consecutive streams
+        increment the key by one
+    offset: int, default=0
+        Offset into each stream. Can be used to advance the generator.
     """
 
     class PhiloxParams(Structure):
         _fields_ = [("key", Key), ("offset", Counter)]
 
-    def __init__(self, *, key: Optional[int] = None, offset: int = 0) -> None:
-        super().__init__(
-            loadShader("random.philox.glsl"),
-            {"PhiloxParams": self.PhiloxParams},
-            alignment=4,
-        )
+    # cache for source code, lazily loaded (not need if byte code was cached)
+    source_code = None
 
+    def __init__(self, *, key: Optional[int] = None, offset: int = 0) -> None:
+        super().__init__({"PhiloxParams": self.PhiloxParams})
         # save params
         if key is None:
             key = urandom(8)
         self.setParams(key=key, offset=offset)
+
+    @property
+    def sourceCode(self) -> str:
+        if PhiloxRNG.source_code is None:
+            PhiloxRNG.source_code = loadShader("random.philox.glsl")
+        return PhiloxRNG.source_code
 
 
 class SobolQRNG(RNG):
@@ -235,6 +252,15 @@ class SobolQRNG(RNG):
     scramble: bool, default=True
         Wether to scramble the sequence
 
+    Stage Parameters
+    ----------------
+    seed: int | None, default=None
+        Base seed used for scrambling. If None, asks the system to create a
+        random one. Ignored if scrambled is False.
+    offset: int, default=0
+        Offset into the sequence. Can be used to split draws into multiple runs.
+        Should not be used to skip samples altogether.
+
     Note
     ----
     Only supports drawing samples up to dimension 1024
@@ -243,19 +269,15 @@ class SobolQRNG(RNG):
     class SobolParams(Structure):
         _fields_ = [("seed", c_uint32), ("offset", c_uint32)]
 
+    # cache for source source, lazily loaded (not need if byte code was cached)
+    source_code = None
+
     def __init__(
         self, *, seed: Optional[int] = None, offset: int = 0, scrambled: bool = True
     ) -> None:
-        code = loadShader("random.sobol.glsl")
-        # add define to disable scrambling if needed
-        # multiple #define are allowed so dont sweat about putting it before the
-        # include guard
-        if not scrambled:
-            code = "#define _SOBOL_NO_SCRAMBLE\n\n" + code
-
-        super().__init__(code, {"SobolParams": self.SobolParams})
-
+        super().__init__({"SobolParams": self.SobolParams})
         # save params
+        self._scrambled = scrambled
         if seed is None:
             seed = urandom(4)
         self.setParams(seed=seed, offset=offset)
@@ -268,6 +290,25 @@ class SobolQRNG(RNG):
         # while it would make sense to cache the matrices between instances,
         # we'd have to somehow detect when the device was destroyed and recreate
         # the tensor. Since it's not that big, this is far easier and safer
+
+    @property
+    def scrambled(self) -> bool:
+        """Wether the sequence is scrambled"""
+        return self._scrambled
+
+    @property
+    def sourceCode(self) -> str:
+        if SobolQRNG.source_code is None:
+            SobolQRNG.source_code = loadShader("random.sobol.glsl")
+        # add preamble if needed
+        if self.scrambled:
+            # add define to disable scrambling if needed
+            # multiple #define are allowed so dont sweat about putting it before
+            # the include guard
+            preamble = "#define _SOBOL_NO_SCRAMBLE\n\n"
+            return preamble + SobolQRNG.source_code
+        else:
+            return SobolQRNG.source_code
 
     def bindParams(self, program: hp.Program, i: int) -> None:
         super().bindParams(program, i)
