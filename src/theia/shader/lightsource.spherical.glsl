@@ -15,25 +15,24 @@ layout(scalar) uniform LightParams {
     float contribution; // intensity / prob
 } lightParams;
 
-SourceRay sampleLight() {
+SourceRay sampleLight(uint idx) {
     float delta_lambda = lightParams.lambda_max - lightParams.lambda_min;
     float delta_time = lightParams.t_max - lightParams.t_min;
     //float prob = INV_4PI / dLam / time_duration;
-    SourcePhoton photons[N_PHOTONS];
-    for (int i = 0; i < N_PHOTONS; ++i) {
-        float lambda = lightParams.lambda_min + delta_lambda * random();
-        float t = lightParams.t_min + delta_time * random();
+    SourceSample samples[N_LAMBDA];
+    for (int i = 0; i < N_LAMBDA; ++i) {
+        float lambda = lightParams.lambda_min + delta_lambda * random(idx, 0);
+        float t = lightParams.t_min + delta_time * random(idx, 1);
 
-        photons[i] = SourcePhoton(
+        samples[i] = SourceSample(
             lambda,
             t,            
-            lightParams.contribution,   // lin_contrib
-            0.0                         // log_contrib
+            lightParams.contribution
         );
     }
 
     //sample direction
-    vec2 u = random2D();
+    vec2 u = random2D(idx, 2);
     float cos_theta = 2.0 * u.x - 1.0;
     float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
     float phi = TWO_PI * u.y;
@@ -47,7 +46,7 @@ SourceRay sampleLight() {
     return SourceRay(
         lightParams.position,
         rayDir,
-        photons
+        samples
     );
 }
 

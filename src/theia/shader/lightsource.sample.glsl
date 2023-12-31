@@ -1,68 +1,31 @@
 #extension GL_GOOGLE_include_directive : require
-#extension GL_EXT_buffer_reference2 : require
-#extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_EXT_scalar_block_layout : require
-#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
-#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
-//ensure compilation failes if no rng is given and random() is called
-#ifndef NO_RNG
-
-#include "rng.glsl"
-
-uint rng_samples = 0; //counter
-float random() {
-    rng_samples++;
-    return random(gl_GlobalInvocationID.x, rng_samples-1);
-}
-vec2 random2D() {
-    rng_samples += 2;
-    return random2D(gl_GlobalInvocationID.x, rng_samples-2);
-}
-
-#else
-
-#define rng_samples 0
-
+//check macro settings
+#ifndef BATCH_SIZE
+#error "BATCH_SIZE not defined"
+#endif
+#ifndef N_LAMBDA
+#error "N_LAMBDA not defined"
 #endif
 
-#include "ray.glsl"
+layout(local_size_x = BATCH_SIZE) in;
 
-//default settings; overwritten by preamble
-#ifndef LOCAL_SIZE
-#define LOCAL_SIZE 32
-#endif
-#ifndef N_PHOTONS
-#define N_PHOTONS 4
-#endif
-
-layout(local_size_x = LOCAL_SIZE) in;
-
-//Light description
-struct SourcePhoton{
-    float wavelength;
-    float startTime;
-    float lin_contrib;
-    float log_contrib;
-};
-struct SourceRay{
-    vec3 position;
-    vec3 direction;
-    SourcePhoton photons[N_PHOTONS];
-};
-//user provided source: defines function SourceRay sample()
+#include "lightsource.queue.glsl"
+//user provided source
 #include "light.glsl"
 
-//ray queue
-layout(scalar) writeonly buffer RayQueueBuffer {
-    uint rayCount;
-    RayQueue rayQueue;
+
+//output queue
+layout(scalar) writeonly buffer LightQueueOut {
+    uint sampleCount;
+    LightSourceQueue queue;
 };
 
 //sample params
 layout(scalar) uniform SampleParams {
-    uvec2 medium;
     uint count;
+    uint baseCount;
 } sampleParams;
 
 void main() {
@@ -70,38 +33,15 @@ void main() {
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= sampleParams.count)
         return;
-    //retrieve medium
-    Medium medium = Medium(sampleParams.medium);
 
     //sample light
-    SourceRay sourceRay = sampleLight();
-
-    //create photons
-    Photon photons[N_PHOTONS];
-    for (int i = 0; i < N_PHOTONS; ++i) {
-        photons[i] = createPhoton(
-            medium,
-            sourceRay.photons[i].wavelength,
-            sourceRay.photons[i].startTime,
-            sourceRay.photons[i].lin_contrib,
-            sourceRay.photons[i].log_contrib
-        );
-    }
-    //create ray and place it on the queue
-    //we assume that we fill an empty queue
-    // -> no need for atomic counting
-    Ray ray = Ray(
-        sourceRay.position,
-        normalize(sourceRay.direction), //just to be safe
-        idx, rng_samples,    // stream, count
-        sampleParams.medium,
-        photons
-    );
-    SAVE_RAY(ray, rayQueue, idx)
+    SourceRay ray = sampleLight(idx + sampleParams.baseCount);
+    //save sample
+    SAVE_SAMPLE(ray, queue, idx);
 
     //save the item count exactly once
     if (idx == 0) {
-        rayCount = sampleParams.count;
+        sampleCount = sampleParams.count;
     }
 }
 
