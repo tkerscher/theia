@@ -217,7 +217,7 @@ class LightSampler(PipelineStage):
 
     def view(self, i: int) -> Optional[QueueView]:
         """View into the i-th queue. `None` if retrieve was set to `False`."""
-        return self.buffer(i).view
+        return self.buffer(i).view if self.retrieve else None
 
     def run(self, i: int) -> List[hp.Command]:
         self._bindParams(self._program, i)
