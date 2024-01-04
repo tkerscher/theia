@@ -1,27 +1,17 @@
 #extension GL_EXT_scalar_block_layout : require
 
-//default settings; overwritten by preamble
-#ifndef LOCAL_SIZE
-#define LOCAL_SIZE 32
-#endif
-#ifndef N_BINS
-#define N_BINS 256
-#endif
-
-layout(local_size_x = LOCAL_SIZE) in;
-
-struct Histogram {
-    float bin[N_BINS];
-};
+//parameterization via specialization constants
+layout(local_size_x_id = 1) in;
+layout(constant_id = 2) const uint N_BINS = 100;
 
 layout(scalar) readonly buffer HistogramIn {
-    Histogram histIn[];
+    float histIn[];
 };
 layout(scalar) writeonly buffer HistogramOut {
-    Histogram histOut;
+    float histOut[];
 };
 
-layout(scalar) uniform Params {
+layout(scalar) uniform Params{
     float norm;
     uint nHist;
 };
@@ -31,10 +21,11 @@ void main() {
     if (idx >= N_BINS)
         return;
     
-    //add same bin across all inputs and save in output
+    //add same bin accross all inputs and save in input
     float result = 0.0;
-    for (uint i = 0; i < nHist; ++i) {
-        result += histIn[i].bin[idx] * norm;
+    uint i = idx;
+    for (uint n = 0; n < nHist; ++n, i += N_BINS) {
+        result += histIn[i] * norm;
     }
-    histOut.bin[idx] += result;
+    histOut[idx] = result;
 }

@@ -1,108 +1,370 @@
 from __future__ import annotations
+from abc import abstractmethod
 
 import hephaistos as hp
+from hephaistos.pipeline import PipelineStage, SourceCodeMixin
 from hephaistos.queue import QueueBuffer, QueueTensor, QueueView, clearQueue
-from hephaistos.pipeline import PipelineStage
-
-from theia.items import createHitQueueItem
-from theia.util import compileShader, loadShader
 
 from ctypes import Structure, c_float, c_uint32
-from typing import Callable, Dict, List, Optional, Type, Union
+
+from theia.util import compileShader, loadShader
+
+from numpy.typing import NDArray
+from typing import Dict, List, Set, Type, Optional
+
+
+class HitItem(Structure):
+    """
+    Structure describing the layout of a single hit. Containing the rays
+    direction, the position, surface normal and time of the hit on the detector
+    surface, as well as the light's wavelength and MC contribution value.
+    """
+
+    _fields_ = [
+        ("position", c_float * 3),
+        ("direction", c_float * 3),
+        ("normal", c_float * 3),
+        ("wavelength", c_float),
+        ("time", c_float),
+        ("contrib", c_float),
+    ]
+
+
+class HitResponse(SourceCodeMixin):
+    """
+    Base class for response functions called for each hit produced by a tracer.
+    A response function is a GLSL function consuming a single `HitItem` as
+    described in `createHitItem`:
+
+    ```
+    void response(HitItem item)
+    ```
+    """
+
+    name = "Hit Response"
+
+    def __init__(
+        self, params: Dict[str, Type[Structure]] = {}, extra: Set[str] = set()
+    ) -> None:
+        super().__init__(params, extra)
+
+
+class HitRecorder(HitResponse):
+    """
+    Records hits onto a queue, which can be retrieved later on.
+    Should be placed in the pipeline at a later stage than the tracing.
+
+    Parameters
+    ----------
+    capacity: int
+        Maximum number of hits that can be saved per run
+    retrieve: bool, default=True
+        Wether the queue gets retrieved from the device after processing.
+        If `True`, clears the queue afterwards.
+    """
+
+    # lazily load source code (might not needed)
+    source_code = None
+
+    def __init__(self, capacity: int, *, retrieve: bool = True) -> None:
+        super().__init__()
+        # save params
+        self._capacity = capacity
+        self._retrieve = retrieve
+
+        # create queue
+        self._tensor = QueueTensor(HitItem, capacity)
+        hp.execute(clearQueue(self._tensor))
+        self._buffer = [
+            QueueBuffer(HitItem, capacity) if retrieve else None for _ in range(2)
+        ]
+
+    @property
+    def capacity(self) -> int:
+        """Maximum number of hits that can be saved per run"""
+        return self._capacity
+
+    @property
+    def retrieve(self) -> bool:
+        """Wether the queue gets retrieved from the device after processing"""
+        return self._retrieve
+
+    @property
+    def sourceCode(self) -> str:
+        if HitRecorder.source_code is None:
+            HitRecorder.source_code = loadShader("response.record.glsl")
+        return HitRecorder.source_code
+
+    @property
+    def tensor(self) -> QueueTensor:
+        """Tensor holding the queue storing the hits"""
+        return self._tensor
+
+    def buffer(self, i: int) -> Optional[QueueBuffer]:
+        """Buffer holding the i-th queue. `None` if retrieve was set to `False`"""
+        return self._buffer[i]
+
+    def view(self, i: int) -> Optional[QueueView]:
+        """View into the i-th queue. `None` if retrieve was set to `False`"""
+        return self.buffer(i).view if self.retrieve else None
+
+    def bindParams(self, program: hp.Program, i: int) -> None:
+        super().bindParams(program, i)
+        program.bindParams(HitQueueOut=self._tensor)
+
+    def run(self, i: int) -> List[hp.Command]:
+        if self.retrieve:
+            return [
+                hp.retrieveTensor(self.tensor, self.buffer(i)),
+                clearQueue(self.tensor),
+            ]
+        else:
+            return []
+
+
+class HitReplay(PipelineStage):
+    """
+    Reads hits from a queue and feeds each to the given response function.
+
+    Parameters
+    ----------
+    capacity: int
+        Maximum number of hits that can be processed per run
+    response: HitResponse
+        Response to be called on each hit
+    batchSize: int, default=128
+        Number of hits processed per work group
+    code: bytes | None, default=None
+        Compiled source code. If `None`, the byte code get's compiled from
+        source. Note, that the compiled code is not checked. You must ensure
+        it matches the configuration.
+    """
+
+    name = "Hit Replay"
+
+    def __init__(
+        self,
+        capacity: int,
+        response: HitResponse,
+        *,
+        batchSize: int = 128,
+        code: Optional[bytes] = None,
+    ) -> None:
+        super().__init__()
+        # save params
+        self._batchSize = batchSize
+        self._capacity = capacity
+        self._response = response
+
+        # create code if needed
+        if code is None:
+            preamble = ""
+            preamble += f"#define HIT_QUEUE_SIZE {capacity}\n"
+            preamble += f"#define BATCH_SIZE {batchSize}\n\n"
+            headers = {"response.glsl": response.sourceCode}
+            code = compileShader("response.replay.glsl", preamble, headers)
+        self._code = code
+        self._program = hp.Program(self._code)
+        # calculate number of workgroups
+        self._groups = -(capacity // -batchSize)
+
+        # create queue
+        self._tensor = QueueTensor(HitItem, capacity)
+        self._buffer = [QueueBuffer(HitItem, capacity) for _ in range(2)]
+        # set buffer item count to max by default
+        for buffer in self._buffer:
+            buffer.view.count = capacity
+        # bind memory
+        self._program.bindParams(HitQueueIn=self._tensor)
+
+    @property
+    def batchSize(self) -> int:
+        """Number of hits processed per work group"""
+        return self._batchSize
+
+    @property
+    def capacity(self) -> int:
+        """Maximum number of hits that can be processed per run"""
+        return self._capacity
+
+    @property
+    def code(self) -> bytes:
+        """Compiled source code. Can be used for caching"""
+        return self._code
+
+    @property
+    def response(self) -> HitResponse:
+        """Response function called for each hit"""
+        return self._response
+
+    def buffer(self, i: int) -> QueueBuffer:
+        """Buffer holding the i-th queue used in the next run"""
+        return self._buffer[i]
+
+    def view(self, i: int) -> QueueView:
+        """View into the i-th queue holding the hits for the next run"""
+        return self.buffer(i).view
+
+    def run(self, i: int) -> List[hp.Command]:
+        self._bindParams(self._program, i)
+        self.response.bindParams(self._program, i)
+        return [
+            hp.updateTensor(self.buffer(i), self._tensor),
+            self._program.dispatch(self._groups),
+        ]
+
+
+class ValueItem(Structure):
+    """
+    Structure describing the layout of a single value item consumed by
+    estimators. Each item assigns a value to a timestamp.
+    """
+
+    _fields_ = [("value", c_float), ("time", c_float)]
+
+
+class Estimator(PipelineStage):
+    """
+    Base class for estimators that produce a final output by consuming a queue
+    of `ValueItem` each consisting of a timestamp and a single float.
+
+    Parameters
+    ----------
+    capacity: int
+        Maximum number of items that can be stored in the estimator's
+        `ValueItem` queue
+    clearQueue: bool
+        Wether the input queue should be cleared after processing it
+    params: {str: Structure}, default={}
+        Dictionary of named ctype structure containing the stage's parameters.
+        Each structure will be allocated on the CPU side and twice on the GPU
+        for buffering. The latter can be bound in programs
+    extra: {str}, default={}
+        Set of extra parameter name, that can be set and retrieved using the
+        stage api. Take precedence over parameters defined by structs. Should
+        be be implemented in subclasses as properties.
+    """
+
+    name = "Estimator"
+
+    def __init__(
+        self,
+        capacity: int,
+        clearQueue: bool,
+        params: Dict[str, Type[Structure]] = {},
+        extra: Set[str] = set(),
+    ) -> None:
+        super().__init__(params, extra)
+        self._clearQueue = clearQueue
+        # create queue
+        self._queue = QueueTensor(ValueItem, capacity)
+
+    @property
+    def clearQueue(self) -> bool:
+        """Wether the input queue should be cleared after processing it"""
+        return self._clearQueue
+
+    @property
+    def queue(self) -> QueueTensor:
+        """Queue holding the `ValueItem` to be consumed by the estimator"""
+        return self._queue
 
 
 class HistogramReducer(PipelineStage):
     """
-    Helper program for reducing local histograms into a single one.
+    Util class for reducing a set of histograms into a single one.
 
     Parameters
     ----------
-    histIn: Optional[hp.Tensor], default=None
-        Tensor containing the histograms to reduce.
-        Must be set before sampling.
-    histOut: Optional[hp.Tensor], default=None
-        Tensor containing the histogram where the result will be stored.
-        Must be set before sampling.
-    nHist: int, default=1
+    nBins: int
+        Number of bins in the histogram
+    nHist: int
         Number of histograms to reduce
-    nBins: int, default=256
-        number of bins in the histogram
+    histIn: Tensor | None, default=None
+        Tensor holding the histograms to reduce. If `None` creates a new one
+        with enough space to hold `nHist` histograms.
+    histOut: Tensor | None, default=None
+        Tensor holding the final reduced histogram. If `None` creates a new one
+        with enough space to hold the resulting histogram.
     normalization: float, default=1.0
-        Normalization constant each bin gets multiplied with
-    blockSize: int, default=128
-        number of threads in a single local work grouop (block size in CUDA)
-    code: Optional[bytes], default=None
-        cached compiled code. Must match the configuration and might be
-        different depending on the local machine.
-        If None, the code get's compiled from source.
+        Common factor each bin gets multiplied with
+    retrieve: bool, default=True
+        Wether to retrieve the final histogram
+    batchSize: int, default=128
+        Number of threads per workgroup
+
+    Stage Parameters
+    ----------------
+    normalization: float
+        Common factor each bin gets multiplied with
+    nHist: int
+        Number of histograms to reduce
     """
 
     name = "Histogram Reducer"
 
     class Params(Structure):
-        """Structure matching the parameter uniform"""
+        """Parameters"""
 
-        _fields_ = [
-            ("norm", c_float),
-            ("nHist", c_uint32),
-        ]
+        _fields_ = [("normalization", c_float), ("nHist", c_uint32)]
+
+    class Constants(Structure):
+        """Specialization Constants"""
+
+        _fields_ = [("batchSize", c_uint32), ("nBins", c_uint32)]
+
+    # lazily compile code (shared among all instances, variation via spec consts)
+    byte_code = None
 
     def __init__(
         self,
         *,
+        nBins: int,
+        nHist: int,
         histIn: Optional[hp.Tensor] = None,
         histOut: Optional[hp.Tensor] = None,
-        nHist: int = 1,
-        nBins: int = 256,
+        retrieve: bool = True,
         normalization: float = 1.0,
-        blockSize: int = 128,
-        code: Optional[bytes] = None,
+        batchSize: int = 128,
     ) -> None:
         super().__init__({"Params": self.Params})
-
-        # work group size
-        self._groupSize = -(nBins // -blockSize)
-
-        # compile code if necessary
-        if code is None:
-            # create preamble
-            preamble = ""
-            preamble += f"#define LOCAL_SIZE {blockSize}\n"
-            preamble += f"#define N_BINS {nBins}\n\n"
-            # compile shader
-            self._code = compileShader("estimator.reduce.glsl", preamble)
-        else:
-            self._code = code
-        # create program
-        self._program = hp.Program(self._code)
-
         # save params
+        self._batchSize = batchSize
         self._nBins = nBins
-        if histIn is not None:
-            self.histIn = histIn
-        if histOut is not None:
-            self.histOut = histOut
-        self.setParams(norm=normalization, nHist=nHist)
+        self._retrieve = retrieve
+        self.setParams(normalization=normalization, nHist=nHist)
+
+        # create code if needed
+        if HistogramReducer.byte_code is None:
+            HistogramReducer.byte_code = compileShader("estimator.reduce.glsl")
+        # create specialization
+        spec = HistogramReducer.Constants(batchSize=batchSize, nBins=nBins)
+        # compile
+        self._program = hp.Program(HistogramReducer.byte_code, bytes(spec))
+        self._groups = -(nBins // -batchSize)
+
+        # allocate memory if needed
+        n = nBins * nHist
+        self._histIn = hp.FloatTensor(n) if histIn is None else histIn
+        self._histOut = hp.FloatTensor(nBins) if histOut is None else histOut
+        self._buffer = [hp.FloatBuffer(nBins) if retrieve else None for _ in range(2)]
+        # bind memory
+        self._program.bindParams(HistogramIn=self._histIn, HistogramOut=self._histOut)
+
+    @property
+    def batchSize(self) -> int:
+        """Number of threads per workgroup"""
+        return self._batchSize
 
     @property
     def histIn(self) -> hp.Tensor:
-        """Tensor containing the histograms to reduce"""
+        """Tensor containing the list of histograms to reduce"""
         return self._histIn
-
-    @histIn.setter
-    def histIn(self, value: hp.Tensor) -> None:
-        self._histIn = value
-        self._program.bindParams(HistogramIn=value)
 
     @property
     def histOut(self) -> hp.Tensor:
-        """Tensor containing the histogram where the result will be stored"""
+        """Tensor containing the final reduced histogram"""
         return self._histOut
-
-    @histOut.setter
-    def histOut(self, value: hp.Tensor) -> None:
-        self._histOut = value
-        self._program.bindParams(HistogramOut=value)
 
     @property
     def nBins(self) -> int:
@@ -110,342 +372,259 @@ class HistogramReducer(PipelineStage):
         return self._nBins
 
     @property
-    def code(self) -> bytes:
-        """Compiled source code for given configuration"""
-        return self._code
+    def retrieve(self) -> bool:
+        """Wether to retrieve the final histogram"""
+        return self._retrieve
 
-    # pipeline stage api
+    def result(self, i: int) -> Optional[NDArray]:
+        """The retrieved i-th histogram. `None` if `retrieve`was set to `False`"""
+        return self._buffer[i].numpy() if self.retrieve else None
 
     def run(self, i: int) -> List[hp.Command]:
         self._bindParams(self._program, i)
-        return [self._program.dispatch(self._groupSize)]
+        cmds = [self._program.dispatch(self._groups)]
+        if self.retrieve:
+            cmds.append(hp.retrieveTensor(self.histOut, self._buffer[i]))
+        return cmds
 
 
-class HistogramEstimator(PipelineStage):
+class HistogramEstimator(Estimator):
     """
-    Estimator producing a light curve by computing the histogram of samples.
+    Estimator producing a histogram from the provided value samples as a
+    function of time in a given frame.
 
     Parameters
     ----------
-    maxSamples: int
-        Maximum number of samples the estimator can process in a single run.
-    queue: hp.Tensor
-        Tensor containing the hit queue to be processed
-    code: str | Dict[str, bytes] | None
-        Either the source code for the response function or the dict of
-        compiled shaders. If None, the default Lambertian response function is
-        used (black body). The compiled shader must match the configuration and
-        might differ on different machines.
-    nBins: int, default=256
+    capacity: int
+        Maximum number of items that can be stored in the estimator's
+        `ValueItem` queue
+    nBins: int, default=100
         Number of bins in the histogram
-    nPhotons: int, default=4
-        Number of photons in single ray hit
     t0: float, default=0.0
-        first bin edge, i.e. earliest time a sample gets binned
+        First bin edge, i.e. the minimum time value a sample has to have to get
+        included
     binSize: float, default=1.0
-        size of a single bin (unit of time)
+        Size of a single bin in unit of time
     normalization: float, default=1.0
-        common factor each bin gets multiplied with
+        Common factor each bin gets multiplied with
     clearQueue: bool, default=True
-        True, if the queue should be reset/cleared after the estimator processed
-        it.
-    blockSize: int, default=128
-        number of threads in a single local work group (block size in CUDA)
+        Wether the input queue should be cleared after processing it
+    retrieve: bool, default=True
+        Wether to retrieve the final histogram
+    batchSize: int, default=128
+        Number of items processed per workgroup during item processing
+    batchSizeReduce: int, default=128
+        Number of items processed per workgroup during reduction
+    code: bytes | None, default=None
+        Compiled source code. If `None`, the byte code get's compiled from
+        source. Note, that the compiled code is not checked. You must ensure
+        it matches the configuration.
+
+    Stage Parameters
+    ----------------
+    t0: float
+        First bin edge, i.e. the minimum time value a sample has to have to get
+        included
+    binSize: float, default=1.0
+        Size of a single bin in unit of time
+    normalization
+        Common factor each bin gets multiplied with
     """
 
-    name = "Histogram Estimator"
-
     class Params(Structure):
-        """Struct defining parameter uniform"""
+        """Histogram Params"""
 
         _fields_ = [
             ("t0", c_float),
             ("binSize", c_float),
-            ("detectorId", c_uint32),
         ]
 
     def __init__(
         self,
-        maxSamples: int,
-        queue: hp.Tensor,
-        code: Union[str, Dict[str, bytes], None] = None,
+        capacity: int,
         *,
-        detectorId: int = 0,
-        nBins: int = 256,
-        nPhotons: int = 4,
+        nBins: int = 100,
         t0: float = 0.0,
         binSize: float = 1.0,
         normalization: float = 1.0,
         clearQueue: bool = True,
-        blockSize: int = 128,
+        retrieve: bool = True,
+        batchSize: int = 128,
+        batchSizeReduce: int = 128,
+        code: Optional[bytes] = None,
     ) -> None:
-        super().__init__({"Parameters": self.Params}, {"norm"})
-        # allocate histograms
-        self._nHist = -(maxSamples // -blockSize)  # ceil division
-        self._gpuHist = hp.FloatTensor(self._nHist * nBins)
-        self._reducedHist = hp.FloatTensor(nBins)
-
-        # compile source code if needed
-        if code is None:
-            code = loadShader("response.lambertian.glsl")
-        if type(code) is str:
-            # create preamble
-            preamble = ""
-            preamble += f"#define HIT_QUEUE_SIZE {maxSamples}\n"
-            preamble += f"#define BATCH_SIZE {blockSize}\n"
-            preamble += f"#define N_BINS {nBins}\n"
-            preamble += f"#define N_PHOTONS {nPhotons}\n\n"
-            # compile source code
-            headers = {"response.glsl": code}
-            code = {"hist": compileShader("estimator.hist.glsl", preamble, headers)}
+        super().__init__(
+            capacity, clearQueue, {"Parameters": self.Params}, {"normalization"}
+        )
+        # save params
+        self._batchSize = batchSize
+        self.setParams(t0=t0, binSize=binSize)
 
         # create reducer
+        self._groups = -(capacity // -batchSize)
         self._reducer = HistogramReducer(
-            histIn=self._gpuHist,
-            histOut=self._reducedHist,
-            nHist=self._nHist,
             nBins=nBins,
+            nHist=self._groups,
             normalization=normalization,
-            blockSize=blockSize,
-            code=code["reducer"] if "reducer" in code else None,
+            retrieve=retrieve,
+            batchSize=batchSizeReduce,
         )
-        code["reducer"] = self._reducer.code
+
+        # compile code if needed
+        if code is None:
+            preamble = ""
+            preamble += f"#define BATCH_SIZE {batchSize}\n"
+            preamble += f"#define N_BINS {nBins}\n"
+            preamble += f"#define VALUE_QUEUE_SIZE {capacity}\n\n"
+            code = compileShader("estimator.hist.glsl", preamble)
         self._code = code
         # create program
-        self._program = hp.Program(code["hist"])
-        self._program.bindParams(Histograms=self._gpuHist, HitQueueBuffer=queue)
-
-        # save params
-        self._maxSamples = maxSamples
-        self._nBins = nBins
-        self._nPhotons = nPhotons
-        self._queue = queue
-        self._clearQueue = clearQueue
-        self.setParams(binSize=binSize, detectorId=detectorId, t0=t0)
+        self._program = hp.Program(code)
+        # bind memory
+        self._program.bindParams(HistogramOut=self._reducer.histIn, ValueIn=self.queue)
 
     @property
-    def code(self) -> Dict[str, bytes]:
-        """Compiled source code for given configuration"""
+    def batchSize(self) -> int:
+        """Number of threads per workgroup during item processing"""
+        return self._batchSize
+
+    @property
+    def batchSizeReduce(self) -> int:
+        """Number of threads per workgroup during reduction"""
+        return self._reducer.batchSize
+
+    @property
+    def code(self) -> bytes:
+        """Compiled source code. Can be used for caching"""
         return self._code
-
-    @property
-    def norm(self) -> float:
-        """common factor each bin gets multiplied with"""
-        return self._reducer.getParam("norm")
-
-    @norm.setter
-    def norm(self, value: float) -> None:
-        self._reducer.setParam("norm", value)
-
-    @property
-    def clearQueue(self) -> bool:
-        """
-        True, if the queue should be reset/cleared after the estimator processed
-        it.
-        """
-        return self._clearQueue
-
-    @clearQueue.setter
-    def clearQueue(self, value: bool) -> None:
-        self._clearQueue = value
-
-    @property
-    def queue(self) -> hp.Tensor:
-        """Queue containing the samples"""
-        return self._queue
-
-    @property
-    def histogram(self) -> hp.Tensor:
-        """Tensor containing the result histogram"""
-        return self._reducedHist
 
     @property
     def nBins(self) -> int:
         """Number of bins in the histogram"""
-        return self._nBins
+        return self._reducer.nBins
 
     @property
-    def nPhotons(self) -> int:
-        """Number of photons in single ray hit"""
-        return self._nPhotons
+    def normalization(self) -> float:
+        """Common factor each bin gets multiplied with"""
+        return self._reducer.getParam("normalization")
+
+    @normalization.setter
+    def normalization(self, value: float) -> None:
+        self._reducer.setParam("normalization", value)
 
     @property
-    def maxSamples(self) -> int:
-        """Maximum number of samples the estimator can process in a single run"""
-        return self._maxSamples
+    def resultTensor(self) -> hp.Tensor:
+        """Tensor holding the final histogram"""
+        return self._reducer.histOut
 
-    def bindParams(self, **kwargs) -> None:
-        """Binds extra params user provided shader code may have defined"""
-        self._program.bindParams(**kwargs)
+    @property
+    def retrieve(self) -> bool:
+        """Wether to retrieve the final histogram"""
+        return self._reducer.retrieve
 
-    # pipeline stage api
+    def result(self, i: int) -> Optional[NDArray]:
+        """The retrieved i-th histogram. `None` if `retrieve`was set to `False`"""
+        return self._reducer.result(i)
+
+    # Pipeline API
 
     def update(self, i: int) -> None:
+        # also update reducer
         self._reducer.update(i)
         super().update(i)
 
     def run(self, i: int) -> List[hp.Command]:
         self._bindParams(self._program, i)
         return [
-            hp.clearTensor(self._reducedHist),
-            self._program.dispatch(self._nHist),
+            self._program.dispatch(self._groups),
             *([clearQueue(self.queue)] if self.clearQueue else []),
             hp.flushMemory(),
             *self._reducer.run(i),
         ]
 
 
-class HostEstimator(PipelineStage):
+class ValueHitResponse(HitResponse):
     """
-    Proxy estimator copying back samples from the GPU to the CPU without
-    performing any calculations.
+    Template class using a provided value function creating a single float
+    for each hit and stores it with its timestamp on a queue for further
+    processing. Expects the value function as GLSL code:
+
+    ```
+    float responseValue(HitItem item)
+    ```
 
     Parameters
     ----------
-    capacity: int
-        Maximum number of samples the estimator can process in a single run.
-    nPhotons: int
-        Number of photons in single ray hit
-    queue: hp.Tensor
-        Tensor containing the response queue from which to copy the samples.
-    clearQueue: bool, default=True
-        True, if the queue should be reset/cleared after the estimator processed
-        it.
+    store: Estimator | QueueTensor
+        Where to store the produced `ValueItem`
+    params: {str: Structure}, default={}
+        Dictionary of named ctype structure containing the stage's parameters.
+        Each structure will be allocated on the CPU side and twice on the GPU
+        for buffering. The latter can be bound in programs
+    extra: {str}, default={}
+        Set of extra parameter name, that can be set and retrieved using the
+        stage api. Take precedence over parameters defined by structs. Should
+        be be implemented in subclasses as properties.
     """
 
-    name = "Host Estimator"
-
-    def __init__(
-        self, capacity: int, nPhotons: int, queue: hp.Tensor, *, clearQueue: bool = True
-    ) -> None:
-        super().__init__({})
-        # save params
-        self._capacity = capacity
-        self._nPhotons = nPhotons
-        self._queue = queue
-        self._clearQueue = clearQueue
-
-        # create queue
-        self._item = createHitQueueItem(nPhotons)
-        self._buffers = [QueueBuffer(self._item, capacity) for _ in range(2)]
-
-    @property
-    def capacity(self) -> int:
-        """Maximum number of samples the estimator can process in a single run"""
-        return self._capacity
-
-    @property
-    def item(self) -> Type[Structure]:
-        """Structure describing a single item in the queue"""
-        return self._item
-
-    @property
-    def nPhotons(self) -> int:
-        """Number of photons in single ray hit"""
-        return self._nPhotons
-
-    @property
-    def sampleType(self) -> Type[Structure]:
-        """Returns the structure describing a single sample"""
-        return self._sampleType
-
-    @property
-    def queue(self) -> hp.Tensor:
-        """
-        Tensor containing the response queue from which to copy the samples.
-        Must be set before running
-        """
-        return self._queue
-
-    @property
-    def clearQueue(self) -> bool:
-        """
-        True, if the queue should be reset/cleared after the estimator processed
-        it.
-        """
-        return self._clearQueue
-
-    @clearQueue.setter
-    def clearQueue(self, value: bool) -> None:
-        self._clearQueue = value
-
-    def view(self, i: int) -> QueueView:
-        """Returns the view into the i-th queue buffer"""
-        return self._buffers[i].view
-
-    # pipeline stage api
-
-    def run(self, i: int) -> List[hp.Command]:
-        return [
-            hp.retrieveTensor(self.queue, self._buffers[i]),
-            *([clearQueue(self.queue)] if self.clearQueue else []),
-        ]
-
-
-class CachedSampleSource(PipelineStage):
-    """
-    Utility class for feeding cached samples (e.g. from HostEstimator) back into
-    the pipeline.
-
-    Parameters
-    ----------
-    capacity: int
-        Maximum number of samples per run
-    nPhotons: int
-        Number of photons in single ray hit
-    updateFn: (numpy array) -> None | None, default=None
-        Optional function to be called before a task is run on the pipeline.
-        Called with this object and the index of the buffer to fill.
-        May be used to load data
-    """
-
-    name = "Cached Sample Source"
+    # lazily load template code
+    template_code = None
 
     def __init__(
         self,
-        capacity: int,
-        nPhotons: int,
-        updateFn: Optional[Callable[[CachedSampleSource, int], None]] = None,
+        store: Estimator | QueueTensor,
+        params: Dict[str, Type[Structure]] = {},
+        extra: Set[str] = set(),
     ) -> None:
-        super().__init__({})
-        # save params
-        self._capacity = capacity
-        self._nPhotons = nPhotons
-        self._updateFn = updateFn
-
-        # create queue
-        self._item = createHitQueueItem(nPhotons)
-        self._buffers = [QueueBuffer(self._item, capacity) for _ in range(2)]
-        self._tensor = QueueTensor(self._item, capacity)
-
-        # by default, copy whole buffer
-        for i in range(2):
-            self.view(i).count = capacity
+        super().__init__(params, extra)
+        if isinstance(store, Estimator):
+            self._queue = store.queue
+        elif isinstance(store, QueueTensor):
+            self._queue = store
+        else:
+            raise ValueError("queue is not of valid type!")
 
     @property
-    def capacity(self) -> int:
-        """Maximum number of samples the estimator can process in a single run"""
-        return self._capacity
+    def queue(self) -> QueueTensor:
+        """Tensor to be filled with `ValueItem` by this response function"""
+        return self._queue
 
     @property
-    def nPhotons(self) -> int:
-        """Number of photons in single ray hit"""
-        return self._nPhotons
+    @abstractmethod
+    def valueFunction(self) -> str:
+        """Source code of the value function"""
+        pass
 
     @property
-    def queue(self) -> hp.Tensor:
-        """Tensor containing the cached samples on the GPU"""
-        return self._tensor
+    def sourceCode(self) -> str:
+        # lazily load value store code
+        if ValueHitResponse.template_code is None:
+            ValueHitResponse.template_code = loadShader("response.value.glsl")
+        # create preamble
+        preamble = ""
+        preamble += f'#include "response.queue.glsl"\n\n'
+        preamble += f"#define VALUE_QUEUE_SIZE {self.queue.capacity}\n\n"
+        # assemble full source code
+        return preamble + self.valueFunction + "\n" + ValueHitResponse.template_code
 
-    def view(self, i: int) -> QueueView:
-        """Returns the view into the i-th queue"""
-        return self._buffers[i].view
+    def bindParams(self, program: hp.Program, i: int) -> None:
+        super().bindParams(program, i)
+        program.bindParams(ValueQueueOut=self.queue)
 
-    # pipeline stage api
 
-    def update(self, i: int) -> None:
-        if self._updateFn is not None:
-            self._updateFn(self, i)
+class LambertHitResponse(ValueHitResponse):
+    """
+    Response function producing a value according to Lambert's cosine law.
+    """
 
-    def run(self, i: int) -> List[hp.Command]:
-        return [hp.updateTensor(self._buffers[i], self._tensor)]
+    # lazy code loading
+    source_code = None
+
+    def __init__(self, store: Estimator | QueueTensor) -> None:
+        super().__init__(store)
+
+    @property
+    def valueFunction(self) -> str:
+        if LambertHitResponse.source_code is None:
+            LambertHitResponse.source_code = loadShader("response.lambert.glsl")
+        return LambertHitResponse.source_code

@@ -1,122 +1,97 @@
 import numpy as np
 import theia.estimator
 
-from common.queue import *
-from hephaistos.pipeline import RetrieveTensorStage, runPipeline
+from hephaistos.pipeline import RetrieveTensorStage, UpdateTensorStage, runPipeline
+from hephaistos.queue import QueueTensor, as_queue
+
+
+def test_record(rng):
+    N = 8192
+
+    record = theia.estimator.HitRecorder(N)
+    replay = theia.estimator.HitReplay(N, record)
+
+    samples = replay.view(0)
+    samples["position"] = 10.0 * rng.random((N, 3)) - 5.0
+    samples["direction"] = rng.random((N, 3))
+    samples["normal"] = rng.random((N, 3))
+    samples["wavelength"] = rng.random((N,)) * 100.0 + 400.0
+    samples["time"] = rng.random((N,)) * 100.0
+    # use contrib to encode ordering (gpu will scramble items)
+    samples["contrib"] = np.arange(N).astype(np.float32)
+
+    runPipeline([replay, record])
+
+    results = record.view(0)
+    assert results.count == N
+    # restore ordering via contrib
+    results = results[np.argsort(results["contrib"])]
+    assert np.all(samples["position"] == results["position"])
+    assert np.all(samples["direction"] == results["direction"])
+    assert np.all(samples["normal"] == results["normal"])
+    assert np.all(samples["wavelength"] == results["wavelength"])
+    assert np.all(samples["time"] == results["time"])
+    assert np.all(samples["contrib"] == results["contrib"])
 
 
 def test_histogram(rng):
-    N = 32 * 256
-    N_BINS = 64
-    BIN_SIZE = 2.0
-    NORM = 0.3
-    T0 = 30.0
+    N = 32 * 1024
+    N_BINS = 50
+    BIN_SIZE = 4.0
+    T0 = 20.0
     T1 = T0 + N_BINS * BIN_SIZE
+    NORM = 0.01
 
-    # upload data via cached estimator
-    cache = theia.estimator.CachedSampleSource(N, N_PHOTONS)
-    # create estimator
     estimator = theia.estimator.HistogramEstimator(
         N,
-        cache.queue,
-        None,
         nBins=N_BINS,
-        nPhotons=N_PHOTONS,
         t0=T0,
         binSize=BIN_SIZE,
         normalization=NORM,
+        clearQueue=False,
     )
+    updater = UpdateTensorStage(estimator.queue)
+    data = as_queue(updater.buffer(0), theia.estimator.ValueItem)
 
-    # fill data
-    samples = cache.view(0)
-    samples["position"] = np.stack(
-        [rng.normal(0.0, 10.0, N), rng.normal(0.0, 10.0, N), rng.normal(0.0, 10.0, N)],
-        axis=-1,
-    )
-    cos_theta_dir = 2.0 * rng.random(N) - 1.0
-    sin_theta_dir = np.sqrt(1.0 - cos_theta_dir**2)
-    phi_dir = 2.0 * np.pi * rng.random(N)
-    samples["direction"] = np.stack(
-        [
-            sin_theta_dir * np.cos(phi_dir),
-            sin_theta_dir * np.sin(phi_dir),
-            cos_theta_dir,
-        ],
-        axis=-1,
-    )
-    cos_theta_nrm = 2.0 * rng.random(N) - 1.0
-    sin_theta_nrm = np.sqrt(1.0 - cos_theta_nrm**2)
-    phi_nrm = 2.0 * np.pi * rng.random(N)
-    samples["normal"] = np.stack(
-        [
-            sin_theta_nrm * np.cos(phi_nrm),
-            sin_theta_nrm * np.sin(phi_nrm),
-            cos_theta_nrm,
-        ],
-        axis=-1,
-    )
-    samples["wavelength"] = rng.random((N, N_PHOTONS)) * 600.0 + 200.0
-    time = rng.random((N, N_PHOTONS)) * 200.0
-    contrib = rng.random((N, N_PHOTONS)) * 5.0 - 2.0
-    samples["time"] = time
-    samples["contribution"] = contrib
+    data.count = N
+    data["value"] = rng.random(N)
+    data["time"] = rng.random(N) * 300.0
 
-    # run estimator
-    retriever = RetrieveTensorStage(estimator.histogram)
-    runPipeline([cache, estimator, retriever])
+    runPipeline([updater, estimator])
 
-    # calculate expected result
-    cosine = -np.multiply(samples["normal"], samples["direction"]).sum(-1)
-    weights = (contrib * cosine[:, None] * NORM).flatten()
-    hist_exp, _ = np.histogram(time.flatten(), N_BINS, (T0, T1), weights=weights)
-    # check result
-    hist = retriever.view(0)
-    assert np.allclose(hist, hist_exp)
+    result = estimator.result(0)
+    expected = np.histogram(data["time"], N_BINS, (T0, T1), weights=data["value"])[0]
+    assert np.allclose(result, expected * NORM)
 
 
-def test_hostEstimator(rng):
-    N = 32 * 256
+def test_lambertResponse(rng):
+    N = 32 * 1024
 
-    # create pipeline
-    cache = theia.estimator.CachedSampleSource(N, N_PHOTONS)
-    estimator = theia.estimator.HostEstimator(N, N_PHOTONS, cache.queue)
+    queue = QueueTensor(theia.estimator.ValueItem, N)
+    lambert = theia.estimator.LambertHitResponse(queue)
+    replay = theia.estimator.HitReplay(N, lambert)
+    fetch = RetrieveTensorStage(queue)
 
-    # fill data
-    samples = cache.view(0)
-    samples["position"] = np.stack(
-        [rng.normal(0.0, 10.0, N), rng.normal(0.0, 10.0, N), rng.normal(0.0, 10.0, N)],
-        axis=-1,
-    )
-    cos_theta_dir = 2.0 * rng.random(N) - 1.0
-    sin_theta_dir = np.sqrt(1.0 - cos_theta_dir**2)
-    phi_dir = 2.0 * np.pi * rng.random(N)
-    samples["direction"] = np.stack(
-        [
-            sin_theta_dir * np.cos(phi_dir),
-            sin_theta_dir * np.sin(phi_dir),
-            cos_theta_dir,
-        ],
-        axis=-1,
-    )
-    cos_theta_nrm = 2.0 * rng.random(N) - 1.0
-    sin_theta_nrm = np.sqrt(1.0 - cos_theta_nrm**2)
-    phi_nrm = 2.0 * np.pi * rng.random(N)
-    samples["normal"] = np.stack(
-        [
-            sin_theta_nrm * np.cos(phi_nrm),
-            sin_theta_nrm * np.sin(phi_nrm),
-            cos_theta_nrm,
-        ],
-        axis=-1,
-    )
-    samples["wavelength"] = rng.random((N, N_PHOTONS)) * 600.0 + 200.0
-    samples["time"] = rng.random((N, N_PHOTONS)) * 100.0
-    samples["contribution"] = rng.random((N, N_PHOTONS)) * 50.0
+    hits = replay.view(0)
+    hits["position"] = 10.0 * rng.random((N, 3)) - 5.0
+    dir = rng.random((N, 3))
+    dir = dir / np.sqrt(np.square(dir).sum(-1))[:, None]
+    hits["direction"] = dir
+    nrm = -rng.random((N, 3))  # put normal in opposite octant
+    nrm = nrm / np.sqrt(np.square(nrm).sum(-1))[:, None]
+    hits["normal"] = nrm
+    hits["wavelength"] = rng.random((N,)) * 100.0 + 400.0
+    hits["contrib"] = rng.random((N,))
+    # use time to match samples
+    hits["time"] = np.arange(N).astype(np.float32)
 
-    # run estimator
-    runPipeline([cache, estimator])
+    runPipeline([replay, fetch])
 
-    # check result
-    result = estimator.view(0)
-    for field in samples.fields:
-        assert np.all(samples[field] == result[field])
+    result = as_queue(fetch.buffer(0), theia.estimator.ValueItem)
+    time, value = result["time"], result["value"]
+    # sort by time
+    value = value[time.argsort()]
+
+    # compare with expected results
+    expected = -np.multiply(hits["direction"], hits["normal"]).sum(-1) * hits["contrib"]
+    assert np.allclose(value, expected)
