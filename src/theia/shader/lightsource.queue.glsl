@@ -37,21 +37,21 @@ SourceSample RAY##_samples[N_LAMBDA];\
         QUEUE.contrib[i][IDX]);\
 }\
 SourceRay RAY = SourceRay(\
-    vec3(QUEUE.posX[idx], QUEUE.posY[idx], QUEUE.posZ[idx]),\
-    vec3(QUEUE.dirX[idx], QUEUE.dirY[idx], QUEUE.dirZ[idx]),\
+    vec3(QUEUE.posX[IDX], QUEUE.posY[IDX], QUEUE.posZ[IDX]),\
+    vec3(QUEUE.dirX[IDX], QUEUE.dirY[IDX], QUEUE.dirZ[IDX]),\
     RAY##_samples);
 
 #define SAVE_SAMPLE(RAY, QUEUE, IDX) \
 [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {\
-    QUEUE.wavelength[i][idx] = RAY.samples[i].wavelength;\
-    QUEUE.startTime[i][idx] = RAY.samples[i].startTime;\
-    QUEUE.contrib[i][idx] = RAY.samples[i].contrib;\
+    QUEUE.wavelength[i][IDX] = RAY.samples[i].wavelength;\
+    QUEUE.startTime[i][IDX] = RAY.samples[i].startTime;\
+    QUEUE.contrib[i][IDX] = RAY.samples[i].contrib;\
 }\
-QUEUE.posX[idx] = RAY.position.x;\
-QUEUE.posY[idx] = RAY.position.y;\
-QUEUE.posZ[idx] = RAY.position.z;\
-QUEUE.dirX[idx] = RAY.direction.x;\
-QUEUE.dirY[idx] = RAY.direction.y;\
-QUEUE.dirZ[idx] = RAY.direction.z;
+QUEUE.posX[IDX] = RAY.position.x;\
+QUEUE.posY[IDX] = RAY.position.y;\
+QUEUE.posZ[IDX] = RAY.position.z;\
+QUEUE.dirX[IDX] = RAY.direction.x;\
+QUEUE.dirY[IDX] = RAY.direction.y;\
+QUEUE.dirZ[IDX] = RAY.direction.z;
 
 #endif
