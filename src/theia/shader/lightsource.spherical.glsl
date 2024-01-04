@@ -21,8 +21,8 @@ SourceRay sampleLight(uint idx) {
     //float prob = INV_4PI / dLam / time_duration;
     SourceSample samples[N_LAMBDA];
     for (int i = 0; i < N_LAMBDA; ++i) {
-        float lambda = lightParams.lambda_min + delta_lambda * random(idx, 0);
-        float t = lightParams.t_min + delta_time * random(idx, 1);
+        float lambda = lightParams.lambda_min + delta_lambda * random(idx, 2*i + 0);
+        float t = lightParams.t_min + delta_time * random(idx, 2*i + 1);
 
         samples[i] = SourceSample(
             lambda,
@@ -32,7 +32,7 @@ SourceRay sampleLight(uint idx) {
     }
 
     //sample direction
-    vec2 u = random2D(idx, 2);
+    vec2 u = random2D(idx, 2 * N_LAMBDA);
     float cos_theta = 2.0 * u.x - 1.0;
     float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
     float phi = TWO_PI * u.y;
