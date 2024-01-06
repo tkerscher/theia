@@ -2,11 +2,11 @@
 #define _SCATTER_SURFACE_INCLUDE
 
 #include "material.glsl"
-#include "ray.glsl"
 
 float reflectance(
     const Material material,
-    const Photon photon,
+    const float wavelength,
+    const float n_i,
     const vec3 direction,
     const vec3 normal
 ) {
@@ -18,10 +18,9 @@ float reflectance(
     Medium otherMed = cos_i <= 0.0 ? material.inside : material.outside;
     float n_t = 1.0;
     if (uint64_t(otherMed) != 0) {
-        float u_t = normalize_lambda(otherMed, photon.wavelength);
+        float u_t = normalize_lambda(otherMed, wavelength);
         n_t = lookUp(otherMed.n, u_t, 1.0);
     }
-    float n_i = photon.constants.n;
 
     //calculate outgoing angle (Snell's law)
     float sin_t = sin_i * n_i / n_t;
