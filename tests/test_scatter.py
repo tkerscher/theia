@@ -7,23 +7,15 @@ from hephaistos.glsl import vec3, uvec2, stackVector
 import theia.material
 import theia.random
 
-from common.items import *
 from common.models import WaterModel
 
 from numpy.lib.recfunctions import structured_to_unstructured
 from theia.util import packUint64
 
 
-NPH = 4
-N = 32 * 1024
-
-preamble = f"""
-#define N_PHOTONS {NPH}
-#define QUEUE_SIZE {N}
-"""
-
-
 def test_scatterDir(rng, shaderUtil):
+    N = 32 * 1024
+
     # reserve memory
     class Query(Structure):
         _fields_ = [("inDir", vec3), ("cos_theta", c_float), ("phi", c_float)]
@@ -44,7 +36,7 @@ def test_scatterDir(rng, shaderUtil):
     queries["phi"] = 2.0 * np.pi * rng.random(N)
 
     # create and run test
-    program = shaderUtil.createTestProgram("scatter.scatterDir.test.glsl", preamble)
+    program = shaderUtil.createTestProgram("scatter.scatterDir.test.glsl")
     program.bindParams(QueryBuffer=query_tensor, ResultBuffer=result_tensor)
     (
         hp.beginSequence()
@@ -106,15 +98,9 @@ def reflectance(cos_i, n_i, n_t):
     return 0.5 * (rs * rs + rp * rp)
 
 
-class Query(Structure):
-    _fields_ = [("direction", vec3), ("normal", vec3), ("wavelength", c_float)]
+def test_reflectance(rng, shaderUtil):
+    N = 32 * 1024
 
-
-class Scene(Structure):
-    _fields_ = [("mat", c_uint64)]
-
-
-def prepareRayQueries(N, rng):
     # we only need the refractive index so we can skip the phase functions
     class WaterModel(theia.material.WaterBaseModel, theia.material.MediumModel):
         def __init__(self) -> None:
@@ -129,43 +115,50 @@ def prepareRayQueries(N, rng):
     )
     # bake material
     mat_tensor, mats, media = theia.material.bakeMaterials(material)
-    scene = Scene(mat=mats["material"])
+    mat = mats["material"]
+
+    # define types
+    class Query(Structure):
+        _fields_ = [("dir", c_float * 3), ("nrm", c_float * 3), ("lambda", c_float)]
 
     # reserve memory
-    class Query(Structure):
-        _fields_ = [("direction", vec3), ("normal", vec3), ("wavelength", c_float)]
-
     query_buffer = hp.ArrayBuffer(Query, N)
-    # fill query buffer
+    query_tensor = hp.ArrayTensor(Query, N)
+    result_buffer = hp.FloatBuffer(N)
+    result_tensor = hp.FloatTensor(N)
+
+    # fill input
     queries = query_buffer.numpy()
-    d_theta = rng.random(N, np.float32) * np.pi
-    d_phi = rng.random(N, np.float32) * 2.0 * np.pi
-    n_theta = rng.random(N, np.float32) * np.pi
-    n_phi = rng.random(N, np.float32) * 2.0 * np.pi
-    queries["direction"] = stackVector(
-        (
-            np.sin(d_theta) * np.cos(d_phi),
-            np.sin(d_theta) * np.sin(d_phi),
-            np.cos(d_theta),
-        ),
-        vec3,
+    phi_in = rng.random(N) * 2.0 * np.pi
+    cos_theta_in = rng.random(N) * 2.0 - 1.0
+    sin_theta_in = np.sqrt(1.0 - cos_theta_in**2)
+    queries["dir"][:, 0] = sin_theta_in * np.cos(phi_in)
+    queries["dir"][:, 1] = sin_theta_in * np.sin(phi_in)
+    queries["dir"][:, 2] = cos_theta_in
+    phi_nrm = rng.random(N) * 2.0 * np.pi
+    cos_theta_nrm = rng.random(N) * 2.0 - 1.0
+    sin_theta_nrm = np.sqrt(1.0 - cos_theta_nrm**2)
+    queries["nrm"][:, 0] = sin_theta_nrm * np.cos(phi_nrm)
+    queries["nrm"][:, 1] = sin_theta_nrm * np.sin(phi_nrm)
+    queries["nrm"][:, 2] = cos_theta_nrm
+    queries["lambda"] = 300.0 * rng.random(N) + 400.0
+
+    # create program and run it
+    program = shaderUtil.createTestProgram("scatter.reflectance.test.glsl")
+    program.bindParams(QueryBuffer=query_tensor, ResultBuffer=result_tensor)
+    (
+        hp.beginSequence()
+        .And(hp.updateTensor(query_buffer, query_tensor))
+        .Then(program.dispatchPush(bytes(packUint64(mat)), N // 32))
+        .Then(hp.retrieveTensor(result_tensor, result_buffer))
+        .Submit()
+        .wait()
     )
-    queries["normal"] = stackVector(
-        (
-            np.sin(n_theta) * np.cos(n_phi),
-            np.sin(n_theta) * np.sin(n_phi),
-            np.cos(n_theta),
-        ),
-        vec3,
-    )
-    queries["wavelength"] = rng.random(N, np.float32) * 600.0 + 200.0
 
     # calculate expected reflectance
-    directions = structured_to_unstructured(queries["direction"])
-    normals = structured_to_unstructured(queries["normal"])
-    cos_theta = np.multiply(directions, normals).sum(-1)
-    n_inside = inside.refractive_index(queries["wavelength"])
-    n_outside = outside.refractive_index(queries["wavelength"])
+    cos_theta = np.multiply(queries["dir"], queries["nrm"]).sum(-1)
+    n_inside = inside.refractive_index(queries["lambda"])
+    n_outside = outside.refractive_index(queries["lambda"])
     mask = cos_theta <= 0.0
     n_i = n_inside.copy()
     n_i[mask] = n_outside[mask]
@@ -173,29 +166,6 @@ def prepareRayQueries(N, rng):
     n_t[mask] = n_inside[mask]
     cos_i = np.abs(cos_theta)
     r = reflectance(cos_i, n_i, n_t)
-
-    return query_buffer, scene, n_i, n_t, r, mat_tensor
-
-
-def test_reflectance(rng, shaderUtil):
-    query_buffer, scene, n_i, n_t, r, mat_tensor = prepareRayQueries(N, rng)
-
-    # reserve memory
-    query_tensor = hp.ArrayTensor(Query, N)
-    result_buffer = hp.FloatBuffer(N)
-    result_tensor = hp.FloatTensor(N)
-
-    # create program and run it
-    program = shaderUtil.createTestProgram("scatter.reflectance.test.glsl", preamble)
-    program.bindParams(QueryBuffer=query_tensor, ResultBuffer=result_tensor)
-    (
-        hp.beginSequence()
-        .And(hp.updateTensor(query_buffer, query_tensor))
-        .Then(program.dispatchPush(bytes(scene), N // 32))
-        .Then(hp.retrieveTensor(result_tensor, result_buffer))
-        .Submit()
-        .wait()
-    )
 
     # check result
     results = result_buffer.numpy()
@@ -206,6 +176,7 @@ def test_reflectance(rng, shaderUtil):
 
 
 def test_volumeScatter(rng, shaderUtil):
+    N = 32 * 1024
     N_EMPTY = 32 * 64
 
     # create medium
@@ -215,20 +186,15 @@ def test_volumeScatter(rng, shaderUtil):
     tensor, _, media = theia.material.bakeMaterials(media=[water, empty])
 
     # define types
+    class Query(Structure):
+        _fields_ = [("dir", c_float * 3), ("medium", c_uint32 * 2)]
+
     class Result(Structure):
-        _fields_ = [
-            ("position", vec3),
-            ("direction", vec3),
-            ("rngStream", c_uint32),
-            ("rngCount", c_uint32),
-            ("medium", uvec2),  # uint64
-            ("photons", Photon * 4),
-            ("prob", c_float),
-        ]
+        _fields_ = [("dir", c_float * 3), ("prob", c_float)]
 
     # allocate memory
-    inputBuffer = hp.ArrayBuffer(Ray, N)
-    inputTensor = hp.ArrayTensor(Ray, N)
+    inputBuffer = hp.ArrayBuffer(Query, N)
+    inputTensor = hp.ArrayTensor(Query, N)
     outputBuffer = hp.ArrayBuffer(Result, N)
     outputTensor = hp.ArrayTensor(Result, N)
     # create rng
@@ -238,7 +204,7 @@ def test_volumeScatter(rng, shaderUtil):
     # create program
     headers = {"rng.glsl": philox.sourceCode}
     program = shaderUtil.createTestProgram(
-        "scatter.volume.scatter.test.glsl", preamble, headers=headers
+        "scatter.volume.scatter.test.glsl", headers=headers
     )
     # bind params
     philox.bindParams(program, 0)
@@ -249,11 +215,11 @@ def test_volumeScatter(rng, shaderUtil):
     phi = rng.random(N) * 2.0 * np.pi
     cos_theta_in = rng.random(N) * 2.0 - 1.0
     sin_theta_in = np.sqrt(1.0 - cos_theta_in**2)
-    queries["direction"] = stackVector(
-        [sin_theta_in * np.cos(phi), sin_theta_in * np.sin(phi), cos_theta_in], vec3
-    )
-    queries["medium"][N_EMPTY:] = packUint64(media["water"])
-    queries["medium"][:N_EMPTY] = packUint64(media["empty"])
+    queries["dir"][:, 0] = sin_theta_in * np.cos(phi)
+    queries["dir"][:, 1] = sin_theta_in * np.sin(phi)
+    queries["dir"][:, 2] = cos_theta_in
+    queries["medium"][N_EMPTY:] = packUint64(media["water"]).value
+    queries["medium"][:N_EMPTY] = packUint64(media["empty"]).value
 
     # run program
     (
@@ -267,8 +233,8 @@ def test_volumeScatter(rng, shaderUtil):
 
     # test result
     result = outputBuffer.numpy()
-    dir_in = structured_to_unstructured(queries["direction"])
-    dir_out = structured_to_unstructured(result["direction"])
+    dir_in = queries["dir"]
+    dir_out = result["dir"]
     cos_theta = np.multiply(dir_in, dir_out).sum(-1)
     # test lambertian disitribution
     bins = np.histogram(cos_theta[:N_EMPTY], bins=10, range=(-1, 1))[0]
@@ -314,13 +280,9 @@ def test_volumeScatterProb(rng, shaderUtil):
     # define type
     class Query(Structure):
         _fields_ = [
-            ("position", vec3),
-            ("direction", vec3),
-            ("rngStream", c_uint32),
-            ("rngCount", c_uint32),
-            ("medium", uvec2),  # uint64
-            ("photons", Photon * 4),
-            ("dir", vec3),
+            ("inDir", c_float * 3),
+            ("outDir", c_float * 3),
+            ("medium", c_uint32 * 2),
         ]
 
     # allocate memory
@@ -330,7 +292,7 @@ def test_volumeScatterProb(rng, shaderUtil):
     outputTensor = hp.FloatTensor(N)
 
     # create program
-    program = shaderUtil.createTestProgram("scatter.volume.prob.test.glsl", preamble)
+    program = shaderUtil.createTestProgram("scatter.volume.prob.test.glsl")
     # bind params
     program.bindParams(Input=inputTensor, Output=outputTensor)
 
@@ -339,23 +301,17 @@ def test_volumeScatterProb(rng, shaderUtil):
     phi_in = rng.random(N) * 2.0 * np.pi
     cos_theta_in = rng.random(N) * 2.0 - 1.0
     sin_theta_in = np.sqrt(1.0 - cos_theta_in**2)
-    queries["direction"] = stackVector(
-        [sin_theta_in * np.cos(phi_in), sin_theta_in * np.sin(phi_in), cos_theta_in],
-        vec3,
-    )
-    queries["medium"][: (N // 2)] = packUint64(media["water"])
-    queries["medium"][(N // 2) :] = packUint64(media["empty"])
+    queries["inDir"][:, 0] = sin_theta_in * np.cos(phi_in)
+    queries["inDir"][:, 1] = sin_theta_in * np.sin(phi_in)
+    queries["inDir"][:, 2] = cos_theta_in
+    queries["medium"][: (N // 2)] = packUint64(media["water"]).value
+    queries["medium"][(N // 2) :] = packUint64(media["empty"]).value
     phi_out = rng.random(N) * 2.0 * np.pi
     cos_theta_out = rng.random(N) * 2.0 - 1.0
     sin_theta_out = np.sqrt(1.0 - cos_theta_out**2)
-    queries["dir"] = stackVector(
-        [
-            sin_theta_out * np.cos(phi_out),
-            sin_theta_out * np.sin(phi_out),
-            cos_theta_out,
-        ],
-        vec3,
-    )
+    queries["outDir"][:, 0] = sin_theta_out * np.cos(phi_out)
+    queries["outDir"][:, 1] = sin_theta_out * np.sin(phi_out)
+    queries["outDir"][:, 2] = cos_theta_out
 
     # run program
     (
@@ -368,9 +324,7 @@ def test_volumeScatterProb(rng, shaderUtil):
     )
 
     # calc expected prob using models
-    dir_in = structured_to_unstructured(queries["direction"])
-    dir_out = structured_to_unstructured(queries["dir"])
-    cos_theta = np.multiply(dir_in, dir_out).sum(-1)
+    cos_theta = np.multiply(queries["inDir"], queries["outDir"]).sum(-1)
     p = np.empty(N)
     p[: (N // 2)] = np.exp(model.log_phase_function(cos_theta[: (N // 2)]))
     p[(N // 2) :] = 1.0 / (4.0 * np.pi)  # lambertian / empty model

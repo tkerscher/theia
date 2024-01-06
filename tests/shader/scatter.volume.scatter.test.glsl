@@ -10,12 +10,16 @@
 
 layout(local_size_x = 32) in;
 
+struct Query {
+    vec3 dir;
+    uvec2 medium;
+};
 layout(scalar) readonly buffer Input{
-    Ray rays[];
+    Query queries[];
 };
 
 struct Result{
-    Ray ray;
+    vec3 dir;
     float prob;
 };
 layout(scalar) writeonly buffer Output{
@@ -24,10 +28,10 @@ layout(scalar) writeonly buffer Output{
 
 void main() {
     uint i = gl_GlobalInvocationID.x;
-    Ray ray = rays[i]; 
+    Query q = queries[i];
     
     float prob;
-    scatter(ray, random2D(i, 0), prob);
+    vec3 dir = scatter(Medium(q.medium), q.dir, random2D(i, 0), prob);
 
-    results[i] = Result(ray, prob);
+    results[i] = Result(dir, prob);
 }
