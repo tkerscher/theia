@@ -36,8 +36,8 @@ class Medium:
         Table of refractive index as function of wavelength.
         None defaults to a constant value of 1.0.
     group_velocity: ArrayLike | None, default = None
-        Table of group velocity in units of c as function of wavelength.
-        None defaults to a constant value of 1.0 (c).
+        Table of group velocity in m/ns as function of wavelength.
+        None defaults to a constant value of `speed_of_light`.
     absorption_coef: ArrayLike | None, default = None
         Table of absorption coefficient in units of 1/m as function of wavelength.
         None defaults to a constant value of 0.0.
@@ -143,10 +143,10 @@ class Medium:
     @property
     def group_velocity(self) -> Union[npt.ArrayLike, None]:
         """
-        Table containing values of the group velocity in units of c as a
+        Table containing values of the group velocity in units of m/ns as a
         function of wavelength sampled at equidistant points on the range
         defined by lambda min/max.
-        If None, a constant value of 1.0 is assumed.
+        If None, a constant value of `speed_of_light` is assumed.
         """
         return self._group_velocity
 
