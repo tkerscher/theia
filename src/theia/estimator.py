@@ -93,7 +93,9 @@ class HitRecorder(HitResponse):
     def sourceCode(self) -> str:
         if HitRecorder.source_code is None:
             HitRecorder.source_code = loadShader("response.record.glsl")
-        return HitRecorder.source_code
+        preamble = ""
+        preamble += f"#define HIT_QUEUE_SIZE {self.capacity}\n\n"
+        return preamble + HitRecorder.source_code
 
     @property
     def tensor(self) -> QueueTensor:
@@ -602,7 +604,6 @@ class ValueHitResponse(HitResponse):
             ValueHitResponse.template_code = loadShader("response.value.glsl")
         # create preamble
         preamble = ""
-        preamble += f'#include "response.queue.glsl"\n\n'
         preamble += f"#define VALUE_QUEUE_SIZE {self.queue.capacity}\n\n"
         # assemble full source code
         return preamble + self.valueFunction + "\n" + ValueHitResponse.template_code
