@@ -11,44 +11,56 @@
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_vote : require
 
-/******************************* MACRO SETTINGS *******************************/
-// BATCH_SIZE:      int, work group size
-// HIT_QUEUE_SIZE:  int, max #items in hit queue
-// N_PHOTONS:       int, #photons per ray
-// N_SCATTER:       int, #scatter iterations to run
-// OUTPUT_RAYS:     def, if defined, saves rays after tracing
-// QUEUE_SIZE:      int, max #items in ray queue
+//check expected macros
+#ifndef BATCH_SIZE
+#error "BATCH_SIZE not defined"
+#endif
+#ifndef BLOCK_SIZE
+#error "BLOCK_SIZE not defined"
+#endif
+#ifndef N_LAMBDA
+#error "N_LAMBDA not defined"
+#endif
+#ifndef N_SCATTER
+#error "N_SCATTER not defined"
+#endif
+#ifndef DIM_OFFSET
+#error "DIM_OFFSET not defined"
+#endif
+// #samples per iteration
+#define DIM_STRIDE 5
 
-#include "hits.glsl"
+layout(local_size_x = BLOCK_SIZE) in;
+
+#include "material.glsl"
 #include "scatter.volume.glsl"
 #include "sphere.intersect.glsl"
-#include "ray.glsl"
+
+#include "lightsource.common.glsl"
+#include "response.common.glsl"
+//user provided code
 #include "rng.glsl"
+#include "source.glsl"
+#include "response.glsl"
 
-layout(local_size_x = BATCH_SIZE) in;
-
-layout(scalar) readonly buffer RayQueueBuffer {
-    uint rayCount;
-    RayQueue rayQueue;
+struct Sample {
+    float wavelength;
+    float time;
+    float lin_contrib;
+    float log_contrib;
+    MediumConstants constants;
 };
-layout(scalar) writeonly buffer HitQueueBuffer {
-    uint hitCount;
-    HitQueue hitQueue;
+struct Ray {
+    vec3 position;
+    vec3 direction;
+    Sample samples[N_LAMBDA];
 };
-#ifdef OUTPUT_RAYS
-layout(scalar) writeonly buffer OutRayQueueBuffer {
-    uint outRayCount;
-    RayQueue outRayQueue;
-};
-
-layout(push_constant) uniform PushConstant {
-    int saveRays; // bool flag 
-};
-#endif
 
 layout(scalar) uniform TraceParams {
     Sphere target;
     float scatterCoefficient;
+
+    uvec2 medium;
 
     vec3 lowerBBoxCorner;
     vec3 upperBBoxCorner;
@@ -72,16 +84,16 @@ bool updateRay(inout Ray ray, vec3 dir, float dist, bool hit) {
         return false;
     }
 
-    //update all photons
+    //update all samples
     float lambda = params.scatterCoefficient;
     bool anyBelowMaxTime = false;
-    [[unroll]] for (uint i = 0; i < N_PHOTONS; ++i) {
-        float mu_e = ray.photons[i].constants.mu_e;
-        ray.photons[i].log_contrib += lambda * dist - mu_e * dist;
-        ray.photons[i].time += dist / ray.photons[i].constants.vg;
-        if (!hit) ray.photons[i].lin_contrib != lambda;
+    [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
+        float mu_e = ray.samples[i].constants.mu_e;
+        ray.samples[i].log_contrib += lambda * dist - mu_e * dist;
+        ray.samples[i].time += dist / ray.samples[i].constants.vg;
+        if (!hit) ray.samples[i].lin_contrib != lambda;
         //time boundary check
-        if (ray.photons[i].time <= params.maxTime)
+        if (ray.samples[i].time <= params.maxTime)
             anyBelowMaxTime = true;
     }
     //return result of boundary check
@@ -90,9 +102,9 @@ bool updateRay(inout Ray ray, vec3 dir, float dist, bool hit) {
 
 //traces ray
 //returns true, if target was hit and tracing should be stopped
-bool trace(inout Ray ray) {
+bool trace(inout Ray ray, uint idx, uint dim) {
     //sample distance
-    float u = random(ray.rngStream, ray.rngCount++);
+    float u = random(idx, dim); dim++;
     float dist = -log(1.0 - u) / params.scatterCoefficient;
 
     //trace sphere
@@ -118,18 +130,19 @@ bool trace(inout Ray ray) {
     //either way, we'll create hits on the queue
 
     vec3 pos, nrm;
-    PhotonHit hits[N_PHOTONS];
+    HitItem hits[N_LAMBDA];
     
     if (hit) {
         //create normal
         nrm = normalize(ray.position - params.target.position);
         //transform pos to sphere local coords / recalc to improve float error
         pos = nrm * params.target.radius;
-        [[unroll]] for (uint i = 0; i < N_PHOTONS; ++i) {
-            hits[i] = PhotonHit(
-                ray.photons[i].wavelength,
-                ray.photons[i].time,
-                exp(ray.photons[i].log_contrib) * ray.photons[i].lin_contrib
+        [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
+            hits[i] = HitItem(
+                pos, dir, nrm,
+                ray.samples[i].wavelength,
+                ray.samples[i].time,
+                exp(ray.samples[i].log_contrib) * ray.samples[i].lin_contrib
             );
         }
     }
@@ -145,7 +158,7 @@ bool trace(inout Ray ray) {
         **************************************************************************/
 
         //sample detector
-        vec2 rng = random2D(ray.rngStream, ray.rngCount); ray.rngCount += 2;
+        vec2 rng = random2D(idx, dim); dim += 2;
         float pDD, detDist;
         vec3 detDir = sampleSphere(params.target, ray.position, rng, detDist, pDD);
         detDist = intersectSphere(params.target, ray.position, detDir);
@@ -160,8 +173,8 @@ bool trace(inout Ray ray) {
         pos = nrm * params.target.radius;
 
         //sample scatter phase function
-        Medium medium = Medium(ray.medium);
-        rng = random2D(ray.rngStream, ray.rngCount); ray.rngCount += 2;
+        Medium medium = Medium(params.medium);
+        rng = random2D(idx, dim); dim += 2;
         float pSS;
         vec3 scatterDir = scatter(medium, ray.direction, rng, pSS);
 
@@ -178,20 +191,21 @@ bool trace(inout Ray ray) {
 
         //update ray
         ray.direction = scatterDir;
-        //iterate photons to update and create hits
-        [[unroll]] for (uint i = 0; i < N_PHOTONS; ++i) {
-            ray.photons[i].lin_contrib *= ray.photons[i].constants.mu_s;
+        //iterate samples to update and create hits
+        [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
+            ray.samples[i].lin_contrib *= ray.samples[i].constants.mu_s;
             //create hits
-            float mu_e = ray.photons[i].constants.mu_e;
-            float contrib = exp(ray.photons[i].log_contrib - mu_e * dist);
-            contrib *= ray.photons[i].lin_contrib * w_det;
-            hits[i] = PhotonHit(
-                ray.photons[i].wavelength,
-                ray.photons[i].time + detDist / ray.photons[i].constants.vg,
+            float mu_e = ray.samples[i].constants.mu_e;
+            float contrib = exp(ray.samples[i].log_contrib - mu_e * dist);
+            contrib *= ray.samples[i].lin_contrib * w_det;
+            hits[i] = HitItem(
+                pos, dir, nrm,
+                ray.samples[i].wavelength,
+                ray.samples[i].time + detDist / ray.samples[i].constants.vg,
                 contrib
             );
             //update ray weight
-            ray.photons[i].lin_contrib *= w_scatter;
+            ray.samples[i].lin_contrib *= w_scatter;
         }
 
         //sanity check: did we actually hit the target after sampling it?
@@ -200,53 +214,51 @@ bool trace(inout Ray ray) {
             return false;
     }
 
-    //save hits to queue
-    uint n = subgroupAdd(1);
-    uint oldCount = 0;
-    if (subgroupElect()) {
-        oldCount = atomicAdd(hitCount, n);
+    //process all hit items
+    [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
+        if (hits[i].time <= params.maxTime)
+            response(hits[i]);
     }
-    oldCount = subgroupBroadcastFirst(oldCount);
-    uint id = subgroupExclusiveAdd(1);
-    uint idx = oldCount + id;
-    SAVE_HIT(pos, dir, nrm, hits, hitQueue, idx)
 
     //done -> return hit flag
     return hit;
 }
 
+Ray sampleRay(uint idx) {
+    SourceRay source = sampleLight(idx);  
+
+    //transform source to tracing ray
+    Medium medium = Medium(params.medium);
+    Sample samples[N_LAMBDA];
+    [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
+        samples[i] = Sample(
+            source.samples[i].wavelength,
+            source.samples[i].startTime,
+            source.samples[i].contrib,
+            0.0,
+            lookUpMedium(medium, source.samples[i].wavelength));
+    }
+    return Ray(
+        source.position,
+        source.direction,
+        samples
+    );    
+}
+
 void main() {
-    //range check
-    uint idx = gl_GlobalInvocationID.x;
-    if (idx >= rayCount)
+    uint idx = gl_GlobalInvocationID.x;  
+    if (idx >= BATCH_SIZE)
         return;
-    //load ray
-    LOAD_RAY(ray, rayQueue, idx)
-    
+
+    Ray ray = sampleRay(idx);
     //discard ray if inside target
     if (distance(ray.position, params.target.position) <= params.target.radius)
-        return;    
-
+        return;
+    
     //trace loop
-    [[unroll]] for (uint i = 0; i < N_SCATTER; ++i) {
+    uint dim = DIM_OFFSET;
+    [[unroll]] for (uint i = 0; i < N_SCATTER; ++i, dim += DIM_STRIDE) {
         //trace() returns true, if we should stop tracing
-        if (trace(ray)) return;
+        if (trace(ray, idx, dim)) return;
     }
-
-    //optionally: save ray state for further tracing
-#ifdef OUTPUT_RAYS
-    //check if we should save rays in this batch
-    //(may be skipped on last round)
-    if (saveRays != 0) {
-        uint n = subgroupAdd(1);
-        uint oldCount = 0;
-        if (subgroupElect()) {
-            oldCount = atomicAdd(outRayCount, n);
-        }
-        oldCount = subgroupBroadcastFirst(oldCount);
-        uint id = subgroupExclusiveAdd(1);
-        idx = oldCount + id;
-        SAVE_RAY(ray, outRayQueue, idx)
-    }
-#endif
 }
