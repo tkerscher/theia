@@ -29,12 +29,17 @@
 #endif
 // #samples per iteration
 #define DIM_STRIDE 5
+//alter ray layout
+#define USE_GLOBAL_MEDIUM
 
 layout(local_size_x = BLOCK_SIZE) in;
 
 #include "material.glsl"
-#include "scatter.volume.glsl"
 #include "sphere.intersect.glsl"
+#include "ray.propagate.glsl"
+#include "ray.sample.glsl"
+#include "tracer.mis.glsl"
+#include "util.branch.glsl"
 
 #include "lightsource.common.glsl"
 #include "response.common.glsl"
@@ -43,69 +48,19 @@ layout(local_size_x = BLOCK_SIZE) in;
 #include "source.glsl"
 #include "response.glsl"
 
-struct Sample {
-    float wavelength;
-    float time;
-    float lin_contrib;
-    float log_contrib;
-    MediumConstants constants;
-};
-struct Ray {
-    vec3 position;
-    vec3 direction;
-    Sample samples[N_LAMBDA];
-};
-
 layout(scalar) uniform TraceParams {
     Sphere target;
-    float scatterCoefficient;
-
     uvec2 medium;
 
-    vec3 lowerBBoxCorner;
-    vec3 upperBBoxCorner;
-    float maxTime;
+    PropagateParams propagation;
 } params;
-
-//updates the ray after traversing
-//returns true if the ray still is inside the trace boundaries
-bool updateRay(inout Ray ray, vec3 dir, float dist, bool hit) {
-    //update ray
-    ray.position += dir * dist;
-    //boundary check
-    bool outside =
-        any(lessThan(ray.position, params.lowerBBoxCorner)) ||
-        any(greaterThan(ray.position, params.upperBBoxCorner));
-    if (subgroupAll(outside)) {
-        return false;
-    }
-    else if (outside) {
-        //mixed branching
-        return false;
-    }
-
-    //update all samples
-    float lambda = params.scatterCoefficient;
-    bool anyBelowMaxTime = false;
-    [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
-        float mu_e = ray.samples[i].constants.mu_e;
-        ray.samples[i].log_contrib += lambda * dist - mu_e * dist;
-        ray.samples[i].time += dist / ray.samples[i].constants.vg;
-        if (!hit) ray.samples[i].lin_contrib != lambda;
-        //time boundary check
-        if (ray.samples[i].time <= params.maxTime)
-            anyBelowMaxTime = true;
-    }
-    //return result of boundary check
-    return anyBelowMaxTime;
-}
 
 //traces ray
 //returns true, if target was hit and tracing should be stopped
 bool trace(inout Ray ray, uint idx, uint dim) {
     //sample distance
     float u = random(idx, dim); dim++;
-    float dist = -log(1.0 - u) / params.scatterCoefficient;
+    float dist = -log(1.0 - u) / params.propagation.scatterCoefficient;
 
     //trace sphere
     vec3 dir = normalize(ray.direction); //just to be safe
@@ -114,15 +69,10 @@ bool trace(inout Ray ray, uint idx, uint dim) {
     //check if we hit
     bool hit = t <= dist;
     //update ray
-    bool good = updateRay(ray, dir, hit ? t : dist, hit);
+    bool good = propagateRay(ray, hit ? t : dist, params.propagation, false, hit);
     //check if trace is still in bounds
-    if (subgroupAll(!good)) {
-        return true;
-    }
-    else if (!good) {
-        //mixed branching
-        return true;
-    }
+    if (CHECK_BRANCH(!good))
+        return true; //abort tracing
 
     //do either:
     // - create a hit item if we hit target
@@ -147,20 +97,18 @@ bool trace(inout Ray ray, uint idx, uint dim) {
         }
     }
     else {
-        /***************************************************************************
-        * MIS: sample both scattering phase function & detector                   *
-        *                                                                         *
-        * We'll use the following naming scheme: pXY, where                       *
-        * X: prob, distribution                                                   *
-        * Y: sampled distribution                                                 *
-        * S: scatter, D: detector                                                 *
-        * e.g. pDS: p_det(dir ~ scatter)                                          *
-        **************************************************************************/
+        //volume scatter event: MIS both phase function and detector
+        vec4 rng = vec4(random2D(idx, dim), random2D(idx, dim)); dim += 4;
+        vec3 detDir, scatterDir;
+        float w_det, w_scatter, detDist;
+        scatterMIS(
+            params.target, Medium(params.medium),
+            ray.position, ray.direction,
+            rng,
+            detDir, w_det, detDist, scatterDir, w_scatter
+        );
 
-        //sample detector
-        vec2 rng = random2D(idx, dim); dim += 2;
-        float pDD, detDist;
-        vec3 detDir = sampleSphere(params.target, ray.position, rng, detDist, pDD);
+        //hit detector
         detDist = intersectSphere(params.target, ray.position, detDir);
         //create hit params
         //in the rare case, that we dit not hit the target: detDist = +inf
@@ -171,23 +119,6 @@ bool trace(inout Ray ray, uint idx, uint dim) {
         nrm = normalize(pos - params.target.position);
         //transform pos to sphere local coords / recalc to improve float error
         pos = nrm * params.target.radius;
-
-        //sample scatter phase function
-        Medium medium = Medium(params.medium);
-        rng = random2D(idx, dim); dim += 2;
-        float pSS;
-        vec3 scatterDir = scatter(medium, ray.direction, rng, pSS);
-
-        //calculate cross probs pSD, pDS
-        float pSD = scatterProb(medium, ray.direction, detDir);
-        float pDS = sampleSphereProb(params.target, ray.position, scatterDir);
-        //calculate MIS weights
-        float w_scatter = pSS*pSS / (pSS*pSS + pSD*pSD);
-        float w_det = pDD*pSD / (pDD*pDD + pDS*pDS);
-        //^^^ For the detector weight, two effects happen: attenuation due to phase
-        //    phase function (= pSD) and canceling of sampled distribution:
-        //      f(x)*phase(theta)/pDD * w_det = f(x)*pSD/pDD * w_det
-        //    Note that mu_s was already applied
 
         //update ray
         ray.direction = scatterDir;
@@ -216,7 +147,7 @@ bool trace(inout Ray ray, uint idx, uint dim) {
 
     //process all hit items
     [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
-        if (hits[i].time <= params.maxTime)
+        if (hits[i].time <= params.propagation.maxTime)
             response(hits[i]);
     }
 
@@ -224,33 +155,12 @@ bool trace(inout Ray ray, uint idx, uint dim) {
     return hit;
 }
 
-Ray sampleRay(uint idx) {
-    SourceRay source = sampleLight(idx);  
-
-    //transform source to tracing ray
-    Medium medium = Medium(params.medium);
-    Sample samples[N_LAMBDA];
-    [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
-        samples[i] = Sample(
-            source.samples[i].wavelength,
-            source.samples[i].startTime,
-            source.samples[i].contrib,
-            0.0,
-            lookUpMedium(medium, source.samples[i].wavelength));
-    }
-    return Ray(
-        source.position,
-        source.direction,
-        samples
-    );    
-}
-
 void main() {
     uint idx = gl_GlobalInvocationID.x;  
     if (idx >= BATCH_SIZE)
         return;
 
-    Ray ray = sampleRay(idx);
+    Ray ray = createRay(sampleLight(idx), Medium(params.medium));
     //discard ray if inside target
     if (distance(ray.position, params.target.position) <= params.target.radius)
         return;

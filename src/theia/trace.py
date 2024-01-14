@@ -84,8 +84,8 @@ class EmptySceneTracer(PipelineStage):
         _fields_ = [
             ("targetPosition", vec3),
             ("targetRadius", c_float),
-            ("scatterCoefficient", c_float),
             ("medium", buffer_reference),
+            ("scatterCoefficient", c_float),
             ("lowerBBoxCorner", vec3),
             ("upperBBoxCorner", vec3),
             ("maxTime", c_float),
@@ -267,11 +267,11 @@ class SceneTracer(PipelineStage):
     class TraceParams(Structure):
         _fields_ = [
             ("targetIdx", c_uint32),
-            ("scatterCoefficient", c_float),
             ("_sceneMedium", buffer_reference),
-            ("maxTime", c_float),
+            ("scatterCoefficient", c_float),
             ("_lowerBBoxCorner", vec3),
             ("_upperBBoxCorner", vec3),
+            ("maxTime", c_float),
         ]
 
     def __init__(
