@@ -36,18 +36,15 @@ layout(local_size_x = BLOCK_SIZE) in;
 #include "material.glsl"
 #include "ray.propagate.glsl"
 #include "ray.sample.glsl"
-#include "scatter.surface.glsl"
-#include "scene.intersect.glsl"
 #include "sphere.glsl"
 #include "tracer.mis.glsl"
+#include "tracer.scene.hit.glsl"
 #include "util.branch.glsl"
 
 #include "lightsource.common.glsl"
-#include "response.common.glsl"
 //user provided code
 #include "rng.glsl"
 #include "source.glsl"
-#include "response.glsl"
 
 uniform accelerationStructureEXT tlas;
 layout(scalar) readonly buffer Detectors {
@@ -60,82 +57,6 @@ layout(scalar) uniform TraceParams {
 
     PropagateParams propagation;
 } params;
-
-bool processHit(inout Ray ray, rayQueryEXT rayQuery, bool update) {
-    //process ray query
-    vec3 objPos, objNrm, objDir, worldPos, worldNrm, geomNormal;
-    Material mat;
-    bool inward;
-    bool success = processRayQuery(
-        ray, rayQuery,
-        mat, inward,
-        objPos, objNrm, objDir,
-        worldPos, worldNrm,
-        geomNormal
-    );
-    if (CHECK_BRANCH(!success))
-        return true; //abort tracing
-
-    //offset position to prevent self-intersection
-    if (!inward)
-        geomNormal = -geomNormal;
-    worldPos = offsetRay(worldPos, geomNormal);
-    //calculate distance
-    float dist = length(worldPos - ray.position);
-
-    //update samples
-    success = updateSamples(ray, dist, params.propagation, false, true);
-    if (CHECK_BRANCH(!success))
-        return true;
-
-    //calculate reflectance (needed for both branches)
-    float r[N_LAMBDA];
-    vec3 dir = normalize(ray.direction);
-    [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
-        r[i] = reflectance(
-            mat,
-            ray.samples[i].wavelength,
-            ray.samples[i].constants.n,
-            dir, worldNrm
-        );
-    }
-
-    //If hit target -> create response item
-    int customId = rayQueryGetIntersectionInstanceCustomIndexEXT(rayQuery, true);
-    if (customId == params.targetIdx && (mat.flags & MATERIAL_TARGET_BIT) != 0) {
-        //process hits
-        [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
-            //skip out of bound samples
-            if (ray.samples[i].time > params.propagation.maxTime)
-                continue;
-
-            Sample s = ray.samples[i];
-            //attenuate by transmission
-            float contrib = exp(s.log_contrib) * s.lin_contrib * (1.0 - r[i]);
-            response(HitItem(
-                objPos, objDir, objNrm,
-                s.wavelength,
-                s.time,
-                contrib
-            ));
-        }
-    }
-
-    //update if needed
-    if (CHECK_BRANCH(update)) {
-        //geometric effect (Lambert's cosine law)
-        float lambert = -dot(dir, worldNrm);
-        [[unroll]] for (int i = 0; i < N_LAMBDA; ++i) {
-            ray.samples[i].lin_contrib *= r[i] * lambert;
-        }
-        //update ray
-        ray.position = worldPos;
-        ray.direction = normalize(reflect(dir, worldNrm));
-    }
-
-    //done
-    return false; //dont abort tracing
-}
 
 bool processScatter(
     inout Ray ray,
@@ -151,15 +72,16 @@ bool processScatter(
 
     //volume scatter event: MIS both phase function and detector
     Sphere detector = detectors[params.targetIdx];
-    vec4 rng = vec4(random2D(idx, dim), random2D(idx, dim)); dim += 4;
     vec3 detDir, scatterDir;
     float w_det, w_scatter, detDist;
-    scatterMIS(
+    scatterMIS_power(
         detector, Medium(ray.medium),
         ray.position, ray.direction,
-        rng,
+        random2D(idx, dim), random2D(idx, dim + 2),
         detDir, w_det, detDist, scatterDir, w_scatter
     );
+    //advance rng
+    dim += 4;
 
     //update ray; create copy for shadow ray
     hitRay = ray;
@@ -239,7 +161,12 @@ bool trace(inout Ray ray, uint idx, uint dim) {
 
     //handle hit: either directly from tracing or indirect via shadow ray
     //will also create a hit item in the queue (if one was created)
-    bool hitResult = processHit(hitRay, rayQuery, hit);
+    bool hitResult = processHit(
+        hitRay, rayQuery,
+        params.targetIdx,
+        params.propagation,
+        hit
+    );
 
     //copy hitRay back to ray if necessary
     if (subgroupAll(hit)) {

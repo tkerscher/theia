@@ -98,15 +98,16 @@ bool trace(inout Ray ray, uint idx, uint dim) {
     }
     else {
         //volume scatter event: MIS both phase function and detector
-        vec4 rng = vec4(random2D(idx, dim), random2D(idx, dim)); dim += 4;
         vec3 detDir, scatterDir;
         float w_det, w_scatter, detDist;
-        scatterMIS(
+        scatterMIS_power(
             params.target, Medium(params.medium),
             ray.position, ray.direction,
-            rng,
+            random2D(idx, dim), random2D(idx, dim + 2),
             detDir, w_det, detDist, scatterDir, w_scatter
         );
+        //advance rng
+        dim += 4;
 
         //hit detector
         detDist = intersectSphere(params.target, ray.position, detDir);

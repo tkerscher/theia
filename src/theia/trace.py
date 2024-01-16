@@ -13,7 +13,7 @@ from theia.util import compileShader
 from typing import List, Optional
 
 
-class EmptySceneTracer(PipelineStage):
+class VolumeTracer(PipelineStage):
     """
     Path tracer simulating light traveling through media originating at a light
     source and ending at a detector. It does NOT check for any intersection
@@ -214,11 +214,18 @@ class EmptySceneTracer(PipelineStage):
         return [self._program.dispatch(self._groups)]
 
 
-class SceneTracer(PipelineStage):
+class SceneShadowTracer(PipelineStage):
     """
     Path tracer simulating light traveling through media originating at a light
     source and ending at detectors. Traces rays against the geometries defined
-    in scene to simulate accurate intersections and obstructions.
+    in scene to simulate accurate intersections and obstructions. Depending on
+    the geometry's material, rays may reflect or transmit through them.
+
+    As a speed-up method, cast shadow rays from scatter points to the detector
+    additionally to the original light ray. Note that shadow rays must directly
+    hit the detector to make a contribution. If e.g. the detector is behind some
+    other geometry the ray needs to pass through, shadow rays will never reach
+    it. In that case you should use the `SceneWalkTracer` instead.
 
     Parameters
     ----------
@@ -262,7 +269,7 @@ class SceneTracer(PipelineStage):
         which a ray gets stopped
     """
 
-    name = "Scene Tracer"
+    name = "Scene Shadow Tracer"
 
     class TraceParams(Structure):
         _fields_ = [
@@ -321,13 +328,194 @@ class SceneTracer(PipelineStage):
                 "source.glsl": source.sourceCode,
                 "response.glsl": response.sourceCode,
             }
-            code = compileShader("tracer.scene.glsl", preamble, headers)
+            code = compileShader("tracer.scene.shadow.glsl", preamble, headers)
         self._code = code
         # create program
         self._program = hp.Program(self._code)
         # bind tlas
         self._program.bindParams(
             Detectors=scene.detectors,
+            Geometries=scene.geometries,
+            tlas=scene.tlas,
+        )
+
+    @property
+    def batchSize(self) -> int:
+        """Number of rays to simulate per run"""
+        return self._batchSize
+
+    @property
+    def blockSize(self) -> int:
+        """Number of threads in a single work group"""
+        return self._blockSize
+
+    @property
+    def code(self) -> bytes:
+        """Compiled source code. Can be used for caching"""
+        return self._code
+
+    @property
+    def nScattering(self) -> int:
+        """Number of simulated scattering events"""
+        return self._nScattering
+
+    @property
+    def response(self) -> HitResponse:
+        """Response function processing each simulated hit"""
+        return self._response
+
+    @property
+    def rng(self) -> RNG:
+        """Generator for creating random numbers"""
+        return self._rng
+
+    @property
+    def scene(self) -> Scene:
+        """Scene in which the rays are traced"""
+        return self._scene
+
+    @property
+    def source(self) -> LightSource:
+        """Source producing light rays"""
+        return self._source
+
+    def run(self, i: int) -> List[hp.Command]:
+        self._bindParams(self._program, i)
+        self.source.bindParams(self._program, i)
+        self.response.bindParams(self._program, i)
+        self.rng.bindParams(self._program, i)
+        return [self._program.dispatch(self._groups)]
+
+
+class SceneWalkTracer(PipelineStage):
+    """
+    Path tracer simulating light traveling through media originating at a light
+    source and ending at detectors. Traces rays against the geometries defined
+    in scene to simulate accurate intersections and obstructions. Depending on
+    the geometry's material, rays may reflect or transmit through them.
+
+    As a speed-up method at each volume scatter event by chance a new direction
+    is either sampled from the scattering phase function or from the general
+    direction of the target detector, thus increasing the chances of actually
+    hitting the latter.
+
+    Parameters
+    ----------
+    batchSize: int
+        Number of rays to simulate per run. Note that a single ray may generate
+        up to nScattering hits.
+    source: LightSource
+        Source producing light rays
+    response: HitResponse
+        Response function processing each simulated hit
+    rng: RNG
+        Generator for creating random numbers
+    scene: Scene
+        Scene in which the rays are traced
+    nScattering: int, default=6
+        Number of simulated scattering events
+    targetIdx: int, default=0
+        Id of the detector, the tracer should try to hit.
+        Hits on other detectors are ignored to make estimates easier.
+    scatterCoefficient: float, default=0.01
+        Scatter coefficient used for sampling ray lengths. Tuning this parameter
+        affects the time distribution of the hits.
+    targetSampleProb: float, default=0.2
+        Probability of sampling the target instead of the scattering phase
+        function in scattering events for determining the scattered direction.
+    maxTime: float, default=1000.0
+        Max total time including delay from the source and travel time, after
+        which a ray gets stopped
+    blockSize: int, default=128
+        Number of threads in a single work group
+    code: Optional[bytes], default=None
+        Cached compiled byte code. If `None` compiles it from source.
+        The given byte code is not checked and must match the given
+        configuration
+
+    Stage Parameters
+    ----------------
+    targetIdx: int
+        Id of the detector, the tracer should try to hit.
+    scatterCoefficient: float
+        Scatter coefficient used for sampling ray lengths
+    targetSampleProb: float, default=0.2
+        Probability of sampling the target instead of the scattering phase
+        function in scattering events for determining the scattered direction
+    maxTime: float
+        Max total time including delay from the source and travel time, after
+        which a ray gets stopped
+    """
+
+    name = "Scene Walk Tracer"
+
+    class TraceParams(Structure):
+        _fields_ = [
+            ("targetIdx", c_uint32),
+            ("_sceneMedium", buffer_reference),
+            ("targetSampleProb", c_float),
+            ("scatterCoefficient", c_float),
+            ("_lowerBBoxCorner", vec3),
+            ("_upperBBoxCorner", vec3),
+            ("maxTime", c_float),
+        ]
+
+    def __init__(
+        self,
+        batchSize: int,
+        source: LightSource,
+        response: HitResponse,
+        rng: RNG,
+        *,
+        scene: Scene,
+        nScattering: int = 6,
+        targetIdx: int = 0,
+        scatterCoefficient: float = 0.01,
+        targetSampleProb: float = 0.2,
+        maxTime: float = 1000.0,
+        blockSize: int = 128,
+        code: Optional[bytes] = None,
+    ) -> None:
+        super().__init__({"TraceParams": self.TraceParams})
+        # save params
+        self._batchSize = batchSize
+        self._source = source
+        self._response = response
+        self._rng = rng
+        self._scene = scene
+        self._blockSize = blockSize
+        self.setParams(
+            targetIdx=targetIdx,
+            _sceneMedium=scene.medium,
+            targetSampleProb=targetSampleProb,
+            scatterCoefficient=scatterCoefficient,
+            _lowerBBoxCorner=scene.bbox.lowerCorner,
+            _upperBBoxCorner=scene.bbox.upperCorner,
+            maxTime=maxTime,
+        )
+        # calculate group size
+        self._groups = -(batchSize // -blockSize)
+
+        # compile code if needed
+        if code is None:
+            preamble = ""
+            preamble += f"#define BATCH_SIZE {batchSize}\n"
+            preamble += f"#define BLOCK_SIZE {blockSize}\n"
+            preamble += f"#define DIM_OFFSET {source.nRNGSamples}\n"
+            preamble += f"#define N_LAMBDA {source.nLambda}\n"
+            preamble += f"#define N_SCATTER {nScattering}\n\n"
+            headers = {
+                "rng.glsl": rng.sourceCode,
+                "source.glsl": source.sourceCode,
+                "response.glsl": response.sourceCode,
+            }
+            code = compileShader("tracer.scene.walker.glsl", preamble, headers)
+        self._code = code
+        # create program
+        self._program = hp.Program(self._code)
+        # bind scene
+        self._program.bindParams(
+            Targets=scene.detectors,
             Geometries=scene.geometries,
             tlas=scene.tlas,
         )
