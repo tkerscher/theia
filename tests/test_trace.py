@@ -69,8 +69,9 @@ def test_VolumeTracer():
     # TODO: more sophisticated tests...
 
 
-# @pytest.mark.skipif(not hp.isRaytracingEnabled(), "ray tracing is not supported")
-def test_SceneShadowTracer():
+@pytest.mark.parametrize("vol", [True, False])
+@pytest.mark.parametrize("trans", [True, False])
+def test_SceneShadowTracer(vol: bool, trans: bool):
     if not hp.isRaytracingEnabled():
         pytest.skip("ray tracing is not supported")
 
@@ -85,9 +86,7 @@ def test_SceneShadowTracer():
     # create materials
     water = WaterModel().createMedium()
     glass = theia.material.BK7Model().createMedium()
-    mat = theia.material.Material(
-        "mat", glass, water, flags=theia.material.Material.TARGET_BIT
-    )
+    mat = theia.material.Material("mat", glass, water, flags=("D", "B"))
     tensor, material, media = theia.material.bakeMaterials(mat)
     # create scene
     store = theia.scene.MeshStore(
@@ -133,6 +132,8 @@ def test_SceneShadowTracer():
         nScattering=N_SCATTER,
         targetIdx=1,
         maxTime=T_MAX,
+        disableVolumeBorder=vol,
+        disableTransmission=trans,
     )
     # run pipeline
     pl.runPipeline([rng, source, tracer, recorder])
@@ -149,7 +150,9 @@ def test_SceneShadowTracer():
     assert np.max(hits["time"]) <= T_MAX
 
 
-def test_SceneWalkTracer():
+@pytest.mark.parametrize("vol", [True, False])
+@pytest.mark.parametrize("trans", [True, False])
+def test_SceneWalkTracer(vol: bool, trans: bool):
     if not hp.isRaytracingEnabled():
         pytest.skip("ray tracing is not supported")
 
@@ -164,9 +167,7 @@ def test_SceneWalkTracer():
     # create materials
     water = WaterModel().createMedium()
     glass = theia.material.BK7Model().createMedium()
-    mat = theia.material.Material(
-        "mat", glass, water, flags=theia.material.Material.TARGET_BIT
-    )
+    mat = theia.material.Material("mat", glass, water, flags=("D", "B"))
     tensor, material, media = theia.material.bakeMaterials(mat)
     # create scene
     store = theia.scene.MeshStore(
@@ -213,6 +214,8 @@ def test_SceneWalkTracer():
         targetSampleProb=0.4,
         targetIdx=1,
         maxTime=T_MAX,
+        disableVolumeBorder=vol,
+        disableTransmission=trans,
     )
     # run pipeline
     pl.runPipeline([rng, source, tracer, recorder])

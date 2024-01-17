@@ -253,6 +253,13 @@ class SceneShadowTracer(PipelineStage):
         which a ray gets stopped
     blockSize: int, default=128
         Number of threads in a single work group
+    disableVolumeBorder: bool, default=False
+        Disables GPU code handling volume borders, which may improve performance
+        if there are none. Settings this to `True` while the scene contains
+        volume border will produce wrong results.
+    disableTransmission: bool, default=False
+        Disables GPU code handling transmission, which may improve performance.
+        Rays will default to always reflect where possible.
     code: Optional[bytes], default=None
         Cached compiled byte code. If `None` compiles it from source.
         The given byte code is not checked and must match the given
@@ -294,6 +301,8 @@ class SceneShadowTracer(PipelineStage):
         scatterCoefficient: float = 0.01,
         maxTime: float = 1000.0,
         blockSize: int = 128,
+        disableVolumeBorder: bool = False,
+        disableTransmission: bool = False,
         code: Optional[bytes] = None,
     ) -> None:
         super().__init__({"TraceParams": self.TraceParams})
@@ -318,6 +327,10 @@ class SceneShadowTracer(PipelineStage):
         # compile code if needed
         if code is None:
             preamble = ""
+            if disableVolumeBorder:
+                preamble += "#define DISABLE_VOLUME_BORDER 1\n"
+            if disableTransmission:
+                preamble += "#define DISABLE_TRANSMISSION 1\n"
             preamble += f"#define BATCH_SIZE {batchSize}\n"
             preamble += f"#define BLOCK_SIZE {blockSize}\n"
             preamble += f"#define DIM_OFFSET {source.nRNGSamples}\n"
@@ -428,6 +441,13 @@ class SceneWalkTracer(PipelineStage):
         which a ray gets stopped
     blockSize: int, default=128
         Number of threads in a single work group
+    disableVolumeBorder: bool, default=False
+        Disables GPU code handling volume borders, which may improve performance
+        if there are none. Settings this to `True` while the scene contains
+        volume border will produce wrong results.
+    disableTransmission: bool, default=False
+        Disables GPU code handling transmission, which may improve performance.
+        Rays will default to always reflect where possible.
     code: Optional[bytes], default=None
         Cached compiled byte code. If `None` compiles it from source.
         The given byte code is not checked and must match the given
@@ -474,6 +494,8 @@ class SceneWalkTracer(PipelineStage):
         targetSampleProb: float = 0.2,
         maxTime: float = 1000.0,
         blockSize: int = 128,
+        disableVolumeBorder: bool = False,
+        disableTransmission: bool = False,
         code: Optional[bytes] = None,
     ) -> None:
         super().__init__({"TraceParams": self.TraceParams})
@@ -499,6 +521,10 @@ class SceneWalkTracer(PipelineStage):
         # compile code if needed
         if code is None:
             preamble = ""
+            if disableVolumeBorder:
+                preamble += "#define DISABLE_VOLUME_BORDER 1\n"
+            if disableTransmission:
+                preamble += "#define DISABLE_TRANSMISSION 1\n"
             preamble += f"#define BATCH_SIZE {batchSize}\n"
             preamble += f"#define BLOCK_SIZE {blockSize}\n"
             preamble += f"#define DIM_OFFSET {source.nRNGSamples}\n"

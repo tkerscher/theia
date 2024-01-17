@@ -29,7 +29,7 @@
 #error "DIM_OFFSET not defined"
 #endif
 // #samples per iteration
-#define DIM_STRIDE 5
+#define DIM_STRIDE 6
 
 layout(local_size_x = BLOCK_SIZE) in;
 
@@ -158,15 +158,24 @@ bool trace(inout Ray ray, uint idx, uint dim) {
             hitRay = ray;
         }
     }
+    //in any case advance rng
+    dim += 4;
 
     //handle hit: either directly from tracing or indirect via shadow ray
     //will also create a hit item in the queue (if one was created)
+#ifndef DISABLE_TRANSMISSION
+    //dont bother drawing a random number if we dont use it
+    u = random(idx, dim); dim++;
+#endif
     bool hitResult = processHit(
         hitRay, rayQuery,
+        u, //random number for reflect/transmit decision
         params.targetIdx,
         params.propagation,
         hit
     );
+    //advanve rng
+    dim++;
 
     //copy hitRay back to ray if necessary
     if (subgroupAll(hit)) {

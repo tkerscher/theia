@@ -55,13 +55,16 @@ bool processRayQuery(
     precise vec3 n1 = v1.normal - v0.normal;
     precise vec3 n2 = v2.normal - v0.normal;
     objNrm = v0.normal + fma(vec3(barys.x), n1, barys.y * n2);
-    //translate from object to world space
+    //translate from world to object space
     mat4x3 world2Obj = rayQueryGetIntersectionWorldToObjectEXT(rayQuery, true);
+    objDir = normalize(mat3(world2Obj) * ray.direction);
+    //translate from object to world space
     worldNrm = normalize(vec3(objNrm * world2Obj));
     objNrm = normalize(objNrm);
-    geomNormal = normalize(vec3(geomNormal * world2Obj));
-    //translate from world to object space
-    objDir = normalize(mat3(world2Obj) * ray.direction);
+    geomNormal = vec3(geomNormal * world2Obj);
+    //ensure geomNormal points in opposite general direction than ray
+    geomNormal *= -sign(dot(geomNormal, ray.direction));
+    geomNormal = normalize(geomNormal);
 
     mat = geom.material;
     //light models are generally unaware of the scene's geometry and might have

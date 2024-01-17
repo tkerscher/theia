@@ -69,19 +69,23 @@ MediumConstants lookUpMedium(const Medium medium, float lambda) {
 
 /////////////////////////////////// MATERIAL ///////////////////////////////////
 
-const uint32_t MATERIAL_ABSORBER_BIT    = 0x00000001; //Rays gets absorped
-const uint32_t MATERIAL_TARGET_BIT      = 0x00000002; //Rays reached a target
-// const uint32_t MATERIAL_SOURCE_BIT      = 0x00000004; //Rays reached a light source
-const uint32_t MATERIAL_REFLECT_BIT     = 0x00000008; //Consider reflections only
+//Material flag bits encoding ray intersection behaviour
+const uint MATERIAL_BLACK_BODY_BIT    = 0x00000001; //Rays gets ccompletyl absorped
+const uint MATERIAL_DETECTOR_BIT      = 0x00000002; //Rays reached a target
+// const uint MATERIAL_SOURCE_BIT        = 0x00000004; //Rays reached a light source
+const uint MATERIAL_NO_REFLECT_BIT    = 0x00000008; //Rays never reflect
+const uint MATERIAL_NO_TRANSMIT_BIT   = 0x00000010; //Rays never transmit
+const uint MATERIAL_VOLUME_BORDER_BIT = 0x00000020; //No geometric effect on Rays
 
-//Materials are assigned to geometries, which with their polygon faces define
-//an inside and an outside using their winding order
+//Materials are assigned to geometries, which with their normals pointing
+//outwards define an inside and an outside. Both directions can be assigned
+//flags to define the behaviour of rays intersecting the geometry.
 layout(buffer_reference, scalar, buffer_reference_align=8) buffer Material {
     Medium inside;
     Medium outside;
 
-    uint32_t flags;
-    uint32_t padding; //to fit the 8 byte alignment
+    uint flagsInwards;
+    uint flagsOutwards;
 };
 
 #endif

@@ -1,13 +1,18 @@
 import importlib.resources
-import numpy as np
-import numpy.typing as npt
-import hephaistos as hp
-import theia.lookup
 import warnings
-from collections.abc import Iterable
-from ctypes import Structure, c_float, c_uint32, c_uint64, addressof, memmove, sizeof
+
+import hephaistos as hp
+import numpy as np
 from scipy.interpolate import CubicSpline
-from typing import Final, Union
+
+from ctypes import Structure, c_float, c_uint32, c_uint64, addressof, memmove, sizeof
+
+import theia.lookup
+
+import numpy.typing as npt
+from collections.abc import Iterable
+from enum import IntFlag
+from typing import Final, Union, Tuple
 
 
 #################################### COMMON ####################################
@@ -253,11 +258,103 @@ class Medium:
         return size
 
 
+class MaterialFlags(IntFlag):
+    """
+    List of bit flags specifying the action a ray can take once it hit a
+    material.
+    """
+
+    BLACK_BODY = 0x01
+    """
+    Material absorbs all rays completely and stops further tracing.
+    Combined with `TARGET`, hits will not be attenuated by a transmission
+    factor.
+    """
+
+    DETECTOR = 0x02
+    """
+    Marks the material as detector, i.e. tracers may only produce a response
+    when hitting a material with this flag. Implies `NO_TRANSMIT`.
+
+    Combine this flag with `BLACK_BODY` if reflectivity factors should not be
+    applied.
+    """
+
+    NO_REFLECT = 0x08
+    """
+    Forbids tracer to reflect rays from the material, but still takes the
+    reflectivity factor (i.e. Fresnel equation) into account.
+
+    In combination with `NO_TRANSMIT` has the same effect as `BLACK_BODY`, but
+    the latter should be preferred.
+    """
+
+    NO_TRANSMIT = 0x10
+    """
+    Forbids tracer to transmit rays through this material, but still takes the
+    reflectivity factor (i.e. Fresnel equation) into account.
+
+    In combination with `NO_REFLECT` has the same effect as `BLACK_BODY`, but
+    the latter should be preferred.
+    """
+
+    VOLUME_BORDER = 0x20
+    """
+    Marks the boundary of a volume, where media changes but the rays neither
+    reflect nor refract, i.e. keep straight. Can be used to model inhomogeneous
+    media.
+    """
+
+
+_materialFlagsMap = {
+    "B": MaterialFlags.BLACK_BODY,
+    "D": MaterialFlags.DETECTOR,
+    "R": MaterialFlags.NO_REFLECT,
+    "T": MaterialFlags.NO_TRANSMIT,
+    "V": MaterialFlags.VOLUME_BORDER,
+}
+
+
+def parseMaterialFlags(flags: str) -> MaterialFlags:
+    """
+    Parses the given string where each character represents a flag as listed
+    below and returns the corresponding `MaterialFlags`. Capitalization does
+    not matter. An empty string represents no flags.
+
+    Note the flags `R`,`T` removes their corresponding flag, which are present
+    at default.
+
+    Flags:
+     - `B` : `BLACK_BODY`
+     - `D` : `DETECTOR`
+     - `R` : removes `NO_REFLECT`
+     - `T` : removes `NO_TRANSMIT`
+     - `V` : `VOLUME_BORDER`
+    """
+
+    # edge case: empty input
+    if len(flags) == 0:
+        return MaterialFlags(0)
+
+    # unify capitalization
+    flags = flags.upper()
+
+    # iterate characters
+    result: MaterialFlags = MaterialFlags.NO_REFLECT | MaterialFlags.NO_TRANSMIT
+    for flag in flags:
+        if flag in _materialFlagsMap.keys():
+            result ^= _materialFlagsMap[flag]
+        else:
+            raise ValueError(f"Unknown material flag '{flag}'")
+    # done
+    return result
+
+
 class Material:
     """
     Class holding information about the material of a geometry. In general a
-    geometry separates space into an "inside" and an "outside". Materials
-    assign a Medium to each of them.
+    geometry separates space into an "inside" and an "outside" defined by their
+    normal vectors pointing outwards. Materials assign a Medium to each of them.
 
     Parameters
     ----------
@@ -272,18 +369,13 @@ class Material:
         Medium in the outside of a geometry. Can also be specified by its name
         which will get resolved during baking/serialization.
         None defaults to vacuum.
-    flags: int, default = 0
-        Material flags specifying its behavior while interacting with simulated
-        rays.
+    flags: (MaterialFlags|str,MaterialFlags|str)|MaterialFlags|str, default=0
+        `MaterialFlags` applied to the material. In a tuple the first element
+        applies to the inward direction, the second to the outward one.
+        Otherwise the flags are applied to both directions. See
+        `parseMaterialFlags` for a description on how to specify material flags
+        with a string.
     """
-
-    # FLAGS
-    ABSORBER_BIT: Final[int] = 1 << 0
-    """Material absorbs all light hitting it"""
-    TARGET_BIT: Final[int] = 1 << 1
-    """Material is a target, i.e. detector"""
-    REFLECT_BIT: Final[int] = 1 << 3
-    """Material only reflects, never transmits"""
 
     class GLSL(Structure):
         """The corresponding structure used in shaders"""
@@ -291,8 +383,8 @@ class Material:
         _fields_ = [
             ("inside", c_uint64),  # buffer reference
             ("outside", c_uint64),  # buffer reference
-            ("flags", c_uint32),
-            ("padding", c_uint32),
+            ("flagsInwards", c_uint32),
+            ("flagsOutwards", c_uint32),
         ]
 
     def __init__(
@@ -301,13 +393,20 @@ class Material:
         inside: Union[Medium, str, None],
         outside: Union[Medium, str, None],
         *,
-        flags: int = 0,
+        flags: Tuple[MaterialFlags | str, MaterialFlags | str]
+        | MaterialFlags
+        | str = MaterialFlags(0),
     ) -> None:
         # store properties
         self.name = name
         self.inside = inside
         self.outside = outside
-        self.flags = flags
+        if type(flags) == tuple:
+            self.flagsInward = flags[0]
+            self.flagsOutward = flags[1]
+        else:
+            self.flagsInward = flags
+            self.flagsOutward = flags
 
     @property
     def name(self) -> str:
@@ -348,20 +447,40 @@ class Material:
         self._outside = value
 
     @property
-    def flags(self) -> int:
+    def flagsOutward(self) -> MaterialFlags:
         """
-        Material flags specifying its behavior while interacting with simulated
-        rays.
+        Material flags specifying the behavior of rays hitting the material from
+        the `inside` medium
         """
-        return self._flags
+        return self._flagsOutward
 
-    @flags.setter
-    def flags(self, value: int) -> None:
-        self._flags = value
+    @flagsOutward.setter
+    def flagsOutward(self, value: MaterialFlags | str) -> None:
+        if type(value) != MaterialFlags:
+            value = parseMaterialFlags(value)
+        self._flagsOutward = value
 
-    @flags.deleter
-    def flags(self) -> None:
-        self._flags = 0
+    @flagsOutward.deleter
+    def flagsOutward(self) -> None:
+        self._flagsOutward = MaterialFlags(0)
+
+    @property
+    def flagsInward(self) -> MaterialFlags:
+        """
+        Material flags specifying the behavior of rays hitting the material from
+        the `inside` medium
+        """
+        return self._flagsInward
+
+    @flagsInward.setter
+    def flagsInward(self, value: MaterialFlags | str) -> None:
+        if type(value) != MaterialFlags:
+            value = parseMaterialFlags(value)
+        self._flagsInward = value
+
+    @flagsInward.deleter
+    def flagsInward(self) -> None:
+        self._flagsInward = MaterialFlags(0)
 
     @property
     def byte_size(self) -> int:
@@ -545,8 +664,8 @@ def bakeMaterials(
         glsl = Material.GLSL(
             inside=getMedAdr(material.inside, f"{material.name}.inside"),
             outside=getMedAdr(material.outside, f"{material.name}.outside"),
-            flags=material.flags,
-            padding=0,
+            flagsInwards=material.flagsInward,
+            flagsOutward=material.flagsOutward,
         )
         # copy to buffer
         memmove(dst, addressof(glsl), sizeof(Material.GLSL))

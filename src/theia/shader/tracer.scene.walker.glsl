@@ -29,7 +29,7 @@
 #error "DIM_OFFSET not defined"
 #endif
 // #samples per iteration
-#define DIM_STRIDE 6
+#define DIM_STRIDE 7
 
 layout(local_size_x = BLOCK_SIZE) in;
 
@@ -128,13 +128,29 @@ bool trace(inout Ray ray, uint idx, uint dim) {
     bool hit = rayQueryGetIntersectionTypeEXT(rayQuery, true) ==
         gl_RayQueryCommittedIntersectionTriangleEXT;
 
+    //draw a random number for reflect/transmit decision
+#ifndef DISABLE_TRANSMISSION
+    //dont bother drawing a random number if we dont use it
+    u = random(idx, dim); dim++;
+#endif
+    //advance rng
+    dim++;
+
     //handle hit
     bool result;
     if (CHECK_BRANCH(hit)) {
-        result = processHit(ray, rayQuery, params.targetIdx, params.propagation, true);
+        result = processHit(
+            ray, rayQuery, u,
+            params.targetIdx,
+            params.propagation,
+            true
+        );
     }
     else if (CHECK_BRANCH(!hit)) {
-        result = processScatter(ray, dist, rayQuery, idx, dim);
+        result = processScatter(
+            ray, dist, rayQuery,
+            idx, dim
+        );
     }
 
     //done
