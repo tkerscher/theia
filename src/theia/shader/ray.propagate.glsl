@@ -10,8 +10,22 @@ struct PropagateParams {
     vec3 lowerBBoxCorner;
     vec3 upperBBoxCorner;
     float maxTime;
+
+    float maxDist;
 };
 
+//samples the distance until the next scatter event
+//handles non scattering media correctly, where it returns params.maxDist instead
+float sampleScatterLength(const Ray ray, const PropagateParams params, float u) {
+    float dist = params.maxDist;
+    bool canScatter = ray.samples[0].constants.mu_s > 0.0;
+    if (CHECK_BRANCH(canScatter)) {
+        //sample exponential distribution
+        //use u -> 1.0 - u > 0.0 to be safe on the log
+        dist = -log(1.0 - u) / params.scatterCoefficient;
+    }
+    return dist;
+}
 
 //Updates samples in ray as if they traveled a given distance.
 //Includes sampling propabilities and check for maxTime

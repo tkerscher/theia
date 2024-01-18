@@ -89,6 +89,7 @@ class VolumeTracer(PipelineStage):
             ("lowerBBoxCorner", vec3),
             ("upperBBoxCorner", vec3),
             ("maxTime", c_float),
+            ("_maxDist", c_float),
         ]
 
     def __init__(
@@ -123,6 +124,7 @@ class VolumeTracer(PipelineStage):
             lowerBBoxCorner=traceBBox.lowerCorner,
             upperBBoxCorner=traceBBox.upperCorner,
             maxTime=maxTime,
+            _maxDist=traceBBox.diagonal,
         )
         # calculate group size
         self._groups = -(batchSize // -blockSize)
@@ -203,7 +205,9 @@ class VolumeTracer(PipelineStage):
     @traceBBox.setter
     def traceBBox(self, value: RectBBox) -> None:
         self.setParams(
-            lowerBBoxCorner=value.lowerCorner, upperBBoxCorner=value.upperCorner
+            lowerBBoxCorner=value.lowerCorner,
+            upperBBoxCorner=value.upperCorner,
+            _maxDist=value.diagonal,
         )
 
     def run(self, i: int) -> List[hp.Command]:
@@ -286,6 +290,7 @@ class SceneShadowTracer(PipelineStage):
             ("_lowerBBoxCorner", vec3),
             ("_upperBBoxCorner", vec3),
             ("maxTime", c_float),
+            ("_maxDist", c_float),
         ]
 
     def __init__(
@@ -320,6 +325,7 @@ class SceneShadowTracer(PipelineStage):
             maxTime=maxTime,
             _lowerBBoxCorner=scene.bbox.lowerCorner,
             _upperBBoxCorner=scene.bbox.upperCorner,
+            _maxDist=scene.bbox.diagonal,
         )
         # calculate group size
         self._groups = -(batchSize // -blockSize)
@@ -478,6 +484,7 @@ class SceneWalkTracer(PipelineStage):
             ("_lowerBBoxCorner", vec3),
             ("_upperBBoxCorner", vec3),
             ("maxTime", c_float),
+            ("_maxDist", c_float),
         ]
 
     def __init__(
@@ -514,6 +521,7 @@ class SceneWalkTracer(PipelineStage):
             _lowerBBoxCorner=scene.bbox.lowerCorner,
             _upperBBoxCorner=scene.bbox.upperCorner,
             maxTime=maxTime,
+            _maxDist=scene.bbox.diagonal,
         )
         # calculate group size
         self._groups = -(batchSize // -blockSize)

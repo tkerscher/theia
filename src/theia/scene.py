@@ -257,6 +257,12 @@ class RectBBox:
         return self._glsl
 
     @property
+    def diagonal(self) -> float:
+        """Length of the box' diagonal, i.e. the distance between the two corners"""
+        d = np.subtract(self.upperCorner, self.lowerCorner)
+        return np.sqrt(np.square(d).sum())
+
+    @property
     def lowerCorner(self) -> Tuple[float, float, float]:
         """The corner with minimal coordinate values"""
         return (

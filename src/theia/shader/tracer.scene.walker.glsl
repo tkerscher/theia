@@ -111,7 +111,7 @@ bool trace(inout Ray ray, uint idx, uint dim) {
     vec3 dir = normalize(ray.direction);
     //sample distance
     float u = random(idx, dim); dim++;
-    float dist = -log(1.0 - u) / params.propagation.scatterCoefficient;
+    float dist = sampleScatterLength(ray, params.propagation, u);
 
     //trace ray
     rayQueryEXT rayQuery;
