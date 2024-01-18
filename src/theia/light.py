@@ -108,12 +108,14 @@ class LightSampler(PipelineStage):
     Example
     -------
     >>> import hephaistos as hp
-    >>> from theia.light import LightSampler, SphericalLightSource
+    >>> import theia.light as l
     >>> from theia.random import PhiloxRNG
-    >>> source = SphericalLightSource()
+    >>> rays = l.SphericalRaySource()
+    >>> photons = l.UniformPhotonSource()
+    >>> source = l.ModularLight(rays, photons, 4)
     >>> rng = PhiloxRNG()
-    >>> sampler = LightSampler(source, 8192, rng=rng)
-    >>> hp.runPipeline([source, rng, sampler])
+    >>> sampler = l.LightSampler(source, 8192, rng=rng)
+    >>> hp.runPipeline([rng, rays, photons, source, sampler])
     >>> sampler.view(0)
     """
 
@@ -311,17 +313,195 @@ class HostLightSource(LightSource):
         return [hp.updateTensor(self.buffer(i), self._tensor), *super().run(i)]
 
 
-class SphericalLightSource(LightSource):
+class RaySource(SourceCodeMixin):
     """
-    Isotropic light source located at a single point in space.
-    Samples uniform in both time and wavelength.
+    Base class for samplers producing blank rays, i.e. a combination of a
+    position and a direction.
+    """
+
+    name = "Ray Sampler"
+
+    def __init__(
+        self,
+        *,
+        nRNGSamples: int = 0,
+        params: Dict[str, type[Structure]] = {},
+        extra: Set[str] = set(),
+    ) -> None:
+        super().__init__(params, extra)
+        self._nRNGSamples = nRNGSamples
+
+    @property
+    def nRNGSamples(self) -> int:
+        """Amount of random numbers drawn per sample"""
+        return self._nRNGSamples
+
+
+class DiskRaySource(RaySource):
+    """
+    Samples point on a disk and creates rays perpendicular to it.
 
     Parameters
     ----------
-    nLambda: int, default=4
-        Number of sampled wavelengths in a single light source ray
-    position: (float,float,float), default=(0.0, 0.0, 0.0)
-        position of the light source
+    center: (float, float, float), default=(0.0, 0.0, 0.0)
+        Center of the disk
+    direction: (float, float, float), default=(0.0, 0.0, 1.0)
+        Normal of the disk. Rays will travel in this direction.
+    radius: float, default=1.0
+        Radius of the disk
+
+    Stage Parameters
+    ----------------
+    center: (float, float, float), default=(0.0, 0.0, 0.0)
+        Center of the disk
+    direction: (float, float, float), default=(0.0, 0.0, 1.0)
+        Normal of the disk. Rays will travel in this direction.
+    radius: float, default=1.0
+        Radius of the disk
+    """
+
+    name = "Disk Ray Sampler"
+
+    class RayParams(Structure):
+        _fields_ = [("center", vec3), ("direction", vec3), ("radius", c_float)]
+
+    source_code = None
+
+    def __init__(
+        self,
+        *,
+        center: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        direction: Tuple[float, float, float] = (0.0, 0.0, 1.0),
+        radius: float = 1.0,
+    ) -> None:
+        super().__init__(nRNGSamples=2, params={"RayParams": DiskRaySource.RayParams})
+        self.setParams(
+            center=center,
+            direction=direction,
+            radius=radius,
+        )
+
+    @property
+    def sourceCode(self) -> str:
+        if DiskRaySource.source_code is None:
+            DiskRaySource.source_code = loadShader("raysource.disk.glsl")
+        return DiskRaySource.source_code
+
+
+class PencilRaySource(RaySource):
+    """
+    Sampler outputting a constant ray.
+
+    Parameters
+    ----------
+    position: (float, float, float), default=(0.0, 0.0, 0.0)
+        Start point of the ray
+    direction: (float, float, float), default=(0.0, 0.0, 1.0)
+        Direction of the ray
+
+    Stage Parameters
+    ----------
+    position: (float, float, float), default=(0.0, 0.0, 0.0)
+        Start point of the ray
+    direction: (float, float, float), default=(0.0, 0.0, 1.0)
+        Direction of the ray
+    """
+
+    name = "Pencil Beam"
+
+    class RayParams(Structure):
+        _fields_ = [
+            ("position", vec3),
+            ("direction", vec3),
+        ]
+
+    source_code = None
+
+    def __init__(
+        self,
+        *,
+        position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        direction: Tuple[float, float, float] = (0.0, 0.0, 1.0),
+    ) -> None:
+        super().__init__(params={"RayParams": PencilRaySource.RayParams})
+        self.setParams(position=position, direction=direction)
+
+    @property
+    def sourceCode(self) -> str:
+        if PencilRaySource.source_code is None:
+            PencilRaySource.source_code = loadShader("raysource.pencil.glsl")
+        return PencilRaySource.source_code
+
+
+class SphericalRaySource(RaySource):
+    """
+    Sampler creating rays uniformly in all direction from a common center.
+
+    Parameters
+    ----------
+    position: (float, float, float), default=(0.0, 0.0, 0.0)
+        Center the rays are emerging from
+
+    Stage Parameters
+    ----------------
+    position: (float, float, float), default=(0.0, 0.0, 0.0)
+        Center the rays are emerging from
+    """
+
+    name = "Spherical Ray Sampler"
+
+    class RayParams(Structure):
+        _fields_ = [("position", vec3)]
+
+    source_code = None
+
+    def __init__(
+        self,
+        position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+    ) -> None:
+        super().__init__(
+            nRNGSamples=2,
+            params={"RayParams": SphericalRaySource.RayParams},
+        )
+        self.setParams(position=position)
+
+    @property
+    def sourceCode(self) -> str:
+        if SphericalRaySource.source_code is None:
+            SphericalRaySource.source_code = loadShader("raysource.spherical.glsl")
+        return SphericalRaySource.source_code
+
+
+class PhotonSource(SourceCodeMixin):
+    """
+    Base class for samplers producing a single photon sample consisting of a
+    wavelength and time point.
+    """
+
+    name = "Photon Sampler"
+
+    def __init__(
+        self,
+        *,
+        nRNGSamples: int = 0,
+        params: Dict[str, type[Structure]] = {},
+        extra: Set[str] = set(),
+    ) -> None:
+        super().__init__(params, extra)
+        self._nRNGSamples = nRNGSamples
+
+    @property
+    def nRNGSamples(self) -> int:
+        """Amount of random numbers drawn per sample"""
+        return self._nRNGSamples
+
+
+class UniformPhotonSource(PhotonSource):
+    """
+    Sampler generating photons uniform in wavelength and time.
+
+    Parameters
+    ----------
     lambdaRange: (float, float), default=(300.0, 700.0)
         min and max wavelength the source emits
     timeRange: (float, float), default=(0.0, 100.0)
@@ -331,8 +511,6 @@ class SphericalLightSource(LightSource):
 
     Stage Parameters
     ----------------
-    position: (float,float,float), default=(0.0, 0.0, 0.0)
-        position of the light source
     lambdaRange: (float, float), default=(300.0, 700.0)
         min and max wavelength the source emits
     timeRange: (float, float), default=(0.0, 100.0)
@@ -341,46 +519,32 @@ class SphericalLightSource(LightSource):
         intensity of the light source
     """
 
-    class LightParams(Structure):
+    class SourceParams(Structure):
         _fields_ = [
-            ("position", vec3),
             ("lambdaRange", vec2),
             ("timeRange", vec2),
-            ("_contribution", c_float),
+            ("_contrib", c_float),
         ]
 
-    # cache for source source, lazily loaded (not need if byte code was cached)
+    # lazily load source code
     source_code = None
 
     def __init__(
         self,
         *,
-        nLambda: int = 4,
-        position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
         lambdaRange: Tuple[float, float] = (300.0, 700.0),
         timeRange: Tuple[float, float] = (0.0, 100.0),
         intensity: float = 1.0,
     ) -> None:
-        nRNG = 2 + 2 * nLambda
         super().__init__(
-            nLambda=nLambda,
-            nRNGSamples=nRNG,
-            params={"LightParams": self.LightParams},
+            nRNGSamples=2,
+            params={"SourceParams": self.SourceParams},
             extra={"intensity"},
         )
         # save params
         self.setParams(
-            position=position,
-            lambdaRange=lambdaRange,
-            timeRange=timeRange,
-            intensity=intensity,
+            lambdaRange=lambdaRange, timeRange=timeRange, intensity=intensity
         )
-
-    @property
-    def sourceCode(self) -> str:
-        if SphericalLightSource.source_code is None:
-            SphericalLightSource.source_code = loadShader("lightsource.spherical.glsl")
-        return SphericalLightSource.source_code
 
     @property
     def intensity(self) -> float:
@@ -390,6 +554,12 @@ class SphericalLightSource(LightSource):
     @intensity.setter
     def intensity(self, value: float) -> None:
         self._intensity = value
+
+    @property
+    def sourceCode(self) -> str:
+        if UniformPhotonSource.source_code is None:
+            UniformPhotonSource.source_code = loadShader("photonsource.uniform.glsl")
+        return UniformPhotonSource.source_code
 
     def _finishParams(self, i: int) -> None:
         # calculate const contribution
@@ -402,4 +572,66 @@ class SphericalLightSource(LightSource):
         tr = tr[1] - tr[0]
         if tr != 0.0:
             c /= tr
-        self.setParam("_contribution", c)
+        self.setParam("_contrib", c)
+
+
+class ModularLightSource(LightSource):
+    """
+    Light source that combines a `RaySource` and a `PhotonSource`.
+
+    Parameters
+    ----------
+    raySource: RaySource
+        Sampler producing rays.
+    photonSource: PhotonSource
+        Sampler producing single photons
+    nLambda: int
+        Number of photons to sample
+    """
+
+    # lazily load template code
+    template_code = None
+
+    def __init__(
+        self,
+        raySource: RaySource,
+        photonSource: PhotonSource,
+        nLambda: int,
+    ) -> None:
+        nRNG = raySource.nRNGSamples + nLambda * photonSource.nRNGSamples
+        super().__init__(nLambda=nLambda, nRNGSamples=nRNG)
+        self._raySource = raySource
+        self._photonSource = photonSource
+
+    @property
+    def raySource(self) -> RaySource:
+        """Source producing rays"""
+        return self._raySource
+
+    @property
+    def photonSource(self) -> PhotonSource:
+        """Source producing single photons"""
+        return self._photonSource
+
+    @property
+    def sourceCode(self) -> str:
+        # lazily load template code
+        if ModularLightSource.template_code is None:
+            ModularLightSource.template_code = loadShader("lightsource.modular.glsl")
+        # build preamble
+        nRNGSource = self.nLambda * self.photonSource.nRNGSamples
+        preamble = f"#define RNG_RAY_SAMPLE_OFFSET {nRNGSource}\n"
+        # assemble full code
+        return "\n".join(
+            [
+                preamble,
+                self.raySource.sourceCode,
+                self.photonSource.sourceCode,
+                ModularLightSource.template_code,
+            ]
+        )
+
+    def bindParams(self, program: Program, i: int) -> None:
+        super().bindParams(program, i)
+        self.raySource.bindParams(program, i)
+        self.photonSource.bindParams(program, i)

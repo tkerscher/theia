@@ -37,12 +37,12 @@ def test_VolumeTracer():
 
     # create pipeline
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
-    source = theia.light.SphericalLightSource(
-        nLambda=N_LAMBDA,
-        position=light_pos,
+    rays = theia.light.SphericalRaySource(position=light_pos)
+    photons = theia.light.UniformPhotonSource(
         intensity=light_intensity,
         timeRange=(T0, T1),
     )
+    source = theia.light.ModularLightSource(rays, photons, N_LAMBDA)
     recorder = theia.estimator.HitRecorder(N * N_SCATTER * N_LAMBDA)
     tracer = theia.trace.VolumeTracer(
         N,
@@ -55,7 +55,7 @@ def test_VolumeTracer():
         target=theia.scene.SphereBBox(target_pos, target_radius),
     )
     # run pipeline
-    pl.runPipeline([rng, source, tracer, recorder])
+    pl.runPipeline([rng, rays, photons, source, tracer, recorder])
 
     # check hits
     hits = recorder.view(0)
@@ -116,12 +116,12 @@ def test_SceneShadowTracer(vol: bool, trans: bool):
 
     # create pipeline stages
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
-    source = theia.light.SphericalLightSource(
-        nLambda=N_LAMBDA,
-        position=light_pos,
+    rays = theia.light.SphericalRaySource(position=light_pos)
+    photons = theia.light.UniformPhotonSource(
         intensity=light_intensity,
         timeRange=(T0, T1),
     )
+    source = theia.light.ModularLightSource(rays, photons, N_LAMBDA)
     recorder = theia.estimator.HitRecorder(N * N_SCATTER * N_LAMBDA)
     tracer = theia.trace.SceneShadowTracer(
         N,
@@ -136,7 +136,7 @@ def test_SceneShadowTracer(vol: bool, trans: bool):
         disableTransmission=trans,
     )
     # run pipeline
-    pl.runPipeline([rng, source, tracer, recorder])
+    pl.runPipeline([rng, rays, photons, source, tracer, recorder])
 
     # check hits
     hits = recorder.view(0)
@@ -197,12 +197,12 @@ def test_SceneWalkTracer(vol: bool, trans: bool):
 
     # create pipeline stages
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
-    source = theia.light.SphericalLightSource(
-        nLambda=N_LAMBDA,
-        position=light_pos,
+    rays = theia.light.SphericalRaySource(position=light_pos)
+    photons = theia.light.UniformPhotonSource(
         intensity=light_intensity,
         timeRange=(T0, T1),
     )
+    source = theia.light.ModularLightSource(rays, photons, N_LAMBDA)
     recorder = theia.estimator.HitRecorder(N * N_SCATTER * N_LAMBDA)
     tracer = theia.trace.SceneWalkTracer(
         N,
@@ -218,7 +218,7 @@ def test_SceneWalkTracer(vol: bool, trans: bool):
         disableTransmission=trans,
     )
     # run pipeline
-    pl.runPipeline([rng, source, tracer, recorder])
+    pl.runPipeline([rng, rays, photons, source, tracer, recorder])
 
     # check hits
     hits = recorder.view(0)

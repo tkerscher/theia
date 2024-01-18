@@ -13,8 +13,8 @@ layout(local_size_x = BATCH_SIZE) in;
 
 #include "lightsource.queue.glsl"
 //user provided source
+#include "rng.glsl"
 #include "light.glsl"
-
 
 //output queue
 layout(scalar) writeonly buffer LightQueueOut {
