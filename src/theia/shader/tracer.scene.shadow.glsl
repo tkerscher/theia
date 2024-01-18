@@ -47,8 +47,8 @@ layout(local_size_x = BLOCK_SIZE) in;
 #include "source.glsl"
 
 uniform accelerationStructureEXT tlas;
-layout(scalar) readonly buffer Detectors {
-    Sphere detectors[];
+layout(scalar) readonly buffer Targets {
+    Sphere targets[];
 };
 
 layout(scalar) uniform TraceParams {
@@ -70,12 +70,12 @@ bool processScatter(
     if (CHECK_BRANCH(!success))
         return true; //abort tracing
 
-    //volume scatter event: MIS both phase function and detector
-    Sphere detector = detectors[params.targetIdx];
+    //volume scatter event: MIS both phase function and target
+    Sphere target = targets[params.targetIdx];
     vec3 detDir, scatterDir;
     float w_det, w_scatter, detDist;
     scatterMIS_power(
-        detector, Medium(ray.medium),
+        target, Medium(ray.medium),
         ray.position, ray.direction,
         random2D(idx, dim), random2D(idx, dim + 2),
         detDir, w_det, detDist, scatterDir, w_scatter

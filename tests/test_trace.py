@@ -100,12 +100,12 @@ def test_SceneShadowTracer(vol: bool, trans: bool):
     c1 = store.createInstance("sphere", "mat", transform=t1, detectorId=0)
     t2 = theia.scene.Transform.Scale(r, r, r).translate(x, y, z - r - d)
     c2 = store.createInstance("sphere", "mat", transform=t2, detectorId=1)
-    detectors = [
+    targets = [
         theia.scene.SphereBBox((x, y, z + r + d), r),
         theia.scene.SphereBBox((x, y, z - r - d), r),
     ]
     scene = theia.scene.Scene(
-        [c1, c2], material, medium=media["water"], detectors=detectors
+        [c1, c2], material, medium=media["water"], targets=targets
     )
 
     # calculate min time
@@ -181,12 +181,12 @@ def test_SceneWalkTracer(vol: bool, trans: bool):
     c1 = store.createInstance("sphere", "mat", transform=t1, detectorId=0)
     t2 = theia.scene.Transform.Scale(r, r, r).translate(x, y, z - r - d)
     c2 = store.createInstance("sphere", "mat", transform=t2, detectorId=1)
-    detectors = [
+    targets = [
         theia.scene.SphereBBox((x, y, z + r + d), r),
         theia.scene.SphereBBox((x, y, z - r - d), r),
     ]
     scene = theia.scene.Scene(
-        [c1, c2], material, medium=media["water"], detectors=detectors
+        [c1, c2], material, medium=media["water"], targets=targets
     )
 
     # calculate min time

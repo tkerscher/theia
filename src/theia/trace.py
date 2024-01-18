@@ -329,6 +329,9 @@ class SceneShadowTracer(PipelineStage):
         )
         # calculate group size
         self._groups = -(batchSize // -blockSize)
+        # check if scene defines targets
+        if scene.targets is None:
+            raise ValueError("provided scene has no targets defined")
 
         # compile code if needed
         if code is None:
@@ -351,9 +354,9 @@ class SceneShadowTracer(PipelineStage):
         self._code = code
         # create program
         self._program = hp.Program(self._code)
-        # bind tlas
+        # bind scene
         self._program.bindParams(
-            Detectors=scene.detectors,
+            Targets=scene.targets,
             Geometries=scene.geometries,
             tlas=scene.tlas,
         )
@@ -454,6 +457,10 @@ class SceneWalkTracer(PipelineStage):
     disableTransmission: bool, default=False
         Disables GPU code handling transmission, which may improve performance.
         Rays will default to always reflect where possible.
+    disableMIS: bool, default=False
+        Disables importance sampling the target. Setting this to True, should be
+        preferred to setting targetSampleProb to zero. Automatically set to
+        True, if the scene has no targets.
     code: Optional[bytes], default=None
         Cached compiled byte code. If `None` compiles it from source.
         The given byte code is not checked and must match the given
@@ -503,6 +510,7 @@ class SceneWalkTracer(PipelineStage):
         blockSize: int = 128,
         disableVolumeBorder: bool = False,
         disableTransmission: bool = False,
+        disableMIS: bool = False,
         code: Optional[bytes] = None,
     ) -> None:
         super().__init__({"TraceParams": self.TraceParams})
@@ -513,6 +521,9 @@ class SceneWalkTracer(PipelineStage):
         self._rng = rng
         self._scene = scene
         self._blockSize = blockSize
+        self._misDisabled = disableMIS
+        self._transmissionDisabled = disableTransmission
+        self._volumeBorderDisabled = disableVolumeBorder
         self.setParams(
             targetIdx=targetIdx,
             _sceneMedium=scene.medium,
@@ -525,6 +536,9 @@ class SceneWalkTracer(PipelineStage):
         )
         # calculate group size
         self._groups = -(batchSize // -blockSize)
+        # check if we have any targets
+        if scene.targets is None:
+            disableMIS = True
 
         # compile code if needed
         if code is None:
@@ -533,6 +547,8 @@ class SceneWalkTracer(PipelineStage):
                 preamble += "#define DISABLE_VOLUME_BORDER 1\n"
             if disableTransmission:
                 preamble += "#define DISABLE_TRANSMISSION 1\n"
+            if disableMIS:
+                preamble += "#define DISABLE_MIS 1\n"
             preamble += f"#define BATCH_SIZE {batchSize}\n"
             preamble += f"#define BLOCK_SIZE {blockSize}\n"
             preamble += f"#define DIM_OFFSET {source.nRNGSamples}\n"
@@ -549,10 +565,26 @@ class SceneWalkTracer(PipelineStage):
         self._program = hp.Program(self._code)
         # bind scene
         self._program.bindParams(
-            Targets=scene.detectors,
             Geometries=scene.geometries,
             tlas=scene.tlas,
         )
+        if not disableMIS:
+            self._program.bindParams(Targets=scene.targets)
+
+    @property
+    def MISDisabled(self) -> bool:
+        """Wether MIS was disabled"""
+        return self._misDisabled
+
+    @property
+    def TransmissionDisabled(self) -> bool:
+        """Wether transmission was disabled"""
+        return self._transmissionDisabled
+
+    @property
+    def VolumeBorderDisabled(self) -> bool:
+        """Wether volume border support was disabled"""
+        return self._volumeBorderDisabled
 
     @property
     def batchSize(self) -> int:

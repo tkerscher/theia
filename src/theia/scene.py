@@ -350,6 +350,27 @@ class Scene:
     """
     A scene describes a structure that the shader can query rays against and
     retrieve data about hit geometries like vertices and material.
+
+    Parameters
+    ----------
+    instances: Iterable[MeshInstance]
+        instances that make up the scene
+    materials: dict[str, int]
+        dictionary mapping material names to device addresses as obtained from
+        `bakeMaterials`
+    medium: int, default=0
+        device address of the medium the scene is emerged in, e.g. the address
+        of a water medium for an underwater simulation. Defaults to zero
+        specifying vacuum.
+    bbox: RectBBox, default=None
+        bounding box containing the scene, limiting traced rays inside. Defaults
+        to a cube of 1,000 units in each primal direction.
+    targets: Iterable[SphereBBox], default=[]
+        during scatter events, tracers may use targets each corresponding to the
+        detector of the same index to sample the next ray direction instead of
+        the phase function to increase the chance of actually hitting the
+        detector. targets do not need to coincide with the actual detector
+        geometry nor is it checked.
     """
 
     class GLSLGeometry(Structure):
@@ -368,30 +389,8 @@ class Scene:
         *,
         medium: int = 0,
         bbox: Optional[RectBBox] = None,
-        detectors: Iterable[SphereBBox] = [],
+        targets: Iterable[SphereBBox] = [],
     ) -> None:
-        """
-        Creates a new scene using the given instances
-
-        Parameters
-        ----------
-        instances: Iterable[MeshInstance]
-            instances that make up the scene
-        materials: dict[str, int]
-            dictionary mapping material names to device addresses as obtained
-            from bakeMaterials()
-        medium: int, default=0
-            device address of the medium the scene is emerged in, e.g. the
-            address of a water medium for an underwater simulation.
-            Defaults to zero specifying vacuum.
-        bbox: RectBBox, default=None
-            bounding box containing the scene, limiting traced rays inside.
-            Defaults to a cube of 1,000 units in each primal direction.
-        detectors: Iterable[SphereBBox], default=[]
-            spheres encapsulating the detectors used for sampling rays.
-            Tracing a detector without specifying its boundary box may result
-            in the tracing algorithm crashing.
-        """
         instances = list(instances)
         # collect geometries
         geometries = hp.ArrayBuffer(Scene.GLSLGeometry, len(instances))
@@ -407,16 +406,15 @@ class Scene:
         hp.execute(hp.updateTensor(geometries, self._geometries))
 
         # upload detectors to gpu
-        detectors = list(detectors)  # make sure its a list
-        if len(detectors) == 0:
-            # cant create empty buffer -> we need at least one detector uploaded
-            detectors = [SphereBBox((0.0,) * 3, 0.0)]
-        detectorBuffer = hp.ArrayBuffer(SphereBBox.GLSL, len(detectors))
-        for i in range(len(detectors)):
-            # Maybe a bit slow -> copy via numpy array?
-            detectorBuffer[i] = detectors[i].glsl
-        self._detectors = hp.ArrayTensor(SphereBBox.GLSL, len(detectors))
-        hp.execute(hp.updateTensor(detectorBuffer, self._detectors))
+        targets = list(targets)  # make sure its a list
+        if len(targets) > 0:
+            targetBuffer = hp.ArrayBuffer(SphereBBox.GLSL, len(targets))
+            for i in range(len(targets)):
+                targetBuffer[i] = targets[i].glsl
+            self._targets = hp.ArrayTensor(SphereBBox.GLSL, len(targets))
+            hp.execute(hp.updateTensor(targetBuffer, self._targets))
+        else:
+            self._targets = None
 
         # in order to pass to hephaistos.AccelerationStructure, we need to
         # extract the hephaistos.GeometryInstance from the MeshInstance
@@ -439,12 +437,12 @@ class Scene:
         self._bbox = value
 
     @property
-    def detectors(self) -> hp.ByteTensor:
+    def targets(self) -> hp.ByteTensor | None:
         """
         Tensor holding the array of spherical bounding boxes encapsulating the
-        detectors
+        detectors. `None` if no targets have been specified.
         """
-        return self._detectors
+        return self._targets
 
     @property
     def geometries(self) -> hp.ByteTensor:

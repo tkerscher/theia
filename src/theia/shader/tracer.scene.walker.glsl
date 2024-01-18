@@ -29,7 +29,11 @@
 #error "DIM_OFFSET not defined"
 #endif
 // #samples per iteration
+#ifndef DISABLE_MIS
 #define DIM_STRIDE 7
+#else
+#define DIM_STRIDE 5
+#endif
 
 layout(local_size_x = BLOCK_SIZE) in;
 
@@ -47,9 +51,11 @@ layout(local_size_x = BLOCK_SIZE) in;
 #include "source.glsl"
 
 uniform accelerationStructureEXT tlas;
+#ifndef DISABLE_MIS
 layout(scalar) readonly buffer Targets {
     Sphere targets[];
 };
+#endif
 
 layout(scalar) uniform TraceParams {
     uint targetIdx;
@@ -70,7 +76,8 @@ bool processScatter(
     bool success = propagateRay(ray, dist, params.propagation, true, false);
     if (CHECK_BRANCH(!success))
         return true; //abort tracing
-    
+
+#ifndef DISABLE_MIS    
     //volume scatter event: MIS both phase function and target
     Sphere target = targets[params.targetIdx];
     vec3 detDir, scatterDir;
@@ -101,6 +108,16 @@ bool processScatter(
     [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
         ray.samples[i].lin_contrib *= w;
     }
+#else
+    //sample new direction from phase function
+    float pScatter;
+    ray.direction = scatter(
+        Medium(ray.medium),
+        ray.direction,
+        random2D(idx, dim),
+        pScatter //not needed
+    );
+#endif
 
     //done
     return false; //dont abort trace
