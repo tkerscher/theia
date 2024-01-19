@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import importlib.resources
 import hephaistos as hp
 
@@ -40,6 +42,22 @@ def loadShader(file: str) -> str:
     """Loads the given shader file and returns its source code"""
     with open(getShaderPath(file), "r") as file:
         return file.read()
+
+
+class ShaderLoader:
+    """Descriptor for lazily loading shader code from the shader folder"""
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self.code = None
+
+    def __get__(self, obj, objtype=None) -> str:
+        if obj is None:
+            # accessed from class
+            return self
+        if self.code is None:
+            self.code = loadShader(self.path)
+        return self.code
 
 
 def compileShader(file: str, preamble: str = "", headers: Dict[str, str] = {}) -> bytes:

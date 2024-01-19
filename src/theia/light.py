@@ -9,7 +9,7 @@ from ctypes import Structure, c_float, c_uint32
 from hephaistos.glsl import vec2, vec3
 
 from theia.random import RNG
-from theia.util import compileShader, loadShader
+from theia.util import ShaderLoader, compileShader
 
 from typing import Callable, Dict, List, Set, Tuple, Type, Optional
 
@@ -248,8 +248,7 @@ class HostLightSource(LightSource):
         Can be used to stream in new samples on demand.
     """
 
-    # cache for source source, lazily loaded (not need if byte code was cached)
-    source_code = None
+    _sourceCode = ShaderLoader("lightsource.host.glsl")
 
     def __init__(
         self,
@@ -282,11 +281,8 @@ class HostLightSource(LightSource):
 
     @property
     def sourceCode(self) -> str:
-        if HostLightSource.source_code is None:
-            HostLightSource.source_code = loadShader("lightsource.host.glsl")
-        # add preamble
         preamble = f"#define LIGHT_QUEUE_SIZE {self.capacity}\n\n"
-        return preamble + HostLightSource.source_code
+        return preamble + self._sourceCode
 
     def buffer(self, i: int) -> int:
         """Returns the i-th buffer containing the data for the next batch"""
@@ -365,8 +361,6 @@ class DiskRaySource(RaySource):
     class RayParams(Structure):
         _fields_ = [("center", vec3), ("direction", vec3), ("radius", c_float)]
 
-    source_code = None
-
     def __init__(
         self,
         *,
@@ -381,11 +375,8 @@ class DiskRaySource(RaySource):
             radius=radius,
         )
 
-    @property
-    def sourceCode(self) -> str:
-        if DiskRaySource.source_code is None:
-            DiskRaySource.source_code = loadShader("raysource.disk.glsl")
-        return DiskRaySource.source_code
+    # source code via descriptor
+    sourceCode = ShaderLoader("raysource.disk.glsl")
 
 
 class PencilRaySource(RaySource):
@@ -415,8 +406,6 @@ class PencilRaySource(RaySource):
             ("direction", vec3),
         ]
 
-    source_code = None
-
     def __init__(
         self,
         *,
@@ -426,11 +415,8 @@ class PencilRaySource(RaySource):
         super().__init__(params={"RayParams": PencilRaySource.RayParams})
         self.setParams(position=position, direction=direction)
 
-    @property
-    def sourceCode(self) -> str:
-        if PencilRaySource.source_code is None:
-            PencilRaySource.source_code = loadShader("raysource.pencil.glsl")
-        return PencilRaySource.source_code
+    # sourceCode via descriptor
+    sourceCode = ShaderLoader("raysource.pencil.glsl")
 
 
 class SphericalRaySource(RaySource):
@@ -453,8 +439,6 @@ class SphericalRaySource(RaySource):
     class RayParams(Structure):
         _fields_ = [("position", vec3)]
 
-    source_code = None
-
     def __init__(
         self,
         position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
@@ -465,11 +449,8 @@ class SphericalRaySource(RaySource):
         )
         self.setParams(position=position)
 
-    @property
-    def sourceCode(self) -> str:
-        if SphericalRaySource.source_code is None:
-            SphericalRaySource.source_code = loadShader("raysource.spherical.glsl")
-        return SphericalRaySource.source_code
+    # sourceCode via descriptor
+    sourceCode = ShaderLoader("raysource.spherical.glsl")
 
 
 class PhotonSource(SourceCodeMixin):
@@ -555,11 +536,8 @@ class UniformPhotonSource(PhotonSource):
     def intensity(self, value: float) -> None:
         self._intensity = value
 
-    @property
-    def sourceCode(self) -> str:
-        if UniformPhotonSource.source_code is None:
-            UniformPhotonSource.source_code = loadShader("photonsource.uniform.glsl")
-        return UniformPhotonSource.source_code
+    # sourceCode via descriptor
+    sourceCode = ShaderLoader("photonsource.uniform.glsl")
 
     def _finishParams(self, i: int) -> None:
         # calculate const contribution
@@ -590,7 +568,7 @@ class ModularLightSource(LightSource):
     """
 
     # lazily load template code
-    template_code = None
+    _templateCode = ShaderLoader("lightsource.modular.glsl")
 
     def __init__(
         self,
@@ -615,9 +593,6 @@ class ModularLightSource(LightSource):
 
     @property
     def sourceCode(self) -> str:
-        # lazily load template code
-        if ModularLightSource.template_code is None:
-            ModularLightSource.template_code = loadShader("lightsource.modular.glsl")
         # build preamble
         nRNGSource = self.nLambda * self.photonSource.nRNGSamples
         preamble = f"#define RNG_RAY_SAMPLE_OFFSET {nRNGSource}\n"
@@ -627,7 +602,7 @@ class ModularLightSource(LightSource):
                 preamble,
                 self.raySource.sourceCode,
                 self.photonSource.sourceCode,
-                ModularLightSource.template_code,
+                self._templateCode,
             ]
         )
 

@@ -7,7 +7,7 @@ from hephaistos.queue import QueueBuffer, QueueTensor, QueueView, clearQueue
 
 from ctypes import Structure, c_float, c_uint32
 
-from theia.util import compileShader, loadShader
+from theia.util import ShaderLoader, compileShader
 
 from numpy.typing import NDArray
 from typing import Dict, List, Set, Type, Optional
@@ -63,8 +63,7 @@ class HitRecorder(HitResponse):
         If `True`, clears the queue afterwards.
     """
 
-    # lazily load source code (might not needed)
-    source_code = None
+    _sourceCode = ShaderLoader("response.record.glsl")
 
     def __init__(self, capacity: int, *, retrieve: bool = True) -> None:
         super().__init__()
@@ -91,11 +90,8 @@ class HitRecorder(HitResponse):
 
     @property
     def sourceCode(self) -> str:
-        if HitRecorder.source_code is None:
-            HitRecorder.source_code = loadShader("response.record.glsl")
-        preamble = ""
-        preamble += f"#define HIT_QUEUE_SIZE {self.capacity}\n\n"
-        return preamble + HitRecorder.source_code
+        preamble = f"#define HIT_QUEUE_SIZE {self.capacity}\n\n"
+        return preamble + self._sourceCode
 
     @property
     def tensor(self) -> QueueTensor:
@@ -569,8 +565,7 @@ class ValueHitResponse(HitResponse):
         be be implemented in subclasses as properties.
     """
 
-    # lazily load template code
-    template_code = None
+    _templateCode = ShaderLoader("response.value.glsl")
 
     def __init__(
         self,
@@ -599,14 +594,10 @@ class ValueHitResponse(HitResponse):
 
     @property
     def sourceCode(self) -> str:
-        # lazily load value store code
-        if ValueHitResponse.template_code is None:
-            ValueHitResponse.template_code = loadShader("response.value.glsl")
         # create preamble
-        preamble = ""
-        preamble += f"#define VALUE_QUEUE_SIZE {self.queue.capacity}\n\n"
+        preamble = f"#define VALUE_QUEUE_SIZE {self.queue.capacity}\n"
         # assemble full source code
-        return preamble + self.valueFunction + "\n" + ValueHitResponse.template_code
+        return "\n".join([preamble, self.valueFunction, self._templateCode])
 
     def bindParams(self, program: hp.Program, i: int) -> None:
         super().bindParams(program, i)
@@ -618,14 +609,8 @@ class LambertHitResponse(ValueHitResponse):
     Response function producing a value according to Lambert's cosine law.
     """
 
-    # lazy code loading
-    source_code = None
-
     def __init__(self, store: Estimator | QueueTensor) -> None:
         super().__init__(store)
 
-    @property
-    def valueFunction(self) -> str:
-        if LambertHitResponse.source_code is None:
-            LambertHitResponse.source_code = loadShader("response.lambert.glsl")
-        return LambertHitResponse.source_code
+    # property via descriptor
+    valueFunction = ShaderLoader("response.lambert.glsl")

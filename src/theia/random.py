@@ -6,7 +6,7 @@ from ctypes import Structure, c_uint32
 from os import urandom
 
 from hephaistos.pipeline import PipelineStage, SourceCodeMixin
-from theia.util import compileShader, loadShader
+from theia.util import ShaderLoader, compileShader
 
 from typing import Dict, List, Optional, Set, Tuple, Type
 
@@ -220,9 +220,6 @@ class PhiloxRNG(RNG):
     class PhiloxParams(Structure):
         _fields_ = [("key", Key), ("offset", Counter)]
 
-    # cache for source code, lazily loaded (not need if byte code was cached)
-    source_code = None
-
     def __init__(self, *, key: Optional[int] = None, offset: int = 0) -> None:
         super().__init__({"PhiloxParams": self.PhiloxParams})
         # save params
@@ -230,11 +227,8 @@ class PhiloxRNG(RNG):
             key = urandom(8)
         self.setParams(key=key, offset=offset)
 
-    @property
-    def sourceCode(self) -> str:
-        if PhiloxRNG.source_code is None:
-            PhiloxRNG.source_code = loadShader("random.philox.glsl")
-        return PhiloxRNG.source_code
+    # sourceCode via descriptor
+    sourceCode = ShaderLoader("random.philox.glsl")
 
 
 class SobolQRNG(RNG):
@@ -269,8 +263,7 @@ class SobolQRNG(RNG):
     class SobolParams(Structure):
         _fields_ = [("seed", c_uint32), ("offset", c_uint32)]
 
-    # cache for source source, lazily loaded (not need if byte code was cached)
-    source_code = None
+    _sourceCode = ShaderLoader("random.sobol.glsl")
 
     def __init__(
         self, *, seed: Optional[int] = None, offset: int = 0, scrambled: bool = True
@@ -298,17 +291,15 @@ class SobolQRNG(RNG):
 
     @property
     def sourceCode(self) -> str:
-        if SobolQRNG.source_code is None:
-            SobolQRNG.source_code = loadShader("random.sobol.glsl")
         # add preamble if needed
         if self.scrambled:
             # add define to disable scrambling if needed
             # multiple #define are allowed so dont sweat about putting it before
             # the include guard
             preamble = "#define _SOBOL_NO_SCRAMBLE\n\n"
-            return preamble + SobolQRNG.source_code
+            return preamble + self._sourceCode
         else:
-            return SobolQRNG.source_code
+            return self._sourceCode
 
     def bindParams(self, program: hp.Program, i: int) -> None:
         super().bindParams(program, i)
