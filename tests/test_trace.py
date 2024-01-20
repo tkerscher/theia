@@ -283,6 +283,7 @@ def test_EventStatisticCallback():
         disableMIS=True,
     )
     # assert stats start empty
+    assert stats.created == 0
     assert stats.absorbed == 0
     assert stats.hit == 0
     assert stats.detected == 0
@@ -290,10 +291,12 @@ def test_EventStatisticCallback():
     assert stats.lost == 0
     assert stats.decayed == 0
     assert stats.volume == 0
+    assert stats.error == 0
     # run pipeline
     pl.runPipeline([rng, rays, photons, source, tracer])
 
     # check stats again
+    assert stats.created == N
     assert stats.absorbed > 0
     assert stats.hit > 0
     assert stats.detected > 0
@@ -301,6 +304,7 @@ def test_EventStatisticCallback():
     assert stats.lost > 0
     assert stats.decayed > 0
     assert stats.volume > 0
+    assert stats.error == 0
     total = (
         stats.absorbed
         + stats.hit
@@ -313,6 +317,7 @@ def test_EventStatisticCallback():
     assert total == N
     # check if we can reset it
     stats.reset()
+    assert stats.created == 0
     assert stats.absorbed == 0
     assert stats.hit == 0
     assert stats.detected == 0
@@ -320,6 +325,7 @@ def test_EventStatisticCallback():
     assert stats.lost == 0
     assert stats.decayed == 0
     assert stats.volume == 0
+    assert stats.error == 0
 
 
 def test_TrackRecordCallback():
@@ -354,13 +360,14 @@ def test_TrackRecordCallback():
         nScattering=N_SCATTER,
         scatterCoefficient=0.1,
         maxTime=T_MAX,
+        traceBBox=theia.scene.RectBBox((-200.0,) * 3, (200.0,) * 3),
         target=theia.scene.SphereBBox(target_pos, target_radius),
     )
     # run pipeline
     pl.runPipeline([rng, rays, photons, source, tracer, track])
 
     # check result
-    tracks, lengths = track.result(0)
+    tracks, lengths, codes = track.result(0)
     assert tracks.shape == (N, LENGTH, 4)
     assert np.all(tracks[:, 0, :3] == light_pos)
     assert tracks[:, 0, 3].min() >= T0 and tracks[:, 0, 3].max() <= T1
@@ -370,3 +377,7 @@ def test_TrackRecordCallback():
     assert np.all(tracks[:, 1, 2] == light_pos[2])
     # check length is in range
     assert lengths.min() >= 1 and lengths.max() <= N_SCATTER
+    # check result codes in range
+    minCode = min(code.value for code in theia.trace.EventResultCode)
+    maxCode = max(code.value for code in theia.trace.EventResultCode)
+    assert codes.min() >= minCode and codes.max() <= maxCode

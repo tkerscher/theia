@@ -166,14 +166,14 @@ void main() {
     //discard ray if inside target
     if (distance(ray.position, params.target.position) <= params.target.radius)
         return;
-    onEvent(ray, EVENT_TYPE_RAY_CREATED, idx, 0);
+    onEvent(ray, RESULT_CODE_RAY_CREATED, idx, 0);
     
     //trace loop
     uint dim = DIM_OFFSET;
     [[unroll]] for (uint i = 1; i <= N_SCATTER; ++i, dim += DIM_STRIDE) {
         ResultCode result = trace(ray, idx, dim);
-        if (result > ERROR_CODE_MAX_VALUE)
-            onEvent(ray, result, idx, i);
+        //user provided callback
+        onEvent(ray, result, idx, i);
         //stop codes are negative
         if (result < 0) return;
     }

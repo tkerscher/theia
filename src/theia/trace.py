@@ -3,7 +3,7 @@ from hephaistos import Program
 from hephaistos.glsl import buffer_reference, vec3
 from hephaistos.pipeline import PipelineStage, SourceCodeMixin
 
-from ctypes import Structure, c_float, c_uint32, addressof, memset, sizeof
+from ctypes import Structure, c_float, c_int32, c_uint32, addressof, memset, sizeof
 from numpy.ctypeslib import as_array
 
 from theia.estimator import HitResponse
@@ -12,6 +12,7 @@ from theia.random import RNG
 from theia.scene import RectBBox, Scene, SphereBBox
 from theia.util import ShaderLoader, compileShader
 
+from enum import IntEnum
 from numpy.typing import NDArray
 from typing import Dict, List, Optional, Set, Tuple, Type
 
@@ -55,6 +56,7 @@ class EventStatisticCallback(TraceEventCallback):
 
     class Statistic(Structure):
         _fields_ = [
+            ("created", c_uint32),
             ("scattered", c_uint32),
             ("hit", c_uint32),
             ("detected", c_uint32),
@@ -62,6 +64,7 @@ class EventStatisticCallback(TraceEventCallback):
             ("lost", c_uint32),
             ("decayed", c_uint32),
             ("absorbed", c_uint32),
+            ("error", c_uint32),
         ]
 
     def __init__(self) -> None:
@@ -80,6 +83,11 @@ class EventStatisticCallback(TraceEventCallback):
     def absorbed(self) -> int:
         """Number of absorbed rays"""
         return self._stat.absorbed
+
+    @property
+    def created(self) -> int:
+        """Number of rays created"""
+        return self._stat.created
 
     @property
     def hit(self) -> int:
@@ -110,6 +118,11 @@ class EventStatisticCallback(TraceEventCallback):
     def volume(self) -> int:
         """Number of volume boundary hits"""
         return self._stat.volume
+
+    @property
+    def error(self) -> int:
+        """Number of traces aborted due to an error"""
+        return self._stat.error
 
     def reset(self) -> None:
         """Resets the statistic"""
@@ -150,7 +163,7 @@ class TrackRecordCallback(TraceEventCallback):
         self._retrieve = retrieve
 
         # allocate memory
-        words = capacity * length * 4 + capacity  # track + counter
+        words = capacity * length * 4 + capacity * 2  # track + length + codes
         self._tensor = hp.ByteTensor(words * 4)
         self._buffer = [hp.RawBuffer(words * 4) for _ in range(2)]
 
@@ -186,9 +199,10 @@ class TrackRecordCallback(TraceEventCallback):
 
     def result(self, i: int) -> Tuple[NDArray, NDArray]:
         """
-        Returns the recorded tracks. First tuple are the tracks, the second one
-        the length of each track. Positions after each track length may contain
-        garbage data.
+        Returns the recorded tracks saved using the i-th pipeline configuration.
+        First tuple are the tracks, the second one the length of each track, and
+        the last one is the last recorded result code. Positions after each
+        track length may contain garbage data.
 
         Returns
         -------
@@ -196,18 +210,22 @@ class TrackRecordCallback(TraceEventCallback):
             Recorded tracks stored in a numpy array of shape (track,pos,4)
         lengths: NDArray
             Length of each recorded track stored in a numpy array of shape (track,)
+        codes: NDArray
+            Last recorded result code per track
         """
         # fetch each data structures
         adr = self._buffer[i].address
         pLengths = (c_uint32 * self.capacity).from_address(adr)
+        pCodes = (c_int32 * self.capacity).from_address(adr + 4 * self.capacity)
         n = self.length * self.capacity * 4
-        pTracks = (c_float * n).from_address(adr + 4 * self.capacity)
+        pTracks = (c_float * n).from_address(adr + 8 * self.capacity)
         # construct numpy array
         lengths = as_array(pLengths)
+        codes = as_array(pCodes)
         tracks = as_array(pTracks).reshape((4, self.length, self.capacity))
         # change from (coords, ray, event) -> (ray, event, coords)
         tracks = tracks.transpose(2, 1, 0)
-        return tracks, lengths
+        return tracks, lengths, codes
 
     def bindParams(self, program: Program, i: int) -> None:
         super().bindParams(program, i)
@@ -218,6 +236,40 @@ class TrackRecordCallback(TraceEventCallback):
             return [hp.retrieveTensor(self._tensor, self._buffer[i])]
         else:
             return []
+
+
+class EventResultCode(IntEnum):
+    """
+    Enumeration of result codes the tracing algorithm can encounter and pass
+    on to the event callback. Negative codes indicate the tracer to stop.
+    """
+
+    SUCCESS = 0
+    """Operation successful without further information"""
+    RAY_CREATED = 1
+    """Ray was sampled"""
+    RAY_SCATTERED = 2
+    """Ray scattered"""
+    RAY_HIT = 3
+    """Ray hit a geometry other than target"""
+    RAY_DETECTED = 4
+    """Ray hit target"""
+    VOLUME_HIT = 5
+    """Ray hit volume border"""
+    RAY_LOST = -1
+    """Ray left tracing boundary box"""
+    RAY_DECAYED = -2
+    """Ray reached max life time"""
+    RAY_ABSORBED = -3
+    """Ray hit absorber"""
+    ERROR_CODE_MAX_VALUE = -10
+    """Max value for an error code"""
+    ERROR_UNKNOWN = -10
+    """Tracer encountered an unexpected error indicating a bug in the tracer"""
+    ERROR_MEDIA_MISMATCH = -11
+    """Tracer encountered unexpected media"""
+    ERROR_TRACE_ABORT = -12
+    """Tracer reached a state it can't proceed from"""
 
 
 class VolumeTracer(PipelineStage):
