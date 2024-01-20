@@ -50,7 +50,7 @@ bool processRayQuery(
     precise vec3 e1 = v1.position - v0.position;
     precise vec3 e2 = v2.position - v0.position;
     objPos = v0.position + fma(vec3(barys.x), e1, barys.y * e2);
-    geomNormal = cross(e1, e2); //used for offsetting
+    geomNormal = cross(e1, e2);
     //interpolate normal
     precise vec3 n1 = v1.normal - v0.normal;
     precise vec3 n2 = v2.normal - v0.normal;
@@ -70,7 +70,7 @@ bool processRayQuery(
     //light models are generally unaware of the scene's geometry and might have
     //sampled a light ray inside a geometry
     //-> test against and discard
-    inward = dot(ray.direction, worldNrm) <= 0.0; //normal and ray in opposite direction
+    inward = dot(objDir, geomNormal) <= 0.0; //normal and ray in opposite direction
     //address of expected ray medium
     uvec2 medium = inward ? uvec2(mat.outside) : uvec2(mat.inside);
     if (ray.medium != medium)
