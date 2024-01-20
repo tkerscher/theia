@@ -7,10 +7,11 @@
 #include "util.branch.glsl"
 
 #include "response.common.glsl"
+#include "result.glsl"
 //user provided code
 #include "response.glsl"
 
-bool processHit(
+ResultCode processHit(
     inout Ray ray,
     rayQueryEXT rayQuery,
     float u, //random number
@@ -30,15 +31,15 @@ bool processHit(
         geomNormal
     );
     if (CHECK_BRANCH(!success))
-        return true; //abort tracing
+        return ERROR_CODE_TRACE_ABORT; //abort tracing
     //fetch flags
     uint flags = inward ? mat.flagsInwards : mat.flagsOutwards;
 
     //update samples
     float dist = length(worldPos - ray.position);
-    success = updateSamples(ray, dist, params, false, true);
-    if (CHECK_BRANCH(!success))
-        return true;
+    ResultCode result = updateSamples(ray, dist, params, false, true);
+    if (CHECK_BRANCH(result < 0))
+        return result;
 
     //calculate reflectance
     float r[N_LAMBDA];
@@ -61,6 +62,7 @@ bool processHit(
     //If hit target -> create response item
     int customId = rayQueryGetIntersectionInstanceCustomIndexEXT(rayQuery, true);
     bool hitTarget = customId == targetId && isTarget;
+    result = hitTarget ? RESULT_CODE_RAY_DETECTED : RESULT_CODE_RAY_HIT;
     if (subgroupAny(hitTarget) && hitTarget) {
     // if (customId == targetId && (flags & MATERIAL_DETECTOR_BIT) != 0) {
         //process hits
@@ -87,12 +89,12 @@ bool processHit(
     //check for black flag
     if (black) {
         //stop tracing
-        return true;
+        return RESULT_CODE_RAY_ABSORBED;
     }
 
     //return early if we should not update the ray
     if (CHECK_BRANCH(!update)) {
-        return false; //dont abort tracing
+        return result; //dont abort tracing
     }
 
 #ifndef DISABLE_VOLUME_BORDER
@@ -107,7 +109,7 @@ bool processHit(
             ray.samples[i].constants = lookUpMedium(medium, ray.samples[i].wavelength);
         }
         //done -> early return
-        return false; //dont abort tracing
+        return RESULT_CODE_VOLUME_HIT; //dont abort tracing
     }
 #endif
 
@@ -173,7 +175,7 @@ bool processHit(
     }
     else {
         //no way to proceed -> abort tracing
-        return true;
+        return RESULT_CODE_RAY_ABSORBED;
     }
 #else
     //transmission disables -> only do reflection
@@ -188,7 +190,7 @@ bool processHit(
 #endif
 
     //done
-    return false; //dont abort tracing
+    return result; //dont abort tracing
 }
 
 #endif

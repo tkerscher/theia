@@ -36,6 +36,7 @@ layout(local_size_x = BLOCK_SIZE) in;
 #include "material.glsl"
 #include "ray.propagate.glsl"
 #include "ray.sample.glsl"
+#include "result.glsl"
 #include "sphere.glsl"
 #include "tracer.mis.glsl"
 #include "tracer.scene.hit.glsl"
@@ -44,6 +45,7 @@ layout(local_size_x = BLOCK_SIZE) in;
 #include "lightsource.common.glsl"
 //user provided code
 #include "rng.glsl"
+#include "callback.glsl"
 #include "source.glsl"
 
 uniform accelerationStructureEXT tlas;
@@ -58,7 +60,7 @@ layout(scalar) uniform TraceParams {
     PropagateParams propagation;
 } params;
 
-bool processScatter(
+ResultCode processScatter(
     inout Ray ray,
     float dist,
     rayQueryEXT rayQuery,
@@ -66,9 +68,9 @@ bool processScatter(
     out Ray hitRay
 ) {
     //propagate to scatter event
-    bool success = propagateRay(ray, dist, params.propagation, true, false);
-    if (CHECK_BRANCH(!success))
-        return true; //abort tracing
+    ResultCode result = propagateRay(ray, dist, params.propagation, true, false);
+    if (CHECK_BRANCH(result < 0))
+        return result; //abort tracing
 
     //volume scatter event: MIS both phase function and target
     Sphere target = targets[params.targetIdx];
@@ -107,10 +109,10 @@ bool processScatter(
     rayQueryProceedEXT(rayQuery);
 
     //done
-    return false; //dont abort trace
+    return RESULT_CODE_RAY_SCATTERED; //dont abort trace
 }
 
-bool trace(inout Ray ray, uint idx, uint dim) {
+ResultCode trace(inout Ray ray, uint idx, uint dim) {
     //just to be safe
     vec3 dir = normalize(ray.direction);
     //sample distance
@@ -129,7 +131,8 @@ bool trace(inout Ray ray, uint idx, uint dim) {
         dist);
     rayQueryProceedEXT(rayQuery);
     //check if we hit anything
-    bool hit = rayQueryGetIntersectionTypeEXT(rayQuery, true) == gl_RayQueryCommittedIntersectionTriangleEXT;
+    bool hit = rayQueryGetIntersectionTypeEXT(rayQuery, true) ==
+        gl_RayQueryCommittedIntersectionTriangleEXT;
 
     //volume scattering produces shadow rays aimed at the detector, which are
     //handled similar to direct hits. To reduce divergence, we handle them both
@@ -139,24 +142,14 @@ bool trace(inout Ray ray, uint idx, uint dim) {
     //the shadow ray
     Ray hitRay;
     //check hit across subgroup, giving change to skip unnecessary code
-    if (subgroupAll(!hit)) {
-        //returns true, if we should abort tracing
-        if (processScatter(ray, dist, rayQuery, idx, dim, hitRay))
-            return true; //abort tracing
-    }
-    else if (subgroupAll(hit)) {
+    ResultCode result;
+    if (CHECK_BRANCH(hit)) {
         hitRay = ray;
     }
-    else {
-        //mixed branching
-        if (!hit) {
-            //returns true, if we should abort tracing
-            if (processScatter(ray, dist, rayQuery, idx, dim, hitRay))
-                return true; //abort tracing
-        }
-        else {
-            hitRay = ray;
-        }
+    else if (CHECK_BRANCH(!hit)) {
+        result = processScatter(ray, dist, rayQuery, idx, dim, hitRay);
+        if (result < 0)
+            return result; //abort tracing
     }
     //in any case advance rng
     dim += 4;
@@ -167,7 +160,7 @@ bool trace(inout Ray ray, uint idx, uint dim) {
     //dont bother drawing a random number if we dont use it
     u = random(idx, dim); dim++;
 #endif
-    bool hitResult = processHit(
+    result = processHit(
         hitRay, rayQuery,
         u, //random number for reflect/transmit decision
         params.targetIdx,
@@ -178,24 +171,12 @@ bool trace(inout Ray ray, uint idx, uint dim) {
     dim++;
 
     //copy hitRay back to ray if necessary
-    if (subgroupAll(hit)) {
-        //if direct hit -> update ray for tracing
+    if (CHECK_BRANCH(hit)) {
         ray = hitRay;
-        return hitResult;
+        return result;
     }
-    else if (subgroupAll(!hit)) {
-        //always continue after volume scattering
-        return false; //dont abort tracing
-    }
-    else {
-        //mixed branching
-        if (hit) {
-            ray = hitRay;
-            return hitResult;
-        }
-        else {
-            return false; //dont abort tracing
-        }
+    else if(CHECK_BRANCH(!hit)) {
+        return RESULT_CODE_RAY_SCATTERED;
     }
 }
 
@@ -207,11 +188,16 @@ void main() {
     
     //sample ray
     Ray ray = createRay(sampleLight(idx), Medium(params.sceneMedium));
+    onEvent(ray, EVENT_TYPE_RAY_CREATED, idx, 0);
 
     //trace loop
     uint dim = DIM_OFFSET;
-    [[unroll]] for (uint i = 0; i < N_SCATTER; ++i, dim += DIM_STRIDE) {
-        //trace() returns true, if we should stop tracing
-        if (trace(ray, idx, dim)) return;
+    [[unroll]] for (uint i = 1; i <= N_SCATTER; ++i, dim += DIM_STRIDE) {
+        ResultCode result = trace(ray, idx, dim);
+        //user provided callback
+        if (result > ERROR_CODE_MAX_VALUE)
+            onEvent(ray, result, idx, i);
+        //stop codes are negative
+        if (result < 0) return;
     }
 }

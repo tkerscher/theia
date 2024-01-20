@@ -86,7 +86,7 @@ def test_SceneShadowTracer(vol: bool, trans: bool):
     # create materials
     water = WaterModel().createMedium()
     glass = theia.material.BK7Model().createMedium()
-    mat = theia.material.Material("mat", glass, water, flags=("D", "B"))
+    mat = theia.material.Material("mat", glass, water, flags=("DR", "B"))
     tensor, material, media = theia.material.bakeMaterials(mat)
     # create scene
     store = theia.scene.MeshStore(
@@ -167,7 +167,7 @@ def test_SceneWalkTracer(vol: bool, trans: bool):
     # create materials
     water = WaterModel().createMedium()
     glass = theia.material.BK7Model().createMedium()
-    mat = theia.material.Material("mat", glass, water, flags=("D", "B"))
+    mat = theia.material.Material("mat", glass, water, flags=("DR", "B"))
     tensor, material, media = theia.material.bakeMaterials(mat)
     # create scene
     store = theia.scene.MeshStore(
@@ -230,3 +230,143 @@ def test_SceneWalkTracer(vol: bool, trans: bool):
     assert np.allclose(np.square(hits["normal"]).sum(-1), 1.0)
     assert np.min(hits["time"]) >= t_min
     assert np.max(hits["time"]) <= T_MAX
+
+
+def test_EventStatisticCallback():
+    if not hp.isRaytracingEnabled():
+        pytest.skip("ray tracing is not supported")
+
+    N = 32 * 1024
+    T0, T1 = 10.0, 20.0
+
+    # create materials
+    water = WaterModel().createMedium()
+    glass = theia.material.BK7Model().createMedium()
+    mat = theia.material.Material("mat", glass, water, flags=("DR", "B"))
+    vol = theia.material.Material("vol", glass, water, flags="V")
+    absorber = theia.material.Material("abs", glass, water, flags="B")
+    tensor, material, media = theia.material.bakeMaterials(mat, vol, absorber)
+    # create scene
+    store = theia.scene.MeshStore({"sphere": "assets/sphere.stl"})
+    r, d = 20.0, 5.0
+    t1 = theia.scene.Transform.Scale(r, r, r).translate(17.0, 17.0, 17.0)
+    c1 = store.createInstance("sphere", "mat", transform=t1, detectorId=0)
+    t2 = theia.scene.Transform.Scale(r, r, r).translate(-17.0, -17.0, -17.0)
+    c2 = store.createInstance("sphere", "mat", transform=t2, detectorId=1)
+    t3 = theia.scene.Transform.Scale(r, r, r).translate(17.0, 17.0, -17.0)
+    c3 = store.createInstance("sphere", "vol", transform=t3)
+    t4 = theia.scene.Transform.Scale(r, r, r).translate(-17.0, 17.0, 17.0)
+    c4 = store.createInstance("sphere", "abs", transform=t4)
+    bbox = theia.scene.RectBBox((-50.0,) * 3, (50.0,) * 3)
+    scene = theia.scene.Scene(
+        [c1, c2, c3, c4], material, medium=media["water"], bbox=bbox
+    )
+
+    # create pipeline
+    rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
+    rays = theia.light.SphericalRaySource()
+    photons = theia.light.UniformPhotonSource(timeRange=(T0, T1))
+    source = theia.light.ModularLightSource(rays, photons, 1)
+    response = theia.estimator.EmptyResponse()
+    stats = theia.trace.EventStatisticCallback()
+    tracer = theia.trace.SceneWalkTracer(
+        N,
+        source,
+        response,
+        rng,
+        callback=stats,
+        scene=scene,
+        targetIdx=1,
+        nScattering=1,
+        scatterCoefficient=0.005,
+        maxTime=100,
+        disableMIS=True,
+    )
+    # assert stats start empty
+    assert stats.absorbed == 0
+    assert stats.hit == 0
+    assert stats.detected == 0
+    assert stats.scattered == 0
+    assert stats.lost == 0
+    assert stats.decayed == 0
+    assert stats.volume == 0
+    # run pipeline
+    pl.runPipeline([rng, rays, photons, source, tracer])
+
+    # check stats again
+    assert stats.absorbed > 0
+    assert stats.hit > 0
+    assert stats.detected > 0
+    assert stats.scattered > 0
+    assert stats.lost > 0
+    assert stats.decayed > 0
+    assert stats.volume > 0
+    total = (
+        stats.absorbed
+        + stats.hit
+        + stats.detected
+        + stats.scattered
+        + stats.lost
+        + stats.decayed
+        + stats.volume
+    )
+    assert total == N
+    # check if we can reset it
+    stats.reset()
+    assert stats.absorbed == 0
+    assert stats.hit == 0
+    assert stats.detected == 0
+    assert stats.scattered == 0
+    assert stats.lost == 0
+    assert stats.decayed == 0
+    assert stats.volume == 0
+
+
+def test_TrackRecordCallback():
+    N = 32 * 256
+    N_LAMBDA = 4
+    N_SCATTER = 6
+    LENGTH = N_SCATTER + 2  # one more than needed
+    T0, T1 = 10.0, 20.0
+    T_MAX = 500.0
+    target_pos, target_radius = (5.0, 2.0, -8.0), 4.0
+    light_pos = (100.0, -50.0, 20.0)
+    light_dir = (1.0, 0.0, 0.0)
+
+    # create water medium
+    water = WaterModel().createMedium()
+    tensor, _, media = theia.material.bakeMaterials(media=[water])
+
+    # create pipeline
+    rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
+    rays = theia.light.PencilRaySource(position=light_pos, direction=light_dir)
+    photons = theia.light.UniformPhotonSource(timeRange=(T0, T1))
+    source = theia.light.ModularLightSource(rays, photons, N_LAMBDA)
+    response = theia.estimator.EmptyResponse()
+    track = theia.trace.TrackRecordCallback(N, LENGTH)
+    tracer = theia.trace.VolumeTracer(
+        N,
+        source,
+        response,
+        rng,
+        callback=track,
+        medium=media["water"],
+        nScattering=N_SCATTER,
+        scatterCoefficient=0.1,
+        maxTime=T_MAX,
+        target=theia.scene.SphereBBox(target_pos, target_radius),
+    )
+    # run pipeline
+    pl.runPipeline([rng, rays, photons, source, tracer, track])
+
+    # check result
+    tracks, lengths = track.result(0)
+    assert tracks.shape == (N, LENGTH, 4)
+    assert np.all(tracks[:, 0, :3] == light_pos)
+    assert tracks[:, 0, 3].min() >= T0 and tracks[:, 0, 3].max() <= T1
+    # since we use a pencil beam in x direction, y and z for the first scatter
+    # are still deterministic
+    assert np.all(tracks[:, 1, 1] == light_pos[1])
+    assert np.all(tracks[:, 1, 2] == light_pos[2])
+    # check length is in range
+    assert lengths.min() >= 1 and lengths.max() <= N_SCATTER

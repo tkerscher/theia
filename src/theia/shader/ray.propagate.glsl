@@ -2,6 +2,7 @@
 #define _INCLUDE_RAY_PROPAGATE
 
 #include "ray.glsl"
+#include "result.glsl"
 #include "util.branch.glsl"
 
 struct PropagateParams {
@@ -31,8 +32,7 @@ float sampleScatterLength(const Ray ray, const PropagateParams params, float u) 
 //Includes sampling propabilities and check for maxTime
 //Set scatter=true, if mu_s should be applied to lin_contrib
 //Set hit=true, if the was stopped by a hit (affects probability calculations)
-//Returns true, if the ray can proceed, i.e. is within boundaries.
-bool updateSamples(
+ResultCode updateSamples(
     inout Ray ray,
     const float dist,
     const PropagateParams params,
@@ -52,15 +52,14 @@ bool updateSamples(
             anyBelowMaxTime = true;
     }
     //return result of boundary check
-    return anyBelowMaxTime;
+    return anyBelowMaxTime ? RESULT_CODE_SUCCESS : RESULT_CODE_RAY_DECAYED;
 }
 
 //Propagates the given ray in its direction for the given distance
 //Updates its samples accordingly (see updateSamples())
 //Set scatter=true, if mu_s should be applied to lin_contrib
 //Set hit=true, if the was stopped by a hit (affects probability calculations)
-//Returns true, if the ray can proceed, i.e. is within boundaries.
-bool propagateRay(
+ResultCode propagateRay(
     inout Ray ray,
     float dist,
     const PropagateParams params,
@@ -73,7 +72,7 @@ bool propagateRay(
         any(lessThan(ray.position, params.lowerBBoxCorner)) ||
         any(greaterThan(ray.position, params.upperBBoxCorner));
     if (CHECK_BRANCH(outside)) {
-        return false;
+        return RESULT_CODE_RAY_LOST;
     }
 
     //update samples

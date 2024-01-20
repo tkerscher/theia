@@ -49,6 +49,16 @@ class HitResponse(SourceCodeMixin):
         super().__init__(params, extra)
 
 
+class EmptyResponse(HitResponse):
+    """Empty hit response ignoring all hits"""
+
+    def __init__(self) -> None:
+        super().__init__()
+
+    # sourceCode via descriptor
+    sourceCode = ShaderLoader("response.empty.glsl")
+
+
 class HitRecorder(HitResponse):
     """
     Records hits onto a queue, which can be retrieved later on.

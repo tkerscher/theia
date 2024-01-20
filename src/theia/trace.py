@@ -1,16 +1,223 @@
 import hephaistos as hp
+from hephaistos import Program
 from hephaistos.glsl import buffer_reference, vec3
-from hephaistos.pipeline import PipelineStage
+from hephaistos.pipeline import PipelineStage, SourceCodeMixin
 
-from ctypes import Structure, c_float, c_uint32
+from ctypes import Structure, c_float, c_uint32, addressof, memset, sizeof
+from numpy.ctypeslib import as_array
 
 from theia.estimator import HitResponse
 from theia.light import LightSource
 from theia.random import RNG
 from theia.scene import RectBBox, Scene, SphereBBox
-from theia.util import compileShader
+from theia.util import ShaderLoader, compileShader
 
-from typing import List, Optional
+from numpy.typing import NDArray
+from typing import Dict, List, Optional, Set, Tuple, Type
+
+
+class TraceEventCallback(SourceCodeMixin):
+    """
+    Base class for callbacks a tracer will call on tracing events
+    (scatter, hit, detected, lost, decayed) of the form
+
+    void onEvent(const Ray ray, uint type, uint idx, uint i)
+    """
+
+    name = "Trace Event Callback"
+
+    def __init__(
+        self,
+        *,
+        params: Dict[str, Type[Structure]] = {},
+        extra: Set[str] = set(),
+    ) -> None:
+        super().__init__(params, extra)
+
+
+class EmptyEventCallback(TraceEventCallback):
+    """Callback ignoring all events"""
+
+    def __init__(self) -> None:
+        super().__init__()
+
+    sourceCode = ShaderLoader("callback.empty.glsl")
+
+
+class EventStatisticCallback(TraceEventCallback):
+    """
+    Callback recording statistics about the event types, i.e. increments a
+    global counter for each event type. Current statistic are read directly from
+    the device, but may have a bad impact on currently running tracing.
+    """
+
+    name = "Event Statistic"
+
+    class Statistic(Structure):
+        _fields_ = [
+            ("scattered", c_uint32),
+            ("hit", c_uint32),
+            ("detected", c_uint32),
+            ("volume", c_uint32),
+            ("lost", c_uint32),
+            ("decayed", c_uint32),
+            ("absorbed", c_uint32),
+        ]
+
+    def __init__(self) -> None:
+        super().__init__()
+        # allocate mapped tensor for statistics
+        self._tensor = hp.ByteTensor(sizeof(self.Statistic), mapped=True)
+        if not self._tensor.isMapped:
+            raise RuntimeError("Could not create mapped tensor")
+        self._stat = self.Statistic.from_address(self._tensor.memory)
+        self.reset()
+
+    # sourceCode via descriptor
+    sourceCode = ShaderLoader("callback.stat.glsl")
+
+    @property
+    def absorbed(self) -> int:
+        """Number of absorbed rays"""
+        return self._stat.absorbed
+
+    @property
+    def hit(self) -> int:
+        """Number of hit events"""
+        return self._stat.hit
+
+    @property
+    def detected(self) -> int:
+        """Number of rays detected"""
+        return self._stat.detected
+
+    @property
+    def scattered(self) -> int:
+        """Number of scatter events"""
+        return self._stat.scattered
+
+    @property
+    def lost(self) -> int:
+        """Number of rays that left the tracing boundary box"""
+        return self._stat.lost
+
+    @property
+    def decayed(self) -> int:
+        """Number of rays exceeding the max time"""
+        return self._stat.decayed
+
+    @property
+    def volume(self) -> int:
+        """Number of volume boundary hits"""
+        return self._stat.volume
+
+    def reset(self) -> None:
+        """Resets the statistic"""
+        memset(addressof(self._stat), 0, sizeof(self.Statistic))
+
+    def bindParams(self, program: Program, i: int) -> None:
+        super().bindParams(program, i)
+        program.bindParams(Statistics=self._tensor)
+
+
+class TrackRecordCallback(TraceEventCallback):
+    """
+    Callback recording position of events allowing to later reconstruct complete
+    path. Only considers first sample for time coordinate.
+
+    Parameters
+    ----------
+    capacity: int
+        Number of rays that can be recorded
+    length: int
+        Max number of points per track
+    retrieve: bool, default=True
+        Wether to retrieve the tracks from the device
+
+    Note
+    ----
+    Mind that the total length is 1 + `nScatter` since it includes the
+    start point.
+    """
+
+    name = "Track Recorder"
+
+    def __init__(self, capacity: int, length: int, *, retrieve: bool = True) -> None:
+        super().__init__()
+        # save params
+        self._capacity = capacity
+        self._length = length
+        self._retrieve = retrieve
+
+        # allocate memory
+        words = capacity * length * 4 + capacity  # track + counter
+        self._tensor = hp.ByteTensor(words * 4)
+        self._buffer = [hp.RawBuffer(words * 4) for _ in range(2)]
+
+    @property
+    def capacity(self) -> int:
+        """Number of rays that can be recorded"""
+        return self._capacity
+
+    @property
+    def length(self) -> int:
+        """Max number of points per track"""
+        return self._length
+
+    @property
+    def retrieve(self) -> bool:
+        """Wether to retrieve the tracks from the device"""
+        return self._retrieve
+
+    # sourceCode via descriptor
+    _sourceCode = ShaderLoader("callback.track.glsl")
+
+    @property
+    def sourceCode(self) -> str:
+        preamble = ""
+        preamble += f"#define TRACK_COUNT {self.capacity}\n"
+        preamble += f"#define TRACK_LENGTH {self.length}\n"
+        return preamble + self._sourceCode
+
+    @property
+    def tensor(self) -> hp.Tensor:
+        """Tensor containing the tracks"""
+        return self._tensor
+
+    def result(self, i: int) -> Tuple[NDArray, NDArray]:
+        """
+        Returns the recorded tracks. First tuple are the tracks, the second one
+        the length of each track. Positions after each track length may contain
+        garbage data.
+
+        Returns
+        -------
+        tracks: NDArray
+            Recorded tracks stored in a numpy array of shape (track,pos,4)
+        lengths: NDArray
+            Length of each recorded track stored in a numpy array of shape (track,)
+        """
+        # fetch each data structures
+        adr = self._buffer[i].address
+        pLengths = (c_uint32 * self.capacity).from_address(adr)
+        n = self.length * self.capacity * 4
+        pTracks = (c_float * n).from_address(adr + 4 * self.capacity)
+        # construct numpy array
+        lengths = as_array(pLengths)
+        tracks = as_array(pTracks).reshape((4, self.length, self.capacity))
+        # change from (coords, ray, event) -> (ray, event, coords)
+        tracks = tracks.transpose(2, 1, 0)
+        return tracks, lengths
+
+    def bindParams(self, program: Program, i: int) -> None:
+        super().bindParams(program, i)
+        program.bindParams(TrackBuffer=self._tensor)
+
+    def run(self, i: int) -> List[hp.Command]:
+        if self.retrieve:
+            return [hp.retrieveTensor(self._tensor, self._buffer[i])]
+        else:
+            return []
 
 
 class VolumeTracer(PipelineStage):
@@ -31,6 +238,8 @@ class VolumeTracer(PipelineStage):
         Response function processing each simulated hit
     rng: RNG
         Generator for creating random numbers
+    callback: TraceEventCallback, default=EmptyEventCallback()
+        Callback called for each tracing event. See `TraceEventCallback`
     medium: int, default=0
         device address of the medium the scene is emerged in, e.g. the address
         of a water medium for an underwater simulation.
@@ -99,6 +308,7 @@ class VolumeTracer(PipelineStage):
         response: HitResponse,
         rng: RNG,
         *,
+        callback: TraceEventCallback = EmptyEventCallback(),
         medium: int = 0,
         nScattering: int = 6,
         target: SphereBBox = SphereBBox((0.0, 0.0, 0.0), 1.0),
@@ -114,6 +324,7 @@ class VolumeTracer(PipelineStage):
         self._source = source
         self._response = response
         self._rng = rng
+        self._callback = callback
         self._nScattering = nScattering
         self._blockSize = blockSize
         self.setParams(
@@ -139,9 +350,10 @@ class VolumeTracer(PipelineStage):
             preamble += f"#define N_LAMBDA {source.nLambda}\n"
             preamble += f"#define N_SCATTER {nScattering}\n\n"
             headers = {
+                "callback.glsl": callback.sourceCode,
+                "response.glsl": response.sourceCode,
                 "rng.glsl": rng.sourceCode,
                 "source.glsl": source.sourceCode,
-                "response.glsl": response.sourceCode,
             }
             code = compileShader("tracer.volume.glsl", preamble, headers)
         self._code = code
@@ -157,6 +369,11 @@ class VolumeTracer(PipelineStage):
     def blockSize(self) -> int:
         """Number of threads in a single work group"""
         return self._blockSize
+
+    @property
+    def callback(self) -> TraceEventCallback:
+        """Callback called for each tracing event"""
+        return self._callback
 
     @property
     def code(self) -> bytes:
@@ -212,6 +429,7 @@ class VolumeTracer(PipelineStage):
 
     def run(self, i: int) -> List[hp.Command]:
         self._bindParams(self._program, i)
+        self.callback.bindParams(self._program, i)
         self.source.bindParams(self._program, i)
         self.response.bindParams(self._program, i)
         self.rng.bindParams(self._program, i)
@@ -242,6 +460,8 @@ class SceneShadowTracer(PipelineStage):
         Response function processing each simulated hit
     rng: RNG
         Generator for creating random numbers
+    callback: TraceEventCallback, default=EmptyEventCallback()
+        Callback called for each tracing event. See `TraceEventCallback`
     scene: Scene
         Scene in which the rays are traced
     nScattering: int, default=6
@@ -300,6 +520,7 @@ class SceneShadowTracer(PipelineStage):
         response: HitResponse,
         rng: RNG,
         *,
+        callback: TraceEventCallback = EmptyEventCallback(),
         scene: Scene,
         nScattering: int = 6,
         targetIdx: int = 0,
@@ -314,6 +535,7 @@ class SceneShadowTracer(PipelineStage):
         # save params
         self._batchSize = batchSize
         self._source = source
+        self._callback = callback
         self._response = response
         self._rng = rng
         self._scene = scene
@@ -346,9 +568,10 @@ class SceneShadowTracer(PipelineStage):
             preamble += f"#define N_LAMBDA {source.nLambda}\n"
             preamble += f"#define N_SCATTER {nScattering}\n\n"
             headers = {
+                "callback.glsl": callback.sourceCode,
+                "response.glsl": response.sourceCode,
                 "rng.glsl": rng.sourceCode,
                 "source.glsl": source.sourceCode,
-                "response.glsl": response.sourceCode,
             }
             code = compileShader("tracer.scene.shadow.glsl", preamble, headers)
         self._code = code
@@ -370,6 +593,11 @@ class SceneShadowTracer(PipelineStage):
     def blockSize(self) -> int:
         """Number of threads in a single work group"""
         return self._blockSize
+
+    @property
+    def callback(self) -> TraceEventCallback:
+        """Callback called for each tracing event"""
+        return self._callback
 
     @property
     def code(self) -> bytes:
@@ -403,6 +631,7 @@ class SceneShadowTracer(PipelineStage):
 
     def run(self, i: int) -> List[hp.Command]:
         self._bindParams(self._program, i)
+        self.callback.bindParams(self._program, i)
         self.source.bindParams(self._program, i)
         self.response.bindParams(self._program, i)
         self.rng.bindParams(self._program, i)
@@ -432,6 +661,8 @@ class SceneWalkTracer(PipelineStage):
         Response function processing each simulated hit
     rng: RNG
         Generator for creating random numbers
+    callback: TraceEventCallback, default=EmptyEventCallback()
+        Callback called for each tracing event. See `TraceEventCallback`
     scene: Scene
         Scene in which the rays are traced
     nScattering: int, default=6
@@ -501,6 +732,7 @@ class SceneWalkTracer(PipelineStage):
         response: HitResponse,
         rng: RNG,
         *,
+        callback: TraceEventCallback = EmptyEventCallback(),
         scene: Scene,
         nScattering: int = 6,
         targetIdx: int = 0,
@@ -516,6 +748,7 @@ class SceneWalkTracer(PipelineStage):
         super().__init__({"TraceParams": self.TraceParams})
         # save params
         self._batchSize = batchSize
+        self._callback = callback
         self._source = source
         self._response = response
         self._rng = rng
@@ -555,9 +788,10 @@ class SceneWalkTracer(PipelineStage):
             preamble += f"#define N_LAMBDA {source.nLambda}\n"
             preamble += f"#define N_SCATTER {nScattering}\n\n"
             headers = {
+                "callback.glsl": callback.sourceCode,
+                "response.glsl": response.sourceCode,
                 "rng.glsl": rng.sourceCode,
                 "source.glsl": source.sourceCode,
-                "response.glsl": response.sourceCode,
             }
             code = compileShader("tracer.scene.walker.glsl", preamble, headers)
         self._code = code
@@ -572,17 +806,17 @@ class SceneWalkTracer(PipelineStage):
             self._program.bindParams(Targets=scene.targets)
 
     @property
-    def MISDisabled(self) -> bool:
+    def misDisabled(self) -> bool:
         """Wether MIS was disabled"""
         return self._misDisabled
 
     @property
-    def TransmissionDisabled(self) -> bool:
+    def transmissionDisabled(self) -> bool:
         """Wether transmission was disabled"""
         return self._transmissionDisabled
 
     @property
-    def VolumeBorderDisabled(self) -> bool:
+    def volumeBorderDisabled(self) -> bool:
         """Wether volume border support was disabled"""
         return self._volumeBorderDisabled
 
@@ -595,6 +829,11 @@ class SceneWalkTracer(PipelineStage):
     def blockSize(self) -> int:
         """Number of threads in a single work group"""
         return self._blockSize
+
+    @property
+    def callback(self) -> TraceEventCallback:
+        """Callback called for each tracing event"""
+        return self._callback
 
     @property
     def code(self) -> bytes:
@@ -628,6 +867,7 @@ class SceneWalkTracer(PipelineStage):
 
     def run(self, i: int) -> List[hp.Command]:
         self._bindParams(self._program, i)
+        self.callback.bindParams(self._program, i)
         self.source.bindParams(self._program, i)
         self.response.bindParams(self._program, i)
         self.rng.bindParams(self._program, i)

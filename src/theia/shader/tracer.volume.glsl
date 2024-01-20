@@ -38,6 +38,7 @@ layout(local_size_x = BLOCK_SIZE) in;
 #include "sphere.intersect.glsl"
 #include "ray.propagate.glsl"
 #include "ray.sample.glsl"
+#include "result.glsl"
 #include "tracer.mis.glsl"
 #include "util.branch.glsl"
 
@@ -45,6 +46,7 @@ layout(local_size_x = BLOCK_SIZE) in;
 #include "response.common.glsl"
 //user provided code
 #include "rng.glsl"
+#include "callback.glsl"
 #include "source.glsl"
 #include "response.glsl"
 
@@ -56,8 +58,7 @@ layout(scalar) uniform TraceParams {
 } params;
 
 //traces ray
-//returns true, if target was hit and tracing should be stopped
-bool trace(inout Ray ray, uint idx, uint dim) {
+ResultCode trace(inout Ray ray, uint idx, uint dim) {
     //sample distance
     float u = random(idx, dim); dim++;
     float dist = sampleScatterLength(ray, params.propagation, u);
@@ -69,10 +70,10 @@ bool trace(inout Ray ray, uint idx, uint dim) {
     //check if we hit
     bool hit = t <= dist;
     //update ray
-    bool good = propagateRay(ray, hit ? t : dist, params.propagation, false, hit);
+    ResultCode result = propagateRay(ray, hit ? t : dist, params.propagation, false, hit);
     //check if trace is still in bounds
-    if (CHECK_BRANCH(!good))
-        return true; //abort tracing
+    if (CHECK_BRANCH(result < 0))
+        return result; //abort tracing
 
     //do either:
     // - create a hit item if we hit target
@@ -143,7 +144,7 @@ bool trace(inout Ray ray, uint idx, uint dim) {
         //sanity check: did we actually hit the target after sampling it?
         //if not, do not create a hit, but keep tracing
         if (isinf(detDist))
-            return false;
+            return RESULT_CODE_RAY_SCATTERED;
     }
 
     //process all hit items
@@ -153,7 +154,7 @@ bool trace(inout Ray ray, uint idx, uint dim) {
     }
 
     //done -> return hit flag
-    return hit;
+    return hit ? RESULT_CODE_RAY_DETECTED : RESULT_CODE_RAY_SCATTERED;
 }
 
 void main() {
@@ -165,11 +166,15 @@ void main() {
     //discard ray if inside target
     if (distance(ray.position, params.target.position) <= params.target.radius)
         return;
+    onEvent(ray, EVENT_TYPE_RAY_CREATED, idx, 0);
     
     //trace loop
     uint dim = DIM_OFFSET;
-    [[unroll]] for (uint i = 0; i < N_SCATTER; ++i, dim += DIM_STRIDE) {
-        //trace() returns true, if we should stop tracing
-        if (trace(ray, idx, dim)) return;
+    [[unroll]] for (uint i = 1; i <= N_SCATTER; ++i, dim += DIM_STRIDE) {
+        ResultCode result = trace(ray, idx, dim);
+        if (result > ERROR_CODE_MAX_VALUE)
+            onEvent(ray, result, idx, i);
+        //stop codes are negative
+        if (result < 0) return;
     }
 }
