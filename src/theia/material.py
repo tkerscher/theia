@@ -571,7 +571,7 @@ def serializeMedium(medium: Medium, dst: int, gpu_dst: int) -> tuple[int, int, i
 
 
 def bakeMaterials(
-    *materials: Iterable[Material],
+    *materials: Material,
     media: Union[Iterable[Medium], dict[str, Medium]] = [],
 ) -> tuple[hp.ByteTensor, dict[str, int], dict[str, int]]:
     """
@@ -665,7 +665,7 @@ def bakeMaterials(
             inside=getMedAdr(material.inside, f"{material.name}.inside"),
             outside=getMedAdr(material.outside, f"{material.name}.outside"),
             flagsInwards=material.flagsInward,
-            flagsOutward=material.flagsOutward,
+            flagsOutwards=material.flagsOutward,
         )
         # copy to buffer
         memmove(dst, addressof(glsl), sizeof(Material.GLSL))
