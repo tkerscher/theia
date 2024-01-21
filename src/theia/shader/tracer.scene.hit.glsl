@@ -23,7 +23,7 @@ ResultCode processHit(
     vec3 objPos, objNrm, objDir, worldPos, worldNrm, geomNormal;
     Material mat;
     bool inward;
-    bool success = processRayQuery(
+    ResultCode result = processRayQuery(
         ray, rayQuery,
         mat, inward,
         objPos, objNrm, objDir,
@@ -36,14 +36,14 @@ ResultCode processHit(
     //in all other cases, this is enough to feed onEvent() callback correct data
     ray.position = worldPos;
     //check result
-    if (CHECK_BRANCH(!success))
-        return ERROR_CODE_TRACE_ABORT; //abort tracing
+    if (CHECK_BRANCH(result < 0))
+        return result; //abort tracing
     
     //fetch flags
     uint flags = inward ? mat.flagsInwards : mat.flagsOutwards;
 
     //update samples
-    ResultCode result = updateSamples(ray, dist, params, false, true);
+    result = updateSamples(ray, dist, params, false, true);
     if (CHECK_BRANCH(result < 0))
         return result;
 

@@ -2,6 +2,7 @@
 #define _INCLUDE_SCENE_INTERSECT
 
 #include "ray.glsl"
+#include "result.glsl"
 #include "scene.glsl"
 
 //util functions for scene intersections / ray queries
@@ -27,7 +28,7 @@ vec3 offsetRay(vec3 p, vec3 n) {
 //process a given ray query and calculates the hit's position and surface normal
 //in both world and object space. Returns true, if was a success, false
 //otherwise
-bool processRayQuery(
+ResultCode processRayQuery(
     const Ray ray, rayQueryEXT rayQuery,
     out Material mat, out bool inward,
     precise out vec3 objPos, precise out vec3 objNrm, out vec3 objDir,
@@ -35,7 +36,7 @@ bool processRayQuery(
 ) {
     //check if we hit anything
     if (rayQueryGetIntersectionTypeEXT(rayQuery, true) != gl_RayQueryCommittedIntersectionTriangleEXT)
-        return false;
+        return ERROR_CODE_TRACE_ABORT;
       
     //fetch info about intersection
     int instanceId = rayQueryGetIntersectionInstanceIdEXT(rayQuery, true);
@@ -75,7 +76,7 @@ bool processRayQuery(
     //address of expected ray medium
     uvec2 medium = inward ? uvec2(mat.outside) : uvec2(mat.inside);
     if (ray.medium != medium)
-        return false;
+        return ERROR_CODE_MEDIA_MISSMATCH;
 
     //translate from object to world space
     worldNrm = normalize(vec3(objNrm * world2Obj));
@@ -93,7 +94,7 @@ bool processRayQuery(
     worldPos.z = m[3][2] + fma(m[0][2], objPos.x, fma(m[1][2], objPos.y, m[2][2] * objPos.z));
 
     //done
-    return true;
+    return RESULT_CODE_SUCCESS;
 }
 
 #endif
