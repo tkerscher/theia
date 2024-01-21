@@ -383,6 +383,81 @@ def test_TrackRecordCallback():
     assert codes.min() >= minCode and codes.max() <= maxCode
 
 
+def test_volumeBorder():
+    """
+    Simple test we handle volume borders correctly, i.e.:
+    - no refraction
+    - update ray parameters
+
+    Test by shooting laser from air to glass and marking the glass as volume
+    boundary.
+    """
+    if not hp.isRaytracingEnabled():
+        pytest.skip("ray tracing is not supported")
+
+    N = 32 * 256
+    LAMBDA = 500.0
+
+    # create materials
+    model = theia.material.BK7Model()
+    glass = model.createMedium()
+    mat = theia.material.Material("mat", glass, None, flags=("V", "B"))
+    tensor, material, media = theia.material.bakeMaterials(mat)
+    # create scene
+    store = theia.scene.MeshStore({"cube": "assets/cube.ply"})
+    trafo = theia.scene.Transform.Scale(50.0, 50.0, 50.0).translate(75.0, 0.0, 0.0)
+    cube = store.createInstance("cube", "mat", transform=trafo)
+    scene = theia.scene.Scene([cube], material)
+
+    # create scene
+    rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
+    rays = theia.light.PencilRaySource(  # TODO: would cone source work better?
+        position=(0.0, 0.0, 0.0),
+        # important: hit cube not straight on but in angle to test for no refraction
+        direction=(0.8, 0.36, 0.48),
+    )
+    photons = theia.light.UniformPhotonSource(
+        lambdaRange=(LAMBDA, LAMBDA),  # const lambda
+        timeRange=(0.0, 0.0),  # const time
+        intensity=1.0,
+    )
+    source = theia.light.ModularLightSource(rays, photons, 1)
+    estimator = theia.estimator.EmptyResponse()
+    tracker = theia.trace.TrackRecordCallback(N, 4)
+    tracer = theia.trace.SceneWalkTracer(
+        N,
+        source,
+        estimator,
+        rng,
+        callback=tracker,
+        scene=scene,
+        targetIdx=1,
+        nScattering=2,
+        disableMIS=True,  # there's no scattering anyway
+    )
+    # run pipeline
+    pl.runPipeline([rng, rays, photons, source, tracer, tracker])
+
+    # retrieve result
+    track, lengths, codes = tracker.result(0)
+    # check for no refraction (straight line)
+    assert lengths.min() >= 2
+    d1 = track[:, 1, :3] - track[:, 0, :3]
+    l1 = np.sqrt(np.square(d1).sum(-1))
+    d2 = track[:, 2, :3] - track[:, 1, :3]
+    l2 = np.sqrt(np.square(d2).sum(-1))
+    cos_theta = np.multiply(d1, d2).sum(-1) / (l1 * l2)
+    assert cos_theta.min() >= 1.0 - 1e-5
+    # check ray slowed down
+    t1 = track[:, 1, 3] - track[:, 0, 3]
+    t2 = track[:, 2, 3] - track[:, 1, 3]
+    n1 = theia.material.speed_of_light / (l1 / t1)
+    n2 = theia.material.speed_of_light / (l2 / t2)
+    n2_exp = theia.material.speed_of_light / model.group_velocity(LAMBDA)
+    assert np.abs(n1 - 1.0).max() < 5e-5
+    assert np.abs(n2 - n2_exp).max() < 5e-5
+
+
 @pytest.mark.parametrize(
     "flag,reflectance,err", [("T", 0.0, 0.0), ("R", 1.0, 0.0), ("TR", 0.0516, 0.005)]
 )
@@ -415,9 +490,7 @@ def test_tracer_reflection(flag, reflectance, err):
     det = theia.material.Material("det", glass, None, flags="DB")
     tensor, material, media = theia.material.bakeMaterials(mat, det)
     # create scene
-    store = theia.scene.MeshStore(
-        {"cube": "assets/cube.ply", "sphere": "assets/sphere.stl"}
-    )
+    store = theia.scene.MeshStore({"cube": "assets/cube.ply"})
     splitter_trans = (
         theia.scene.Transform()
         .Scale(0.1, 5.0, 5.0)
