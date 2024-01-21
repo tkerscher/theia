@@ -30,6 +30,7 @@ ResultCode processHit(
         worldPos, worldNrm,
         geomNormal
     );
+    float dist = length(worldPos - ray.position);
     //fast position update for tracking
     //offsetRay is only necessary if we want to keep tracing
     //in all other cases, this is enough to feed onEvent() callback correct data
@@ -42,7 +43,6 @@ ResultCode processHit(
     uint flags = inward ? mat.flagsInwards : mat.flagsOutwards;
 
     //update samples
-    float dist = length(worldPos - ray.position);
     ResultCode result = updateSamples(ray, dist, params, false, true);
     if (CHECK_BRANCH(result < 0))
         return result;
