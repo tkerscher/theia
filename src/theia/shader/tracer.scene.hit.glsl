@@ -30,8 +30,14 @@ ResultCode processHit(
         worldPos, worldNrm,
         geomNormal
     );
+    //fast position update for tracking
+    //offsetRay is only necessary if we want to keep tracing
+    //in all other cases, this is enough to feed onEvent() callback correct data
+    ray.position = worldPos;
+    //check result
     if (CHECK_BRANCH(!success))
         return ERROR_CODE_TRACE_ABORT; //abort tracing
+    
     //fetch flags
     uint flags = inward ? mat.flagsInwards : mat.flagsOutwards;
 
@@ -64,7 +70,6 @@ ResultCode processHit(
     bool hitTarget = customId == targetId && isTarget;
     result = hitTarget ? RESULT_CODE_RAY_DETECTED : RESULT_CODE_RAY_HIT;
     if (subgroupAny(hitTarget) && hitTarget) {
-    // if (customId == targetId && (flags & MATERIAL_DETECTOR_BIT) != 0) {
         //process hits
         [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
             //skip out of bound samples
@@ -118,11 +123,10 @@ ResultCode processHit(
     bool canReflect = (flags & MATERIAL_NO_REFLECT_BIT) == 0;
     bool canTransmit = (flags & MATERIAL_NO_TRANSMIT_BIT) == 0 && !isTarget;
     //either reflect, transmit, or stop if neither
-    if (canReflect && (!canTransmit || u <= r[0])) {
+    //!important u strictly less r[0] -> transmit if not reflective (r = 0)
+    if (canReflect && (!canTransmit || u < r[0])) {
         //update ray
         ray.direction = normalize(reflect(dir, worldNrm));
-        //offset ray away from surface to prevent self intersection
-        ray.position = offsetRay(worldPos, geomNormal);
 
         //update samples
         if (canTransmit) {
@@ -156,11 +160,15 @@ ResultCode processHit(
         //store outward refractive index
         float n_o = ray.samples[0].constants.n;
 
+        //flip world normal, if we go outwards (needed for refract())
+        //note some GLSL shenanigans: float(bool) -> bool ? 1.0 : 0.0
+        worldNrm *= 2.0 * float(inward) - 1.0; //inward ? 1.0 : -1.0
+
         //calculate new ray direction
         float eta = n_i / n_o;
         ray.direction = refract(ray.direction, worldNrm, eta);
-        //offset ray to prevent self intersection
-        ray.position = offsetRay(worldPos, -geomNormal);
+        //flip geomNormal so we'll offset to the other side (transmit)
+        geomNormal *= -1.0;
 
         //update sample contribution:
         //the factor (1-r) cancels with importance sampling the reflection
@@ -175,8 +183,11 @@ ResultCode processHit(
     }
     else {
         //no way to proceed -> abort tracing
-        return RESULT_CODE_RAY_ABSORBED;
+        result = RESULT_CODE_RAY_ABSORBED;
     }
+
+    //update position before returning (we might track it)
+    ray.position = offsetRay(worldPos, geomNormal);
 #else
     //transmission disables -> only do reflection
     ray.direction = normalize(reflect(dir, worldNrm));

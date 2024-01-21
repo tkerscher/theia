@@ -55,26 +55,35 @@ bool processRayQuery(
     precise vec3 n1 = v1.normal - v0.normal;
     precise vec3 n2 = v2.normal - v0.normal;
     objNrm = v0.normal + fma(vec3(barys.x), n1, barys.y * n2);
+
+    //model might have a different winding order than we expect
+    // -> match sign of geomNormal and objNrm
+    //(use +0.5 to avoid producing zero)
+    geomNormal *= sign(sign(dot(objNrm, geomNormal)) + 0.5);
+
     //translate from world to object space
     mat4x3 world2Obj = rayQueryGetIntersectionWorldToObjectEXT(rayQuery, true);
     objDir = normalize(mat3(world2Obj) * ray.direction);
-    //translate from object to world space
-    worldNrm = normalize(vec3(objNrm * world2Obj));
-    objNrm = normalize(objNrm);
-    geomNormal = vec3(geomNormal * world2Obj);
-    //ensure geomNormal points in opposite general direction than ray
-    geomNormal *= -sign(dot(geomNormal, ray.direction));
-    geomNormal = normalize(geomNormal);
-
-    mat = geom.material;
+    //early direction test in object space using geomNormal for better numerical
+    //precision. Don't use interpolated object normal (all user data is evil)
+    inward = dot(objDir, geomNormal) <= 0.0; //normal and ray in opposite directions
+    
     //light models are generally unaware of the scene's geometry and might have
     //sampled a light ray inside a geometry
     //-> test against and discard
-    inward = dot(objDir, geomNormal) <= 0.0; //normal and ray in opposite direction
+    mat = geom.material;
     //address of expected ray medium
     uvec2 medium = inward ? uvec2(mat.outside) : uvec2(mat.inside);
     if (ray.medium != medium)
         return false;
+
+    //translate from object to world space
+    worldNrm = normalize(vec3(objNrm * world2Obj));
+    objNrm = normalize(objNrm);
+    geomNormal = vec3(geomNormal * world2Obj);
+    //ensure geo normals points in opposite general direction than ray
+    geomNormal *= -sign(dot(geomNormal, ray.direction));
+    geomNormal = normalize(geomNormal);
 
     //do matrix multiplication manually to improve error
     //See: https://developer.nvidia.com/blog/solving-self-intersection-artifacts-in-directx-raytracing/
