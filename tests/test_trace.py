@@ -381,3 +381,88 @@ def test_TrackRecordCallback():
     minCode = min(code.value for code in theia.trace.EventResultCode)
     maxCode = max(code.value for code in theia.trace.EventResultCode)
     assert codes.min() >= minCode and codes.max() <= maxCode
+
+
+@pytest.mark.parametrize(
+    "flag,reflectance,err", [("T", 0.0, 0.0), ("R", 1.0, 0.0), ("TR", 0.0516, 0.005)]
+)
+def test_tracer_reflection(flag, reflectance, err):
+    """
+    We simulate a very simply laser setup to check if the transmission/reflection
+    code is working properly:
+
+                                __                          _________
+    ------+                     \ \       transmit         |
+    LASER | - - - - - - - - - - -\ \ - - - - - - - - - - - | TARGET 2
+    ------+                      |\_\                      |_________
+                                 |
+                                 |  reflect                A y
+                            _____|______                   |
+                           |  TARGET 1  |                  |        x
+                                                          -+-------->
+
+    (0.0,0.0) is at the center of the splitter.
+    """
+    if not hp.isRaytracingEnabled():
+        pytest.skip("ray tracing is not supported")
+
+    N = 32 * 256
+
+    # create materials
+    glass = theia.material.BK7Model().createMedium()
+    # only enable transmission on rays going outwards the splitter
+    mat = theia.material.Material("mat", glass, None, flags=(flag, "T"))
+    det = theia.material.Material("det", glass, None, flags="DB")
+    tensor, material, media = theia.material.bakeMaterials(mat, det)
+    # create scene
+    store = theia.scene.MeshStore(
+        {"cube": "assets/cube.ply", "sphere": "assets/sphere.stl"}
+    )
+    splitter_trans = (
+        theia.scene.Transform()
+        .Scale(0.1, 5.0, 5.0)
+        .rotate(0.0, 0.0, 1.0, np.radians(45.0))
+        .translate(0.141, 0.0, 0.0)
+    )
+    splitter = store.createInstance("cube", "mat", transform=splitter_trans)
+    ref_trans = theia.scene.Transform.Scale(50.0, 0.5, 50.0).translate(0.0, -50.0, 0.0)
+    ref_det = store.createInstance("cube", "det", transform=ref_trans, detectorId=1)
+    trans_trans = theia.scene.Transform.Scale(0.5, 50.0, 50.0).translate(50.0, 0.0, 0.0)
+    trans_det = store.createInstance("cube", "det", transform=trans_trans, detectorId=2)
+    scene = theia.scene.Scene([splitter, trans_det, ref_det], material)
+
+    # create pipeline
+    rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
+    rays = theia.light.PencilRaySource(
+        position=(-20.0, 0.0, 0.0), direction=(1.0, 0.0, 0.0)
+    )
+    photons = theia.light.UniformPhotonSource(
+        lambdaRange=(500.0, 500.0),  # const lambda
+        timeRange=(0.0, 0.0),  # const time
+        intensity=1.0,
+    )
+    source = theia.light.ModularLightSource(rays, photons, 1)
+    recorder = theia.estimator.HitRecorder(N)
+    tracer = theia.trace.SceneWalkTracer(
+        N,
+        source,
+        recorder,
+        rng,
+        scene=scene,
+        targetIdx=1,
+        nScattering=4,
+        disableMIS=True,  # there's no scattering anyway
+    )
+    pipeline = pl.Pipeline([rng, rays, photons, source, tracer, recorder])
+    # run pipeline
+    pipeline.run(0)
+    hits_ref = recorder.view(0)
+    # run for second detector
+    tracer.setParam("targetIdx", 2)
+    pipeline.run(1)
+    hits_trans = recorder.view(1)
+
+    # check result
+    assert hits_ref.count + hits_trans.count == N
+    reflectance_sim = hits_ref.count / N
+    assert np.abs(reflectance_sim - reflectance) <= err
