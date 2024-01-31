@@ -541,15 +541,19 @@ class UniformPhotonSource(PhotonSource):
 
     def _finishParams(self, i: int) -> None:
         # calculate const contribution
+        # lam ~ U(lam_0, lam_1)
+        # t   ~ U(t_0, t_1)
+        # => p(t, lam) = 1.0 / (|dLam||dt|) // d(x) = 1.0 if d(x) == 0.0
+        # => contrib = L/p = intensity * |dLam|*|dt|
         c = self.intensity
         lr = self.getParam("lambdaRange")
         lr = lr[1] - lr[0]
         if lr != 0.0:
-            c /= lr
+            c *= abs(lr)
         tr = self.getParam("timeRange")
         tr = tr[1] - tr[0]
         if tr != 0.0:
-            c /= tr
+            c *= abs(tr)
         self.setParam("_contrib", c)
 
 

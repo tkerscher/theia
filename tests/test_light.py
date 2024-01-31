@@ -1,14 +1,11 @@
 import numpy as np
+from hephaistos.pipeline import runPipeline
 
 import theia.light
-import theia.items
 import theia.material
 import theia.random
 
 from ctypes import *
-
-from hephaistos.pipeline import runPipeline
-
 
 def test_lightsource(rng):
     N = 32 * 256
@@ -146,7 +143,8 @@ def test_uniformPhoton():
     lamRange, dLam = (350.0, 750.0), 400.0
     timeRange, dt = (20.0, 70.0), 50.0
     intensity = 8.0
-    contrib = intensity / dLam / dt
+    # contrib = L/p(t,lam); p(t, lam) = 1.0 / (|dLam|*|dt|)
+    contrib = intensity * dLam * dt
 
     # create pipeline
     philox = theia.random.PhiloxRNG(key=0xC0110FFC0FFEE)
