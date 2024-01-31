@@ -5,13 +5,15 @@ from hephaistos import Program
 from hephaistos.pipeline import PipelineStage, SourceCodeMixin
 from hephaistos.queue import QueueBuffer, QueueTensor, QueueView
 
-from ctypes import Structure, c_float, c_uint32
-from hephaistos.glsl import vec2, vec3
+from ctypes import Structure, c_float, c_uint32, sizeof
+from hephaistos.glsl import buffer_reference, vec2, vec3
+from numpy.ctypeslib import as_array
 
 from theia.random import RNG
 from theia.util import ShaderLoader, compileShader
 
 from typing import Callable, Dict, List, Set, Tuple, Type, Optional
+from numpy.typing import NDArray
 
 
 class LightSource(SourceCodeMixin):
@@ -613,4 +615,156 @@ class ModularLightSource(LightSource):
     def bindParams(self, program: Program, i: int) -> None:
         super().bindParams(program, i)
         self.raySource.bindParams(program, i)
+        self.photonSource.bindParams(program, i)
+
+
+class ParticleTrack(hp.ByteTensor):
+    """
+    Storage class for saving particle tracks on the GPU.
+
+    Parameters
+    ----------
+    capacity: int
+        Maximum number of vertices this track can store
+    """
+
+    class Header(Structure):
+        """Header describing a particle track"""
+
+        _fields_ = [("length", c_uint32)]
+
+    class Vertex(Structure):
+        """Structure describing a single track vertex"""
+
+        _fields_ = [
+            ("x", c_float),
+            ("y", c_float),
+            ("z", c_float),
+            ("t", c_float),
+        ]
+
+    def __init__(self, capacity: int) -> None:
+        size = sizeof(self.Header) + sizeof(self.Vertex) * capacity
+        super().__init__(size, mapped=True)
+        # check if we managed to map tensor
+        if self.memory == 0:
+            raise RuntimeError("Could not map tensor in host address space!")
+
+        # save params
+        self._capacity = capacity
+
+        # fetch array
+        ptr = self.memory
+        self._header = self.Header.from_address(ptr)
+        ptr += sizeof(self.Header)
+        self._arr = (self.Vertex * capacity).from_address(ptr)
+        self._flat = (c_float * capacity * 4).from_address(ptr)
+
+        # zero init header
+        self.length = 0
+
+    @property
+    def capacity(self) -> int:
+        """Maximum number of vertices this track can store"""
+        return self._capacity
+
+    @property
+    def length(self) -> int:
+        """Number of segments in the track, i.e. number of vertices - 1"""
+        return self._header.length
+
+    @length.setter
+    def length(self, value: int) -> None:
+        if not 0 <= value <= self.capacity - 1:
+            raise ValueError("length must be between 0 and (capacity - 1)")
+        self._header.length = value
+
+    def numpy(self, flat: bool = False) -> NDArray:
+        """
+        Returns a numpy array containing the track vertices.
+        If `flat` is `True`, returns an unstructured array of shape (capacity, 4)
+        """
+        if flat:
+            return as_array(self._flat).reshape((-1, 4))
+        else:
+            return as_array(self._arr)
+    
+    def setVertices(self, data: NDArray) -> None:
+        """
+        Copies the given vertices into the track and updates the corresponding
+        properties. Expects data as numpy array of shape (length,4), with
+        columns (x[m], y[m], z[m], t[ns]).
+        """
+        self.numpy(True)[:] = data
+        self.length = len(data) - 1 # #segments
+
+
+class CherenkovTrackLightSource(LightSource):
+    """
+    Light source sampling Cherenkov light from a particle track.
+    Assumes particle travels at the speed of light (beta = 1.0).
+
+    Parameters
+    ----------
+    photonSource: PhotonSource
+        Photon source used to sample wavelengths
+    track: ParticleTrack | None
+        Track from which Cherenkov light is sampled. Can be set to `None`
+        temporarily, but must be set to a valid particle track before sampling
+    medium: int, default=0
+        Device address of the medium the particle traverses.
+    usePhotonCount: bool = False
+        Wether to use number of photons as unit of the samples. If `True`
+        sampled radiance has energy unit #photons, otherwise `eV`.
+
+    Note
+    ----
+    Using an invalid particle track or not setting one at all results in
+    undefined behavior and may result in the code crashing.
+    """
+
+    class TrackParams(Structure):
+        _fields_ = [("medium", buffer_reference), ("track", buffer_reference)]
+
+    _sourceCode = ShaderLoader("lightsource.cherenkov.glsl")
+
+    def __init__(
+        self,
+        photonSource: PhotonSource,
+        track: ParticleTrack | None = None,
+        *,
+        medium: int = 0,
+        usePhotonCount: bool = False,
+    ) -> None:
+        super().__init__(
+            nLambda=1,
+            nRNGSamples=2 + photonSource.nRNGSamples,
+            params={"TrackParams": self.TrackParams},
+        )
+        # save params
+        self._photonSource = photonSource
+        self._usePhotonCount = usePhotonCount
+        self.setParams(medium=medium, track=track if track is not None else 0)
+
+    @property
+    def photonSource(self) -> PhotonSource:
+        """Photon source used to sample wavelengths"""
+        return self._photonSource
+
+    @property
+    def usePhotonCount(self) -> bool:
+        """Wether to sample radiance in eV or #photons"""
+        return self._usePhotonCount
+
+    @property
+    def sourceCode(self) -> str:
+        # build preamble
+        preamble = f"#define RNG_RAY_SAMPLE_OFFSET {self.photonSource.nRNGSamples}\n"
+        if self.usePhotonCount:
+            preamble += f"#define FRANK_TAMM_USE_PHOTON_COUNT 1\n"
+        # assemble full code
+        return "\n".join([preamble, self.photonSource.sourceCode, self._sourceCode])
+
+    def bindParams(self, program: Program, i: int) -> None:
+        super().bindParams(program, i)
         self.photonSource.bindParams(program, i)
