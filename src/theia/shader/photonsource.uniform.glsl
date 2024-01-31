@@ -9,7 +9,7 @@ layout(scalar) uniform SourceParams {
     float contrib;
 } sourceParams;
 
-SourceSample sampleSource(const RaySample ray, uint idx, uint i) {
+SourceSample sampleSource(uint idx, uint i) {
     float delta_lambda = sourceParams.lambda_max - sourceParams.lambda_min;
     float delta_time = sourceParams.t_max - sourceParams.t_min;
     

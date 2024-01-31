@@ -8,7 +8,7 @@ SourceRay sampleLight(uint idx) {
     //sample photons (at rng offset 0, sampler advances itself)
     SourceSample samples[N_LAMBDA];
     [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
-        samples[i] = sampleSource(ray, idx, i);
+        samples[i] = sampleSource(idx, i);
         samples[i].contrib *= ray.contrib;
     }
 
