@@ -1,6 +1,9 @@
 #ifndef _LOOKUP_INCLUDE
 #define _LOOKUP_INCLUDE
 
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
 layout(buffer_reference, scalar, buffer_reference_align=4) readonly buffer Table1D {
     float nx; //Number of samples - 1; float to save casting
     float samples[];
