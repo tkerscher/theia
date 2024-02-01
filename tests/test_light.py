@@ -12,6 +12,7 @@ from ctypes import *
 
 from .common.models import WaterModel
 
+
 def test_lightsource(rng):
     N = 32 * 256
     N_LAMBDA = 4
@@ -174,19 +175,23 @@ def test_uniformPhoton():
 @pytest.mark.parametrize("usePhotons", [False, True])
 def test_cherenkovTrack(usePhotons: bool):
     N = 32 * 256
-    vertices = np.array([
-        #  x,  y,  z, t
-        [0.0,0.0,0.0,0.0],
-        [1.0,0.0,0.0,20.0],
-        [1.0,1.0,0.0,35.0],
-        [1.0,1.0,1.0,60.0],
-    ])
-    trackDir = np.array([
-        [1.0,0.0,0.0],
-        [0.0,1.0,0.0],
-        [0.0,0.0,1.0],
-    ])
-    dt = np.array([20.0,15.0,25.0])
+    vertices = np.array(
+        [
+            #  x,  y,  z, t
+            [0.0, 0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 20.0],
+            [1.0, 1.0, 0.0, 35.0],
+            [1.0, 1.0, 1.0, 60.0],
+        ]
+    )
+    trackDir = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+    dt = np.array([20.0, 15.0, 25.0])
 
     # build media
     model = WaterModel()
@@ -197,7 +202,7 @@ def test_cherenkovTrack(usePhotons: bool):
     track = theia.light.ParticleTrack(4)
     track.setVertices(vertices)
     # build light source
-    photons = theia.light.UniformPhotonSource(timeRange=(0.0,0.0))
+    photons = theia.light.UniformPhotonSource(timeRange=(0.0, 0.0))
     light = theia.light.CherenkovTrackLightSource(
         photons,
         track,
@@ -215,7 +220,7 @@ def test_cherenkovTrack(usePhotons: bool):
     assert np.all((samples["position"] >= 0.0) & (samples["position"] <= 1.0))
     t = samples["startTime"].ravel()
     assert np.all((t >= 0.0) & (t <= 60.0))
-    t_exp = np.multiply(samples["position"], dt[None,:]).sum(-1)
+    t_exp = np.multiply(samples["position"], dt[None, :]).sum(-1)
     assert np.allclose(t, t_exp)
     segmentId = 2 - (samples["position"] == 0.0).sum(-1)
     cos_theta = np.multiply(samples["direction"], trackDir[segmentId]).sum(-1)
@@ -226,10 +231,10 @@ def test_cherenkovTrack(usePhotons: bool):
     if usePhotons:
         ft_const = 2.0 * c.pi * c.alpha * 1e9
         # frank tamm; 3.0 from segment sampling
-        contrib = ft_const / (lam**2) * (1.0 - (1.0/n**2)) * 3.0
+        contrib = ft_const / (lam**2) * (1.0 - (1.0 / n**2)) * 3.0
     else:
         ft_const = c.pi * c.e * c.c**2 * c.mu_0 * 1e18
-        contrib = ft_const / (lam**3) * (1.0 - (1.0/n**2)) * 3.0
+        contrib = ft_const / (lam**3) * (1.0 - (1.0 / n**2)) * 3.0
     # contrib has additional factor from wavelength sampling
     lam0, lam1 = photons.getParam("lambdaRange")
     contrib *= abs(lam1 - lam0)

@@ -17,7 +17,7 @@ class DebugRNG(theia.random.RNG):
 
     def __init__(self):
         super().__init__()
-    
+
     @property
     def sourceCode(self) -> str:
         return shader

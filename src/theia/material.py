@@ -393,9 +393,9 @@ class Material:
         inside: Union[Medium, str, None],
         outside: Union[Medium, str, None],
         *,
-        flags: Tuple[MaterialFlags | str, MaterialFlags | str]
-        | MaterialFlags
-        | str = MaterialFlags(0),
+        flags: (
+            Tuple[MaterialFlags | str, MaterialFlags | str] | MaterialFlags | str
+        ) = MaterialFlags(0),
     ) -> None:
         # store properties
         self.name = name

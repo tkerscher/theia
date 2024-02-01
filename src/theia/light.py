@@ -688,7 +688,7 @@ class ParticleTrack(hp.ByteTensor):
             return as_array(self._flat).reshape((-1, 4))
         else:
             return as_array(self._arr)
-    
+
     def setVertices(self, data: NDArray) -> None:
         """
         Copies the given vertices into the track and updates the corresponding
@@ -696,7 +696,7 @@ class ParticleTrack(hp.ByteTensor):
         columns (x[m], y[m], z[m], t[ns]).
         """
         self.numpy(True)[:] = data
-        self.length = len(data) - 1 # #segments
+        self.length = len(data) - 1  # #segments
 
 
 class CherenkovTrackLightSource(LightSource):
