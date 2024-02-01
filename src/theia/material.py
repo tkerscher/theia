@@ -15,6 +15,27 @@ from enum import IntFlag
 from typing import Final, Union, Tuple
 
 
+__all__ = [
+    "bakeMaterials",
+    "parseMaterialFlags",
+    "speed_of_light",
+    "BK7Model",
+    "FournierForandPhaseFunction",
+    "HenyeyGreensteinPhaseFunction",
+    "Material",
+    "MaterialFlags",
+    "Medium",
+    "MediumModel",
+    "SellmeierEquation",
+    "serializeMedium",
+    "WaterBaseModel",
+]
+
+
+def __dir__():
+    return __all__
+
+
 #################################### COMMON ####################################
 
 

@@ -13,6 +13,22 @@ from numpy.typing import NDArray, ArrayLike
 from typing import Iterable, Optional, Tuple, Union
 
 
+__all__ = [
+    "loadMesh",
+    "MeshInstance",
+    "MeshStore",
+    "RectBBox",
+    "Scene",
+    "SceneRender",
+    "SphereBBox",
+    "Transform",
+]
+
+
+def __dir__():
+    return __all__
+
+
 class Transform:
     """Util class for creating transformation matrices"""
 

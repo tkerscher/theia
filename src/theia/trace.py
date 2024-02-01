@@ -17,6 +17,22 @@ from numpy.typing import NDArray
 from typing import Dict, List, Optional, Set, Tuple, Type
 
 
+__all__ = [
+    "EmptyEventCallback",
+    "EventResultCode",
+    "EventStatisticCallback",
+    "SceneShadowTracer",
+    "SceneWalkTracer",
+    "TraceEventCallback",
+    "TrackRecordCallback",
+    "VolumeTracer",
+]
+
+
+def __dir__():
+    return __all__
+
+
 class TraceEventCallback(SourceCodeMixin):
     """
     Base class for callbacks a tracer will call on tracing events

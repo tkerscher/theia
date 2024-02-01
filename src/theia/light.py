@@ -15,6 +15,26 @@ from theia.util import ShaderLoader, compileShader
 from typing import Callable, Dict, List, Set, Tuple, Type, Optional
 from numpy.typing import NDArray
 
+__all__ = [
+    "createLightSampleItem",
+    "CherenkovTrackLightSource",
+    "DiskRaySource",
+    "HostLightSource",
+    "LightSampler",
+    "LightSource",
+    "ModularLightSource",
+    "ParticleTrack",
+    "PencilRaySource",
+    "PhotonSource",
+    "RaySource",
+    "SphericalRaySource",
+    "UniformPhotonSource",
+]
+
+
+def __dir__():
+    return __all__
+
 
 class LightSource(SourceCodeMixin):
     """

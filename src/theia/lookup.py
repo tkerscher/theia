@@ -7,6 +7,18 @@ from scipy.interpolate import (
 )
 from typing import Literal, Union
 
+__all__ = [
+    "createTable",
+    "evalTable",
+    "getTableSize",
+    "sampleTable1D",
+    "sampleTable2D",
+]
+
+
+def __dir__():
+    return __all__
+
 
 def getTableSize(a: Union[ArrayLike, tuple[int, ...], None]) -> int:
     """
