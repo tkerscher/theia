@@ -5,7 +5,7 @@ from scipy.interpolate import (
     CubicSpline,
     LinearNDInterpolator,
 )
-from typing import Literal, Union
+from typing import Final, Literal, Union
 
 __all__ = [
     "createTable",
@@ -13,11 +13,15 @@ __all__ = [
     "getTableSize",
     "sampleTable1D",
     "sampleTable2D",
+    "TABLE_ALIGNMENT",
 ]
 
 
 def __dir__():
     return __all__
+
+
+TABLE_ALIGNMENT: Final[int] = 4
 
 
 def getTableSize(a: Union[ArrayLike, tuple[int, ...], None]) -> int:
@@ -42,7 +46,7 @@ def createTable(data):
 
     Parameters
     ----------
-    data : ndarray
+    data: ndarray
         Data to be converted in table format
 
     Returns

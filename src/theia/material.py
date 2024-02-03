@@ -5,9 +5,10 @@ import hephaistos as hp
 import numpy as np
 from scipy.interpolate import CubicSpline
 
-from ctypes import Structure, c_float, c_uint32, c_uint64, addressof, memmove, sizeof
+from ctypes import Structure, c_float, c_uint32, c_uint64, memmove, sizeof
+from types import MappingProxyType
 
-import theia.lookup
+from theia.lookup import *
 
 import numpy.typing as npt
 from collections.abc import Iterable
@@ -16,7 +17,6 @@ from typing import Final, Union, Tuple
 
 
 __all__ = [
-    "bakeMaterials",
     "parseMaterialFlags",
     "speed_of_light",
     "BK7Model",
@@ -24,6 +24,7 @@ __all__ = [
     "HenyeyGreensteinPhaseFunction",
     "Material",
     "MaterialFlags",
+    "MaterialStore",
     "Medium",
     "MediumModel",
     "SellmeierEquation",
@@ -94,6 +95,9 @@ class Medium:
             ("log_phase", c_uint64),  # Table1D
             ("phase_sampling", c_uint64),  # Table1D
         ]
+
+    ALIGNMENT: Final[int] = 8
+    """Alignment of the GLSL structure in device memory"""
 
     def __init__(
         self,
@@ -255,29 +259,6 @@ class Medium:
     def phase_sampling(self) -> None:
         self._phase_sampling = None
 
-    @property
-    def byte_size(self) -> int:
-        """
-        Amount of bytes needed to store this medium alongside its referenced
-        properties on the GPU.
-        """
-        size = 0
-        # first sum up the size we need to store the tables
-        size += theia.lookup.getTableSize(self.refractive_index)
-        size += theia.lookup.getTableSize(self.group_velocity)
-        size += theia.lookup.getTableSize(self.absorption_coef)
-        size += theia.lookup.getTableSize(self.scattering_coef)
-        size += theia.lookup.getTableSize(self.log_phase_function)
-        size += theia.lookup.getTableSize(self.phase_sampling)
-        # check if we need some padding bytes to comply with the
-        # 8 byte alignment of the Medium struct
-        if size % 8 != 0:
-            size += 8 - (size % 8)
-        # lastly, add the size of the struct itself
-        size += sizeof(Medium.GLSL)
-        # done
-        return size
-
 
 class MaterialFlags(IntFlag):
     """
@@ -408,6 +389,9 @@ class Material:
             ("flagsOutwards", c_uint32),
         ]
 
+    ALIGNMENT: Final[int] = 8
+    """Alignment of the GLSL structure in device memory"""
+
     def __init__(
         self,
         name: str,
@@ -503,208 +487,221 @@ class Material:
     def flagsInward(self) -> None:
         self._flagsInward = MaterialFlags(0)
 
-    @property
-    def byte_size(self) -> int:
-        """
-        Amount of bytes needed to store the material on the GPU.
-        This does not include the memory required to store the referenced
-        media as they may be shared among multiple materials.
-        """
-        return sizeof(Material.GLSL)
 
-
-def serializeMedium(medium: Medium, dst: int, gpu_dst: int) -> tuple[int, int, int]:
+class MaterialStore:
     """
-    Serializes the given medium and writes the result to the memory at the
-    address dst.
-
-    Parameters
-    ----------
-    medium: Medium
-        Medium to be serialized.
-    dst: int
-        Memory address the result should be written to
-    gpu_dst: int
-        The corresponding device address on the GPU, i.e. if the memory at
-        dst get's uploaded to GPU, gpu_dst points to the first byte.
-
-    Returns
-    -------
-    p_medium: int
-        GPU address pointing to the start of the destination tensor
-    new_dst: int
-        address one byte after the last written to dst
-    new_gpu_dst: int
-        equivalent to new_dst on the GPU
+    Manages the upload and lifetime of media and material on the device, while
+    providing an easy interface for querying their device addresses.
+    Optionally allows to update existing material and media as long as no
+    entirely new data is added, e.g. populating a previously empty property or
+    increasing the sample count of an existing table.
     """
-    # local copies safe to modify
-    p = int(dst)
-    p_gpu = int(gpu_dst)
-    nbytes_written = 0
-    # create new GLSL equivalent. We'll fill it as we serialize the tables
-    glsl = Medium.GLSL(lambda_min=medium.lambda_min, lambda_max=medium.lambda_max)
 
-    # little helper to make serializing table more easy
-    def processTable(table) -> int:
-        nonlocal p, p_gpu, nbytes_written
-        # skip if None
-        if table is None:
-            return 0
-        # copy table
-        data = theia.lookup.createTable(table)
-        memmove(p, data.ctypes.data, data.nbytes)
-        # update pointers
-        p_table = int(p_gpu)
-        p += data.nbytes
-        p_gpu += data.nbytes
-        nbytes_written += data.nbytes
-        # return gpu pointer pointing to this table
-        return p_table
+    def __init__(
+        self,
+        material: Iterable[Material],
+        *,
+        media: Iterable[Medium] = [],
+        freeze: bool = True,
+    ) -> None:
+        # during initial construction, it's always unfrozen
+        self._frozen = False
 
-    # serialize tables
-    glsl.n = processTable(medium.refractive_index)
-    glsl.vg = processTable(medium.group_velocity)
-    glsl.mu_a = processTable(medium.absorption_coef)
-    glsl.mu_s = processTable(medium.scattering_coef)
-    glsl.log_phase = processTable(medium.log_phase_function)
-    glsl.phase_sampling = processTable(medium.phase_sampling)
-    # sanity check
-    assert p - dst == nbytes_written
-    assert p_gpu - gpu_dst == nbytes_written
+        # start by virtually allocating everything (i.e. store offsets)
+        size = 0
 
-    # check if we need to add padding to fit Medium's 8 byte alignment
-    if nbytes_written % 8 != 0:
-        padding = 8 - (nbytes_written % 8)
-        p += padding
-        p_gpu += padding
-        nbytes_written += padding
-    # sanity check
-    assert p_gpu % 8 == 0
+        def alloc(n: int, alignment: int) -> int:
+            nonlocal size
+            if size % alignment != 0:
+                size += alignment - (size % alignment)
+            ptr = size
+            size += n
+            return ptr
 
-    # copy medium struct
-    memmove(p, addressof(glsl), sizeof(Medium.GLSL))
-    nbytes_written += sizeof(Medium.GLSL)
-    # sanity check
-    assert nbytes_written == medium.byte_size
+        # alloc methods
+        self._table_ptr: dict[str, Tuple[int, int]] = {}  # (ptr, size)
+        self._media_ptr: dict[str, int] = {}
+        self._mat_ptr: dict[str, int] = {}
 
-    # Done
-    return (p_gpu, p + sizeof(Medium.GLSL), p_gpu + sizeof(Medium.GLSL))
+        def allocTable(name: str, data):
+            # assume we only add new tables
+            if data is not None:
+                size = getTableSize(data)
+                self._table_ptr[name] = (alloc(size, TABLE_ALIGNMENT), size)
 
+        def allocMedium(medium: Medium | str | None):
+            if medium is None:
+                return
+            name = medium.name if type(medium) == Medium else str(medium)
+            if name in self._media_ptr:
+                return
+            self._media_ptr[name] = alloc(sizeof(Medium.GLSL), Medium.ALIGNMENT)
+            allocTable(f"{name}_n", medium.refractive_index)
+            allocTable(f"{name}_vg", medium.group_velocity)
+            allocTable(f"{name}_mua", medium.absorption_coef)
+            allocTable(f"{name}_mus", medium.scattering_coef)
+            allocTable(f"{name}_lpf", medium.log_phase_function)
+            allocTable(f"{name}_ps", medium.phase_sampling)
 
-def bakeMaterials(
-    *materials: Material,
-    media: Union[Iterable[Medium], dict[str, Medium]] = [],
-) -> tuple[hp.ByteTensor, dict[str, int], dict[str, int]]:
-    """
-    Processes the given materials and uploads them to the gpu.
+        def allocMaterial(mat: Material):
+            if mat.name in self._mat_ptr:
+                return
+            self._mat_ptr[mat.name] = alloc(sizeof(Material.GLSL), Material.ALIGNMENT)
+            allocMedium(mat.inside)
+            allocMedium(mat.outside)
 
-    Parameters
-    ----------
-    materials: Iterable[Material]
-        list of materials to be uploaded to the gpu.
-    mediums: Union[Iterable[Medium], dict[str, Medium]] = []
-        Additional media to be uploaded to the gpu. Media that are referenced
-        by name by materials must be contained in here.
+        # virtually allocate everything
+        for medium in media:
+            allocMedium(medium)
+        for mat in material:
+            allocMaterial(mat)
 
-    Returns
-    -------
-    tensor: hephaistos.ByteTensor
-        The tensor holding the actual data on the gpu. Addresses of the baked
-        materials and media become invalid if this tensor gets deleted or
-        dropped.
-    materials: dict[str, int]
-        Dictionary of the baked materials' addresses in the GPU memory using
-        their names as the key.
-    media: dict[str, int]
-        Dictionary of the baked media's addresses in the GPU memory using
-        their names as the key.
-    """
-    # Start with collecting all media
-    if type(media) == list:
-        media = {medium.name: medium for medium in media}
-    elif type(media) != dict:
-        raise RuntimeError("Media parameter has wrong type!")
-    for mat in materials:
-        if type(mat.inside) == Medium and mat.inside.name not in media:
-            media[mat.inside.name] = mat.inside
-        if type(mat.outside) == Medium and mat.outside.name not in media:
-            media[mat.outside.name] = mat.outside
+        # allocate actual memory
+        self._tensor = hp.ByteTensor(size, mapped=(not freeze))
+        self._buffer = hp.RawBuffer(size)
+        # calculate device addresses
+        adr = self._tensor.address
+        self._table_adr = {t: adr + d for t, (d, _) in self._table_ptr.items()}
+        self._media_adr = {m: adr + offset for m, offset in self._media_ptr.items()}
+        self._mat_adr = {mat: adr + offset for mat, offset in self._mat_ptr.items()}
+        # promote offsets to pointers into staging buffer
+        ptr = self._buffer.address
+        self._table_ptr = {t: (ptr + d, s) for t, (d, s) in self._table_ptr.items()}
+        self._media_ptr = {m: ptr + offset for m, offset in self._media_ptr.items()}
+        self._mat_ptr = {mat: ptr + offset for mat, offset in self._mat_ptr.items()}
 
-    # calculate the size of the tensor we'll need
-    # start with the sizes needed for the media
-    size = sum([m.byte_size for m in media.values()])
-    # check if we need padding in between to fit Material's 8 byte alignment
-    padding = 0
-    if size % 8 != 0:
-        padding = 8 - (size % 8)
-        size += padding
-    # finally add the size of the materials
-    size += sum([m.byte_size for m in materials])
+        # create read only proxy on device addresses
+        self._media = MappingProxyType(self._media_adr)
+        self._mat = MappingProxyType(self._mat_adr)
 
-    # reserve memory
-    staging = hp.RawBuffer(size)
-    tensor = hp.ByteTensor(size)
-    # fetch addresses
-    dst = staging.address
-    dst_gpu = tensor.address
+        # finally, write some actual data
+        processed_media: set[str] = set()
 
-    # serialize media
-    media_dict: dict[str, int] = {}
-    for name, medium in media.items():
-        media_dict[name], dst, dst_gpu = serializeMedium(medium, dst, dst_gpu)
-    # add padding (if needed)
-    dst += padding
-    dst_gpu += padding
-    # sanity check
-    assert dst_gpu % 8 == 0
+        def procMedium(medium: Medium | None):
+            if medium is not None and medium.name not in processed_media:
+                self.updateMedium(medium)
+                processed_media.add(medium.name)
 
-    # util function for fetching material address
-    def getMedAdr(m, err_name):
-        # if no medium is specified -> special value 0 (vacuum)
-        if m is None:
-            return 0
-        # get medium's name
-        name = None
-        if type(m) is Medium:
-            name = m.name
-        elif type(m) is str:
-            name = m
+        for medium in media:
+            procMedium(medium)
+        for mat in material:
+            self.updateMaterial(mat, updateMedia=False)
+            procMedium(mat.inside)
+            procMedium(mat.outside)
+
+        # upload data to tensor
+        if freeze:
+            # tensor is not mapped if we're going to freeze it
+            # -> let Vulkan copy it
+            hp.execute(hp.updateTensor(self._buffer, self._tensor, unsafe=True))
         else:
-            raise RuntimeError(f"Unknown type medium for {err_name}")
-        # fetch medium from dict
-        result = media_dict.get(name)
-        if result is None:
-            assert type(m) is str  # Otherwise we screwed up...
-            raise RuntimeError(f"Unknown material {m} for {err_name}")
-        return result
+            self.flush()
+        # freeze if necessary
+        self._frozen = freeze
 
-    # serialize materials
-    material_dict: dict[str, int] = {}
-    for material in materials:
-        # create GLSL equivalent
-        glsl = Material.GLSL(
-            inside=getMedAdr(material.inside, f"{material.name}.inside"),
-            outside=getMedAdr(material.outside, f"{material.name}.outside"),
-            flagsInwards=material.flagsInward,
-            flagsOutwards=material.flagsOutward,
+    @property
+    def frozen(self) -> bool:
+        """Wether this MaterialStore is frozen, i.e. does not support updates"""
+        return self._frozen
+
+    @property
+    def material(self) -> MappingProxyType[str, int]:
+        """
+        Read only map of all registered material returning their device address
+        as used by programs by their name.
+        """
+        return self._mat
+
+    @property
+    def media(self) -> MappingProxyType[str, int]:
+        """
+        Read only map of all registered media returning their device address as
+        used by programs by their name.
+        """
+        return self._media
+
+    def flush(self) -> None:
+        """
+        Flushes local updates to the device.
+        Does nothing if the store is frozen.
+        """
+        if not self.frozen:
+            self._tensor.update(self._buffer.address, self._buffer.size_bytes)
+
+    def _updateTable(self, name: str, data) -> int:
+        """Internal fn for updating tables"""
+        if data is None:
+            return 0
+        if name not in self._table_ptr:
+            raise ValueError(f"Table {name} has not been previously allocated")
+        ptr, size = self._table_ptr[name]
+        data_size = getTableSize(data)
+        if data_size > size:
+            raise ValueError(f"Table {name} does not fit in previous allocation")
+        table = createTable(data)
+        memmove(ptr, table.ctypes.data, data_size)
+        return self._table_adr[name]
+
+    def updateMedium(self, medium: Medium) -> None:
+        """
+        Updates the internal representation of the given medium with new data.
+        Call flush() to upload changes to the device. Fails if the store is
+        frozen.
+        """
+        if self.frozen:
+            raise RuntimeError("Cannot update frozen MaterialStore")
+        if medium.name not in self._media_ptr:
+            raise ValueError(f"Medium {medium.name} has not been previously allocated")
+        # save header
+        glsl = Medium.GLSL.from_address(self._media_ptr[medium.name])
+        glsl.lambda_min = medium.lambda_min
+        glsl.lambda_max = medium.lambda_max
+        # save tables
+        glsl.n = self._updateTable(f"{medium.name}_n", medium.refractive_index)
+        glsl.vg = self._updateTable(f"{medium.name}_vg", medium.group_velocity)
+        glsl.mu_a = self._updateTable(f"{medium.name}_mua", medium.absorption_coef)
+        glsl.mu_s = self._updateTable(f"{medium.name}_mus", medium.scattering_coef)
+        glsl.log_phase = self._updateTable(
+            f"{medium.name}_lpf", medium.log_phase_function
         )
-        # copy to buffer
-        memmove(dst, addressof(glsl), sizeof(Material.GLSL))
-        # safe address in dict
-        material_dict[material.name] = dst_gpu
-        # update pointers
-        dst += sizeof(Material.GLSL)
-        dst_gpu += sizeof(Material.GLSL)
+        glsl.phase_sampling = self._updateTable(
+            f"{medium.name}_ps", medium.phase_sampling
+        )
 
-    # sanity check
-    assert dst - staging.address == size
-    assert dst_gpu - tensor.address == size
+    def updateMaterial(self, material: Material, *, updateMedia: bool = False) -> None:
+        """
+        Updates the internal representation of the given material with new data.
+        Call flush() to upload changes to the device. Fails if the store is
+        frozen.
 
-    # upload data
-    hp.execute(hp.updateTensor(staging, tensor))
-
-    # done
-    return tensor, material_dict, media_dict
+        Parameters
+        ----------
+        material: Material
+            Material to be updated containing new data
+        updateMedia: bool, default=False
+            Wether to also update referenced media.
+        """
+        if self.frozen:
+            raise RuntimeError("Cannot update frozen MaterialStore")
+        if material.name not in self._mat_ptr:
+            raise ValueError(
+                f"Material {material.name} has not been previously allocated"
+            )
+        inside, outside = material.inside, material.outside
+        if inside is not None and inside.name not in self.media:
+            raise ValueError(
+                f"Material {material.name} references unknown material {inside.name}"
+            )
+        if outside is not None and outside.name not in self.media:
+            raise ValueError(
+                f"Material {material.name} references unknown material {outside.name}"
+            )
+        # fetch header
+        glsl = Material.GLSL.from_address(self._mat_ptr[material.name])
+        glsl.inside = 0 if inside is None else self.media[inside.name]
+        glsl.outside = 0 if outside is None else self.media[outside.name]
+        glsl.flagsInwards = material.flagsInward
+        glsl.flagsOutwards = material.flagsOutward
 
 
 #################################### MODELS ####################################
