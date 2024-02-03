@@ -3,7 +3,7 @@ import hephaistos as hp
 import os.path
 import theia.material
 import warnings
-from ctypes import Structure, c_uint32, c_uint64, c_float
+from ctypes import Structure, c_uint64, c_float
 from scipy.integrate import quad
 
 
@@ -148,12 +148,7 @@ def test_MediumShader(shaderUtil, rng):
 
     model = WaterModel()
     water = model.createMedium()
-    # sample medium for gpu
-    buffer = hp.RawBuffer(water.byte_size)
-    tensor = hp.ByteTensor(water.byte_size)
-    water_adr, *_ = theia.material.serializeMedium(
-        water, buffer.address, tensor.address
-    )
+    store = theia.material.MaterialStore([], media=[water])
 
     # let's define the structs used in the shader
     class Query(Structure):
@@ -176,7 +171,7 @@ def test_MediumShader(shaderUtil, rng):
     class Push(Structure):
         _fields_ = [("medium", c_uint64)]
 
-    push = Push(medium=water_adr)
+    push = Push(medium=store.media["water"])
 
     # reserve memory for shader
     query_tensor = hp.ArrayTensor(Query, N)
@@ -192,11 +187,10 @@ def test_MediumShader(shaderUtil, rng):
 
     # create program
     program = shaderUtil.createTestProgram("medium.test.glsl")
-    program.bindParams(QueryBuffer=query_tensor, Results=result_tensor, Foo=tensor)
+    program.bindParams(QueryBuffer=query_tensor, Results=result_tensor)
     # run it
     (
         hp.beginSequence()
-        .And(hp.updateTensor(buffer, tensor))  # upload medium
         .And(hp.updateTensor(query_buffer, query_tensor))
         .Then(program.dispatchPush(bytes(push), N // 32))
         .Then(hp.retrieveTensor(result_tensor, result_buffer))
@@ -242,11 +236,9 @@ def test_MaterialShader(shaderUtil, rng):
     water = water_model.createMedium()
     glass_model = theia.material.BK7Model()
     glass = glass_model.createMedium(name="glass", num_lambda=4096)
-    flags = theia.material.Material.ABSORBER_BIT | theia.material.Material.TARGET_BIT
-    mat_water_glass = theia.material.Material("water_glass", water, glass, flags=flags)
+    mat_water_glass = theia.material.Material("water_glass", water, glass)
     mat_vac_glass = theia.material.Material("vac_glass", None, glass)
-    # bake materials
-    tensor, mats, media = theia.material.bakeMaterials(mat_water_glass, mat_vac_glass)
+    mat_store = theia.material.MaterialStore([mat_water_glass, mat_vac_glass])
 
     # let's define the structs used in the shader
     class Query(Structure):
@@ -273,14 +265,14 @@ def test_MaterialShader(shaderUtil, rng):
     query_buffer = hp.ArrayBuffer(Query, N)
     result_tensor = hp.ArrayTensor(Result, 2 * N)  # both inside and outside
     result_buffer = hp.ArrayBuffer(Result, 2 * N)
-    flag_tensor = hp.UnsignedIntTensor(1)
-    flag_buffer = hp.UnsignedIntBuffer(1)
+    flag_tensor = hp.UnsignedIntTensor(2)
+    flag_buffer = hp.UnsignedIntBuffer(2)
     # fill query structures with random parameters
     queries = query_buffer.numpy()
     queries["material"] = [
-        mats["water_glass"],
+        mat_store.material["water_glass"],
     ] * (N // 2) + [
-        mats["vac_glass"],
+        mat_store.material["vac_glass"],
     ] * (N // 2)
     queries["lam"] = rng.random(N, np.float32) * 600.0 + 200.0  # [200,800]nm
     queries["theta"] = 1.0 - 2 * rng.random(N, np.float32)  # [-1,1]
@@ -346,4 +338,5 @@ def test_MaterialShader(shaderUtil, rng):
     # assert np.allclose(gpu["log_phase"], cpu[:, 4], 1e-4)
     assert np.abs(gpu["log_phase"] - cpu[:, 4]).max() < 5e-4
     assert np.allclose(gpu["angle"], cpu[:, 5], 1e-4, 1e-5)
-    assert flag_buffer.numpy()[0] == flags
+    assert flag_buffer.numpy()[0] == mat_vac_glass.flagsInward
+    assert flag_buffer.numpy()[1] == mat_vac_glass.flagsOutward

@@ -2,7 +2,7 @@ import numpy as np
 import hephaistos as hp
 
 from ctypes import *
-from hephaistos.glsl import vec3, uvec2, stackVector
+from hephaistos.glsl import vec3, stackVector
 
 import theia.material
 import theia.random
@@ -114,8 +114,8 @@ def test_reflectance(rng, shaderUtil):
         outside.createMedium(name="water"),
     )
     # bake material
-    mat_tensor, mats, media = theia.material.bakeMaterials(material)
-    mat = mats["material"]
+    store = theia.material.MaterialStore([material])
+    mat = store.material["material"]
 
     # define types
     class Query(Structure):
@@ -183,7 +183,7 @@ def test_volumeScatter(rng, shaderUtil):
     model = WaterModel()
     water = model.createMedium()
     empty = theia.material.MediumModel().createMedium(name="empty")
-    tensor, _, media = theia.material.bakeMaterials(media=[water, empty])
+    store = theia.material.MaterialStore([], media=[water, empty])
 
     # define types
     class Query(Structure):
@@ -218,8 +218,8 @@ def test_volumeScatter(rng, shaderUtil):
     queries["dir"][:, 0] = sin_theta_in * np.cos(phi)
     queries["dir"][:, 1] = sin_theta_in * np.sin(phi)
     queries["dir"][:, 2] = cos_theta_in
-    queries["medium"][N_EMPTY:] = packUint64(media["water"]).value
-    queries["medium"][:N_EMPTY] = packUint64(media["empty"]).value
+    queries["medium"][N_EMPTY:] = packUint64(store.media["water"]).value
+    queries["medium"][:N_EMPTY] = packUint64(store.media["empty"]).value
 
     # run program
     (
@@ -275,7 +275,7 @@ def test_volumeScatterProb(rng, shaderUtil):
     model = WaterModel()
     water = model.createMedium()
     empty = theia.material.MediumModel().createMedium(name="empty")
-    tensor, _, media = theia.material.bakeMaterials(media=[water, empty])
+    store = theia.material.MaterialStore([], media=[water, empty])
 
     # define type
     class Query(Structure):
@@ -304,8 +304,8 @@ def test_volumeScatterProb(rng, shaderUtil):
     queries["inDir"][:, 0] = sin_theta_in * np.cos(phi_in)
     queries["inDir"][:, 1] = sin_theta_in * np.sin(phi_in)
     queries["inDir"][:, 2] = cos_theta_in
-    queries["medium"][: (N // 2)] = packUint64(media["water"]).value
-    queries["medium"][(N // 2) :] = packUint64(media["empty"]).value
+    queries["medium"][: (N // 2)] = packUint64(store.media["water"]).value
+    queries["medium"][(N // 2) :] = packUint64(store.media["empty"]).value
     phi_out = rng.random(N) * 2.0 * np.pi
     cos_theta_out = rng.random(N) * 2.0 - 1.0
     sin_theta_out = np.sqrt(1.0 - cos_theta_out**2)

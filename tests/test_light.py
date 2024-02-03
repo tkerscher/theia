@@ -196,7 +196,7 @@ def test_cherenkovTrack(usePhotons: bool):
     # build media
     model = WaterModel()
     water = model.createMedium()
-    tensor, _, media = theia.material.bakeMaterials(media=[water])
+    store = theia.material.MaterialStore([], media=[water])
 
     # build track
     track = theia.light.ParticleTrack(4)
@@ -206,7 +206,7 @@ def test_cherenkovTrack(usePhotons: bool):
     light = theia.light.CherenkovTrackLightSource(
         photons,
         track,
-        medium=media["water"],
+        medium=store.media["water"],
         usePhotonCount=usePhotons,
     )
     # build pipeline

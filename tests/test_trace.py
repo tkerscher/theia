@@ -26,7 +26,7 @@ def test_VolumeTracer():
 
     # create water medium
     water = WaterModel().createMedium()
-    tensor, _, media = theia.material.bakeMaterials(media=[water])
+    store = theia.material.MaterialStore([], media=[water])
 
     # estimate max speed
     d_min = (
@@ -49,7 +49,7 @@ def test_VolumeTracer():
         source,
         recorder,
         rng,
-        medium=media["water"],
+        medium=store.media["water"],
         nScattering=N_SCATTER,
         maxTime=T_MAX,
         target=theia.scene.SphereBBox(target_pos, target_radius),
@@ -87,7 +87,7 @@ def test_SceneShadowTracer(vol: bool, trans: bool):
     water = WaterModel().createMedium()
     glass = theia.material.BK7Model().createMedium()
     mat = theia.material.Material("mat", glass, water, flags=("DR", "B"))
-    tensor, material, media = theia.material.bakeMaterials(mat)
+    matStore = theia.material.MaterialStore([mat])
     # create scene
     store = theia.scene.MeshStore(
         {"cube": "assets/cone.stl", "sphere": "assets/sphere.stl"}
@@ -105,7 +105,7 @@ def test_SceneShadowTracer(vol: bool, trans: bool):
         theia.scene.SphereBBox((x, y, z - r - d), r),
     ]
     scene = theia.scene.Scene(
-        [c1, c2], material, medium=media["water"], targets=targets
+        [c1, c2], matStore.material, medium=matStore.media["water"], targets=targets
     )
 
     # calculate min time
@@ -168,7 +168,7 @@ def test_SceneWalkTracer(vol: bool, trans: bool):
     water = WaterModel().createMedium()
     glass = theia.material.BK7Model().createMedium()
     mat = theia.material.Material("mat", glass, water, flags=("DR", "B"))
-    tensor, material, media = theia.material.bakeMaterials(mat)
+    matStore = theia.material.MaterialStore([mat])
     # create scene
     store = theia.scene.MeshStore(
         {"cube": "assets/cone.stl", "sphere": "assets/sphere.stl"}
@@ -186,7 +186,7 @@ def test_SceneWalkTracer(vol: bool, trans: bool):
         theia.scene.SphereBBox((x, y, z - r - d), r),
     ]
     scene = theia.scene.Scene(
-        [c1, c2], material, medium=media["water"], targets=targets
+        [c1, c2], matStore.material, medium=matStore.media["water"], targets=targets
     )
 
     # calculate min time
@@ -245,7 +245,7 @@ def test_EventStatisticCallback():
     mat = theia.material.Material("mat", glass, water, flags=("DR", "B"))
     vol = theia.material.Material("vol", glass, water, flags="V")
     absorber = theia.material.Material("abs", glass, water, flags="B")
-    tensor, material, media = theia.material.bakeMaterials(mat, vol, absorber)
+    matStore = theia.material.MaterialStore([mat, vol, absorber])
     # create scene
     store = theia.scene.MeshStore({"sphere": "assets/sphere.stl"})
     r, d = 20.0, 5.0
@@ -259,7 +259,7 @@ def test_EventStatisticCallback():
     c4 = store.createInstance("sphere", "abs", transform=t4)
     bbox = theia.scene.RectBBox((-50.0,) * 3, (50.0,) * 3)
     scene = theia.scene.Scene(
-        [c1, c2, c3, c4], material, medium=media["water"], bbox=bbox
+        [c1, c2, c3, c4], matStore.material, medium=matStore.media["water"], bbox=bbox
     )
 
     # create pipeline
@@ -341,7 +341,7 @@ def test_TrackRecordCallback():
 
     # create water medium
     water = WaterModel().createMedium()
-    tensor, _, media = theia.material.bakeMaterials(media=[water])
+    store = theia.material.MaterialStore([], media=[water])
 
     # create pipeline
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
@@ -356,7 +356,7 @@ def test_TrackRecordCallback():
         response,
         rng,
         callback=track,
-        medium=media["water"],
+        medium=store.media["water"],
         nScattering=N_SCATTER,
         scatterCoefficient=0.1,
         maxTime=T_MAX,
@@ -402,12 +402,12 @@ def test_volumeBorder():
     model = theia.material.BK7Model()
     glass = model.createMedium()
     mat = theia.material.Material("mat", glass, None, flags=("V", "B"))
-    tensor, material, media = theia.material.bakeMaterials(mat)
+    matStore = theia.material.MaterialStore([mat])
     # create scene
     store = theia.scene.MeshStore({"cube": "assets/cube.ply"})
     trafo = theia.scene.Transform.Scale(50.0, 50.0, 50.0).translate(75.0, 0.0, 0.0)
     cube = store.createInstance("cube", "mat", transform=trafo)
-    scene = theia.scene.Scene([cube], material)
+    scene = theia.scene.Scene([cube], matStore.material)
 
     # create scene
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
@@ -488,7 +488,7 @@ def test_tracer_reflection(flag, reflectance, err):
     # only enable transmission on rays going outwards the splitter
     mat = theia.material.Material("mat", glass, None, flags=(flag, "T"))
     det = theia.material.Material("det", glass, None, flags="DB")
-    tensor, material, media = theia.material.bakeMaterials(mat, det)
+    matStore = theia.material.MaterialStore([mat, det])
     # create scene
     store = theia.scene.MeshStore({"cube": "assets/cube.ply"})
     splitter_trans = (
@@ -502,7 +502,7 @@ def test_tracer_reflection(flag, reflectance, err):
     ref_det = store.createInstance("cube", "det", transform=ref_trans, detectorId=1)
     trans_trans = theia.scene.Transform.Scale(0.5, 50.0, 50.0).translate(50.0, 0.0, 0.0)
     trans_det = store.createInstance("cube", "det", transform=trans_trans, detectorId=2)
-    scene = theia.scene.Scene([splitter, trans_det, ref_det], material)
+    scene = theia.scene.Scene([splitter, trans_det, ref_det], matStore.material)
 
     # create pipeline
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)

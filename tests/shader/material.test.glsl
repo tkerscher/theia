@@ -57,6 +57,7 @@ void main() {
 
     //storing flags once is enough
     if (i == 0) {
-        flags[0] = mat.flags;
+        flags[0] = mat.flagsInwards;
+        flags[1] = mat.flagsOutwards;
     }
 }
