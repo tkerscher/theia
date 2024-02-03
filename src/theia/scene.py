@@ -8,6 +8,7 @@ import importlib.resources
 import os.path
 import trimesh
 
+from collections.abc import Mapping
 from ctypes import Structure, c_float, c_uint64
 from numpy.typing import NDArray, ArrayLike
 from typing import Iterable, Optional, Tuple, Union
@@ -371,9 +372,8 @@ class Scene:
     ----------
     instances: Iterable[MeshInstance]
         instances that make up the scene
-    materials: dict[str, int]
-        dictionary mapping material names to device addresses as obtained from
-        `bakeMaterials`
+    materials: Mapping[str, int]
+        Mapping from material names to device addresses
     medium: int, default=0
         device address of the medium the scene is emerged in, e.g. the address
         of a water medium for an underwater simulation. Defaults to zero
@@ -401,7 +401,7 @@ class Scene:
     def __init__(
         self,
         instances: Iterable[MeshInstance],
-        materials: dict[str, int],
+        materials: Mapping[str, int],
         *,
         medium: int = 0,
         bbox: Optional[RectBBox] = None,
