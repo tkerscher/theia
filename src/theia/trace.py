@@ -12,6 +12,7 @@ from theia.random import RNG
 from theia.scene import RectBBox, Scene, SphereBBox
 from theia.util import ShaderLoader, compileShader
 
+from abc import abstractmethod
 from enum import IntEnum
 from numpy.typing import NDArray
 from typing import Dict, List, Optional, Set, Tuple, Type
@@ -23,6 +24,7 @@ __all__ = [
     "EventStatisticCallback",
     "SceneShadowTracer",
     "SceneWalkTracer",
+    "Tracer",
     "TraceEventCallback",
     "TrackRecordCallback",
     "VolumeTracer",
@@ -287,8 +289,38 @@ class EventResultCode(IntEnum):
     ERROR_TRACE_ABORT = -12
     """Tracer reached a state it can't proceed from"""
 
+class Tracer(PipelineStage):
+    """
+    Base class for tracing algorithms taking in sampled light rays and producing
+    hits.
+    """
 
-class VolumeTracer(PipelineStage):
+    name = "Tracer"
+
+    def __init__(
+        self,
+        params: Dict[str, type[Structure]] = {},
+        extra: Set[str] = set(),
+    ) -> None:
+        super().__init__(params, extra)
+    
+    @property
+    @abstractmethod
+    def maxHits(self) -> int:
+        """Maximum amount of hits the tracer can produce per run"""
+        ...
+    
+    @property
+    @abstractmethod
+    def normalization(self) -> float:
+        """
+        Normalization factor that must be applied to each sample to get a
+        correct estimate.
+        """
+        ...
+
+
+class VolumeTracer(Tracer):
     """
     Path tracer simulating light traveling through media originating at a light
     source and ending at a detector. It does NOT check for any intersection
@@ -408,6 +440,9 @@ class VolumeTracer(PipelineStage):
         # calculate group size
         self._groups = -(batchSize // -blockSize)
 
+        # prepare response
+        response.prepare(self.maxHits)
+
         # compile code if needed
         if code is None:
             # create preamble
@@ -447,6 +482,14 @@ class VolumeTracer(PipelineStage):
     def code(self) -> bytes:
         """Compiled source code. Can be used for caching"""
         return self._code
+
+    @property
+    def maxHits(self) -> int:
+        return self.batchSize * self.nScattering * self.source.nLambda
+
+    @property
+    def normalization(self) -> float:
+        return 1.0 / (self.batchSize * self.source.nLambda)
 
     @property
     def nScattering(self) -> int:
@@ -504,7 +547,7 @@ class VolumeTracer(PipelineStage):
         return [self._program.dispatch(self._groups)]
 
 
-class SceneShadowTracer(PipelineStage):
+class SceneShadowTracer(Tracer):
     """
     Path tracer simulating light traveling through media originating at a light
     source and ending at detectors. Traces rays against the geometries defined
@@ -608,6 +651,7 @@ class SceneShadowTracer(PipelineStage):
         self._rng = rng
         self._scene = scene
         self._blockSize = blockSize
+        self._nScattering = nScattering
         self.setParams(
             targetIdx=targetIdx,
             scatterCoefficient=scatterCoefficient,
@@ -622,6 +666,9 @@ class SceneShadowTracer(PipelineStage):
         # check if scene defines targets
         if scene.targets is None:
             raise ValueError("provided scene has no targets defined")
+
+        # prepare response
+        response.prepare(self.maxHits)
 
         # compile code if needed
         if code is None:
@@ -673,6 +720,14 @@ class SceneShadowTracer(PipelineStage):
         return self._code
 
     @property
+    def maxHits(self) -> int:
+        return self.batchSize * self.nScattering * self.source.nLambda
+
+    @property
+    def normalization(self) -> float:
+        return 1.0 / (self.batchSize * self.source.nLambda)
+
+    @property
     def nScattering(self) -> int:
         """Number of simulated scattering events"""
         return self._nScattering
@@ -706,7 +761,7 @@ class SceneShadowTracer(PipelineStage):
         return [self._program.dispatch(self._groups)]
 
 
-class SceneWalkTracer(PipelineStage):
+class SceneWalkTracer(Tracer):
     """
     Path tracer simulating light traveling through media originating at a light
     source and ending at detectors. Traces rays against the geometries defined
@@ -821,6 +876,7 @@ class SceneWalkTracer(PipelineStage):
         self._response = response
         self._rng = rng
         self._scene = scene
+        self._nScattering = nScattering
         self._blockSize = blockSize
         self._misDisabled = disableMIS
         self._transmissionDisabled = disableTransmission
@@ -840,6 +896,9 @@ class SceneWalkTracer(PipelineStage):
         # check if we have any targets
         if scene.targets is None:
             disableMIS = True
+
+        # prepare response
+        response.prepare(self.maxHits)
 
         # compile code if needed
         if code is None:
@@ -907,6 +966,14 @@ class SceneWalkTracer(PipelineStage):
     def code(self) -> bytes:
         """Compiled source code. Can be used for caching"""
         return self._code
+
+    @property
+    def maxHits(self) -> int:
+        return self.batchSize * self.nScattering * self.source.nLambda
+    
+    @property
+    def normalization(self) -> float:
+        return 1.0 / (self.batchSize * self.source.nLambda)
 
     @property
     def nScattering(self) -> int:

@@ -43,7 +43,7 @@ def test_VolumeTracer():
         timeRange=(T0, T1),
     )
     source = theia.light.ModularLightSource(rays, photons, N_LAMBDA)
-    recorder = theia.estimator.HitRecorder(N * N_SCATTER * N_LAMBDA)
+    recorder = theia.estimator.HitRecorder()
     tracer = theia.trace.VolumeTracer(
         N,
         source,
@@ -122,7 +122,7 @@ def test_SceneShadowTracer(vol: bool, trans: bool):
         timeRange=(T0, T1),
     )
     source = theia.light.ModularLightSource(rays, photons, N_LAMBDA)
-    recorder = theia.estimator.HitRecorder(N * N_SCATTER * N_LAMBDA)
+    recorder = theia.estimator.HitRecorder()
     tracer = theia.trace.SceneShadowTracer(
         N,
         source,
@@ -203,7 +203,7 @@ def test_SceneWalkTracer(vol: bool, trans: bool):
         timeRange=(T0, T1),
     )
     source = theia.light.ModularLightSource(rays, photons, N_LAMBDA)
-    recorder = theia.estimator.HitRecorder(N * N_SCATTER * N_LAMBDA)
+    recorder = theia.estimator.HitRecorder()
     tracer = theia.trace.SceneWalkTracer(
         N,
         source,
@@ -515,7 +515,7 @@ def test_tracer_reflection(flag, reflectance, err):
         intensity=1.0,
     )
     source = theia.light.ModularLightSource(rays, photons, 1)
-    recorder = theia.estimator.HitRecorder(N)
+    recorder = theia.estimator.HitRecorder()
     tracer = theia.trace.SceneWalkTracer(
         N,
         source,

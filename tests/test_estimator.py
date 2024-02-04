@@ -8,7 +8,7 @@ from hephaistos.queue import QueueTensor, as_queue
 def test_record(rng):
     N = 8192
 
-    record = theia.estimator.HitRecorder(N)
+    record = theia.estimator.HitRecorder()
     replay = theia.estimator.HitReplay(N, record)
 
     samples = replay.view(0)
@@ -42,15 +42,16 @@ def test_histogram(rng):
     T1 = T0 + N_BINS * BIN_SIZE
     NORM = 0.01
 
+    queue = theia.estimator.createValueQueue(N)
     estimator = theia.estimator.HistogramEstimator(
-        N,
+        queue,
         nBins=N_BINS,
         t0=T0,
         binSize=BIN_SIZE,
         normalization=NORM,
         clearQueue=False,
     )
-    updater = UpdateTensorStage(estimator.queue)
+    updater = UpdateTensorStage(queue)
     data = as_queue(updater.buffer(0), theia.estimator.ValueItem)
 
     data.count = N

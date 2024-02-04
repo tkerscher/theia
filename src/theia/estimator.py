@@ -14,6 +14,7 @@ from typing import Dict, List, Set, Type, Optional
 
 
 __all__ = [
+    "createValueQueue",
     "EmptyResponse",
     "Estimator",
     "HistogramEstimator",
@@ -66,6 +67,14 @@ class HitResponse(SourceCodeMixin):
         self, params: Dict[str, Type[Structure]] = {}, extra: Set[str] = set()
     ) -> None:
         super().__init__(params, extra)
+    
+    def prepare(self, maxHits: int) -> None:
+        """
+        Called by e.g. a `Tracer` when binding the response into its program.
+        Tells the response function how many hits it has to expect at most per
+        run and can be used to make appropriate allocations.
+        """
+        pass
 
 
 class EmptyResponse(HitResponse):
@@ -85,8 +94,6 @@ class HitRecorder(HitResponse):
 
     Parameters
     ----------
-    capacity: int
-        Maximum number of hits that can be saved per run
     retrieve: bool, default=True
         Wether the queue gets retrieved from the device after processing.
         If `True`, clears the queue afterwards.
@@ -94,18 +101,22 @@ class HitRecorder(HitResponse):
 
     _sourceCode = ShaderLoader("response.record.glsl")
 
-    def __init__(self, capacity: int, *, retrieve: bool = True) -> None:
+    def __init__(self, *, retrieve: bool = True) -> None:
         super().__init__()
         # save params
-        self._capacity = capacity
+        self._capacity = 0
         self._retrieve = retrieve
-
+        # set tensor and queue
+        self._tensor = None
+        self._buffer = [None for _ in range(2)]
+    
+    def prepare(self, maxHits: int) -> None:
+        self._capacity = maxHits
         # create queue
-        self._tensor = QueueTensor(HitItem, capacity)
+        self._tensor = QueueTensor(HitItem, maxHits)
         hp.execute(clearQueue(self._tensor))
-        self._buffer = [
-            QueueBuffer(HitItem, capacity) if retrieve else None for _ in range(2)
-        ]
+        if self.retrieve:
+            self._buffer = [QueueBuffer(HitItem, maxHits) for _ in range(2)]
 
     @property
     def capacity(self) -> int:
@@ -123,7 +134,7 @@ class HitRecorder(HitResponse):
         return preamble + self._sourceCode
 
     @property
-    def tensor(self) -> QueueTensor:
+    def tensor(self) -> QueueTensor | None:
         """Tensor holding the queue storing the hits"""
         return self._tensor
 
@@ -136,6 +147,8 @@ class HitRecorder(HitResponse):
         return self.buffer(i).view if self.retrieve else None
 
     def bindParams(self, program: hp.Program, i: int) -> None:
+        if self.tensor is None:
+            raise RuntimeError("Hit response has not been prepared")
         super().bindParams(program, i)
         program.bindParams(HitQueueOut=self._tensor)
 
@@ -182,6 +195,9 @@ class HitReplay(PipelineStage):
         self._batchSize = batchSize
         self._capacity = capacity
         self._response = response
+        
+        # prepare response
+        response.prepare(capacity)
 
         # create code if needed
         if code is None:
@@ -250,6 +266,107 @@ class ValueItem(Structure):
     _fields_ = [("value", c_float), ("time", c_float)]
 
 
+def createValueQueue(capacity: int) -> QueueTensor:
+    """
+    Util function for creating a queue of `ValueItem` with enough space to
+    hold an amount of capacity items.
+    """
+    queue = QueueTensor(ValueItem, capacity)
+    hp.execute(clearQueue(queue)) # sets count to zero
+    return queue
+
+
+class ValueHitResponse(HitResponse):
+    """
+    Template class using a provided value function creating a single float
+    for each hit and stores it with its timestamp on a queue for further
+    processing. Expects the value function as GLSL code:
+
+    ```
+    float responseValue(HitItem item)
+    ```
+
+    Parameters
+    ----------
+    queue: QueueTensor | None
+        Queue in which the `ValueItem` will be stored.
+        If `None` creates one during preparation.
+    params: {str: Structure}, default={}
+        Dictionary of named ctype structure containing the stage's parameters.
+        Each structure will be allocated on the CPU side and twice on the GPU
+        for buffering. The latter can be bound in programs
+    extra: {str}, default={}
+        Set of extra parameter name, that can be set and retrieved using the
+        stage api. Take precedence over parameters defined by structs. Should
+        be be implemented in subclasses as properties.
+    """
+
+    _templateCode = ShaderLoader("response.value.glsl")
+
+    def __init__(
+        self,
+        queue: QueueTensor | None,
+        params: Dict[str, Type[Structure]] = {},
+        extra: Set[str] = set(),
+    ) -> None:
+        super().__init__(params, extra)
+        self._queue = queue
+
+    def prepare(self, maxHits: int) -> None:
+        if self._queue is None:
+            self._queue = createValueQueue(maxHits)
+        elif self.queue.capacity < maxHits:
+            raise RuntimeError(
+                f"Queue not big enough to store are hits: "
+                f"queue has a capacity of {self.queue.capacity} but {maxHits} needed"
+            )
+
+    @property
+    def queue(self) -> QueueTensor | None:
+        """Tensor to be filled with `ValueItem` by this response function"""
+        return self._queue
+
+    @property
+    @abstractmethod
+    def valueFunction(self) -> str:
+        """Source code of the value function"""
+        pass
+
+    @property
+    def sourceCode(self) -> str:
+        if self.queue is None:
+            raise RuntimeError("Hit response has not been prepared")
+        # create preamble
+        preamble = f"#define VALUE_QUEUE_SIZE {self.queue.capacity}\n"
+        # assemble full source code
+        return "\n".join([preamble, self.valueFunction, self._templateCode])
+
+    def bindParams(self, program: hp.Program, i: int) -> None:
+        if self.queue is None:
+            raise RuntimeError("Hit response has not been prepared")
+        super().bindParams(program, i)
+        program.bindParams(ValueQueueOut=self.queue)
+
+
+class LambertHitResponse(ValueHitResponse):
+    """
+    Response function producing a value according to Lambert's cosine law.
+
+    Parameters
+    ----------
+    queue: QueueTensor | None
+        Queue in which to the `ValueItem` will be stored.
+        If `None` creates one during preparation.
+    """
+
+    def __init__(self, queue: QueueTensor | None = None) -> None:
+        super().__init__(queue)
+
+    # property via descriptor
+    valueFunction = ShaderLoader("response.lambert.glsl")
+
+
+
 class Estimator(PipelineStage):
     """
     Base class for estimators that produce a final output by consuming a queue
@@ -257,9 +374,8 @@ class Estimator(PipelineStage):
 
     Parameters
     ----------
-    capacity: int
-        Maximum number of items that can be stored in the estimator's
-        `ValueItem` queue
+    queue: QueueTensor
+        Queue from which to consume the `ValueItem`
     clearQueue: bool
         Wether the input queue should be cleared after processing it
     params: {str: Structure}, default={}
@@ -276,15 +392,14 @@ class Estimator(PipelineStage):
 
     def __init__(
         self,
-        capacity: int,
+        queue: QueueTensor,
         clearQueue: bool,
         params: Dict[str, Type[Structure]] = {},
         extra: Set[str] = set(),
     ) -> None:
         super().__init__(params, extra)
+        self._queue = queue
         self._clearQueue = clearQueue
-        # create queue
-        self._queue = QueueTensor(ValueItem, capacity)
 
     @property
     def clearQueue(self) -> bool:
@@ -422,9 +537,8 @@ class HistogramEstimator(Estimator):
 
     Parameters
     ----------
-    capacity: int
-        Maximum number of items that can be stored in the estimator's
-        `ValueItem` queue
+    queue: QueueTensor
+        Queue from which to consume the `ValueItem`
     nBins: int, default=100
         Number of bins in the histogram
     t0: float, default=0.0
@@ -468,7 +582,7 @@ class HistogramEstimator(Estimator):
 
     def __init__(
         self,
-        capacity: int,
+        queue: QueueTensor,
         *,
         nBins: int = 100,
         t0: float = 0.0,
@@ -481,14 +595,14 @@ class HistogramEstimator(Estimator):
         code: Optional[bytes] = None,
     ) -> None:
         super().__init__(
-            capacity, clearQueue, {"Parameters": self.Params}, {"normalization"}
+            queue, clearQueue, {"Parameters": self.Params}, {"normalization"}
         )
         # save params
         self._batchSize = batchSize
         self.setParams(t0=t0, binSize=binSize)
 
         # create reducer
-        self._groups = -(capacity // -batchSize)
+        self._groups = -(queue.capacity // -batchSize)
         self._reducer = HistogramReducer(
             nBins=nBins,
             nHist=self._groups,
@@ -502,7 +616,7 @@ class HistogramEstimator(Estimator):
             preamble = ""
             preamble += f"#define BATCH_SIZE {batchSize}\n"
             preamble += f"#define N_BINS {nBins}\n"
-            preamble += f"#define VALUE_QUEUE_SIZE {capacity}\n\n"
+            preamble += f"#define VALUE_QUEUE_SIZE {queue.capacity}\n\n"
             code = compileShader("estimator.hist.glsl", preamble)
         self._code = code
         # create program
@@ -568,78 +682,3 @@ class HistogramEstimator(Estimator):
             hp.flushMemory(),
             *self._reducer.run(i),
         ]
-
-
-class ValueHitResponse(HitResponse):
-    """
-    Template class using a provided value function creating a single float
-    for each hit and stores it with its timestamp on a queue for further
-    processing. Expects the value function as GLSL code:
-
-    ```
-    float responseValue(HitItem item)
-    ```
-
-    Parameters
-    ----------
-    store: Estimator | QueueTensor
-        Where to store the produced `ValueItem`
-    params: {str: Structure}, default={}
-        Dictionary of named ctype structure containing the stage's parameters.
-        Each structure will be allocated on the CPU side and twice on the GPU
-        for buffering. The latter can be bound in programs
-    extra: {str}, default={}
-        Set of extra parameter name, that can be set and retrieved using the
-        stage api. Take precedence over parameters defined by structs. Should
-        be be implemented in subclasses as properties.
-    """
-
-    _templateCode = ShaderLoader("response.value.glsl")
-
-    def __init__(
-        self,
-        store: Estimator | QueueTensor,
-        params: Dict[str, Type[Structure]] = {},
-        extra: Set[str] = set(),
-    ) -> None:
-        super().__init__(params, extra)
-        if isinstance(store, Estimator):
-            self._queue = store.queue
-        elif isinstance(store, QueueTensor):
-            self._queue = store
-        else:
-            raise ValueError("queue is not of valid type!")
-
-    @property
-    def queue(self) -> QueueTensor:
-        """Tensor to be filled with `ValueItem` by this response function"""
-        return self._queue
-
-    @property
-    @abstractmethod
-    def valueFunction(self) -> str:
-        """Source code of the value function"""
-        pass
-
-    @property
-    def sourceCode(self) -> str:
-        # create preamble
-        preamble = f"#define VALUE_QUEUE_SIZE {self.queue.capacity}\n"
-        # assemble full source code
-        return "\n".join([preamble, self.valueFunction, self._templateCode])
-
-    def bindParams(self, program: hp.Program, i: int) -> None:
-        super().bindParams(program, i)
-        program.bindParams(ValueQueueOut=self.queue)
-
-
-class LambertHitResponse(ValueHitResponse):
-    """
-    Response function producing a value according to Lambert's cosine law.
-    """
-
-    def __init__(self, store: Estimator | QueueTensor) -> None:
-        super().__init__(store)
-
-    # property via descriptor
-    valueFunction = ShaderLoader("response.lambert.glsl")
