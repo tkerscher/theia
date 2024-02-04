@@ -67,7 +67,7 @@ class HitResponse(SourceCodeMixin):
         self, params: Dict[str, Type[Structure]] = {}, extra: Set[str] = set()
     ) -> None:
         super().__init__(params, extra)
-    
+
     def prepare(self, maxHits: int) -> None:
         """
         Called by e.g. a `Tracer` when binding the response into its program.
@@ -109,7 +109,7 @@ class HitRecorder(HitResponse):
         # set tensor and queue
         self._tensor = None
         self._buffer = [None for _ in range(2)]
-    
+
     def prepare(self, maxHits: int) -> None:
         self._capacity = maxHits
         # create queue
@@ -195,7 +195,7 @@ class HitReplay(PipelineStage):
         self._batchSize = batchSize
         self._capacity = capacity
         self._response = response
-        
+
         # prepare response
         response.prepare(capacity)
 
@@ -272,7 +272,7 @@ def createValueQueue(capacity: int) -> QueueTensor:
     hold an amount of capacity items.
     """
     queue = QueueTensor(ValueItem, capacity)
-    hp.execute(clearQueue(queue)) # sets count to zero
+    hp.execute(clearQueue(queue))  # sets count to zero
     return queue
 
 
@@ -364,7 +364,6 @@ class LambertHitResponse(ValueHitResponse):
 
     # property via descriptor
     valueFunction = ShaderLoader("response.lambert.glsl")
-
 
 
 class Estimator(PipelineStage):
