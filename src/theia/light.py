@@ -715,7 +715,7 @@ class ParticleTrack(hp.ByteTensor):
         properties. Expects data as numpy array of shape (length,4), with
         columns (x[m], y[m], z[m], t[ns]).
         """
-        self.numpy(True)[:] = data
+        self.numpy(True)[: len(data)] = data
         self.length = len(data) - 1  # #segments
 
 
