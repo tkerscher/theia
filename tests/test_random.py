@@ -53,6 +53,14 @@ def test_philox():
     max_dev = np.abs((hist * 20.0 / generator.capacity) - 1.0).max()
     assert max_dev < 0.005  # TODO: What is a reasonable value here?
 
+    # test auto advance
+    offset = philox.getParam("offset")
+    assert offset == 0
+    advance = 128
+    philox.setParam("autoAdvance", advance)
+    philox.update(0)
+    assert philox.getParam("offset") - offset == advance
+
 
 # helper test to make debugging easier
 def test_uvec4_conversion():
@@ -76,3 +84,11 @@ def test_sobol():
     hist = np.histogram(data, bins=20)[0]
     max_dev = np.abs((hist * 20.0 / generator.capacity) - 1.0).max()
     assert max_dev < 0.001  # TODO: What is a reasonable value here?
+
+    # test auto advance
+    offset = sobol.getParam("offset")
+    assert offset == 0
+    advance = 128
+    sobol.setParam("autoAdvance", advance)
+    sobol.update(0)
+    assert sobol.getParam("offset") - offset == advance

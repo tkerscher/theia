@@ -289,6 +289,7 @@ class EventResultCode(IntEnum):
     ERROR_TRACE_ABORT = -12
     """Tracer reached a state it can't proceed from"""
 
+
 class Tracer(PipelineStage):
     """
     Base class for tracing algorithms taking in sampled light rays and producing
@@ -303,13 +304,13 @@ class Tracer(PipelineStage):
         extra: Set[str] = set(),
     ) -> None:
         super().__init__(params, extra)
-    
+
     @property
     @abstractmethod
     def maxHits(self) -> int:
         """Maximum amount of hits the tracer can produce per run"""
         ...
-    
+
     @property
     @abstractmethod
     def normalization(self) -> float:
@@ -317,6 +318,12 @@ class Tracer(PipelineStage):
         Normalization factor that must be applied to each sample to get a
         correct estimate.
         """
+        ...
+
+    @property
+    @abstractmethod
+    def nRNGSamples(self) -> int:
+        """Amount of random numbers drawn per ray"""
         ...
 
 
@@ -490,6 +497,11 @@ class VolumeTracer(Tracer):
     @property
     def normalization(self) -> float:
         return 1.0 / (self.batchSize * self.source.nLambda)
+
+    @property
+    def nRNGSamples(self) -> int:
+        """Amount of random numbers drawn per ray"""
+        return self.source.nRNGSamples + 5 * self.nScattering
 
     @property
     def nScattering(self) -> int:
@@ -726,6 +738,11 @@ class SceneShadowTracer(Tracer):
     @property
     def normalization(self) -> float:
         return 1.0 / (self.batchSize * self.source.nLambda)
+
+    @property
+    def nRNGSamples(self) -> int:
+        """Amount of random numbers drawn per ray"""
+        return self.source.nRNGSamples + 6 * self.nScattering
 
     @property
     def nScattering(self) -> int:
@@ -970,10 +987,16 @@ class SceneWalkTracer(Tracer):
     @property
     def maxHits(self) -> int:
         return self.batchSize * self.nScattering * self.source.nLambda
-    
+
     @property
     def normalization(self) -> float:
         return 1.0 / (self.batchSize * self.source.nLambda)
+
+    @property
+    def nRNGSamples(self) -> int:
+        """Amount of random numbers drawn per ray"""
+        stride = 5 if self.misDisabled else 7
+        return self.source.nRNGSamples + stride * self.nScattering
 
     @property
     def nScattering(self) -> int:

@@ -221,6 +221,8 @@ class PhiloxRNG(RNG):
         increment the key by one
     offset: int, default=0
         Offset into each stream. Can be used to advance the generator.
+    autoAdvance: int, default=0
+        Amount the offset gets incremented with each update call.
 
     Stage Parameters
     ----------------
@@ -229,20 +231,39 @@ class PhiloxRNG(RNG):
         increment the key by one
     offset: int, default=0
         Offset into each stream. Can be used to advance the generator.
+    autoAdvance: int, default=0
+        Amount the offset gets incremented with each update call.
     """
 
     class PhiloxParams(Structure):
         _fields_ = [("key", Key), ("offset", Counter)]
 
-    def __init__(self, *, key: Optional[int] = None, offset: int = 0) -> None:
-        super().__init__({"PhiloxParams": self.PhiloxParams})
+    def __init__(
+        self, *, key: Optional[int] = None, offset: int = 0, autoAdvance: int = 0
+    ) -> None:
+        super().__init__({"PhiloxParams": self.PhiloxParams}, {"autoAdvance"})
         # save params
         if key is None:
             key = urandom(8)
-        self.setParams(key=key, offset=offset)
+        self.setParams(key=key, offset=offset, autoAdvance=autoAdvance)
 
     # sourceCode via descriptor
     sourceCode = ShaderLoader("random.philox.glsl")
+
+    @property
+    def autoAdvance(self) -> int:
+        """Amount the offset gets incremented with each update call."""
+        return self._autoAdvance
+
+    @autoAdvance.setter
+    def autoAdvance(self, value: int) -> int:
+        self._autoAdvance = value
+
+    def _finishParams(self, i: int) -> None:
+        if self.autoAdvance != 0:
+            offset = self.getParam("offset")
+            self.setParam("offset", offset + self.autoAdvance)
+        super()._finishParams(i)
 
 
 class SobolQRNG(RNG):
@@ -259,6 +280,8 @@ class SobolQRNG(RNG):
         Should not be used to skip samples altogether.
     scramble: bool, default=True
         Wether to scramble the sequence
+    autoAdvance: int, default=0
+        Amount the offset gets incremented with each update call.
 
     Stage Parameters
     ----------------
@@ -268,6 +291,8 @@ class SobolQRNG(RNG):
     offset: int, default=0
         Offset into the sequence. Can be used to split draws into multiple runs.
         Should not be used to skip samples altogether.
+    autoAdvance: int, default=0
+        Amount the offset gets incremented with each update call.
 
     Note
     ----
@@ -280,14 +305,19 @@ class SobolQRNG(RNG):
     _sourceCode = ShaderLoader("random.sobol.glsl")
 
     def __init__(
-        self, *, seed: Optional[int] = None, offset: int = 0, scrambled: bool = True
+        self,
+        *,
+        seed: Optional[int] = None,
+        offset: int = 0,
+        scrambled: bool = True,
+        autoAdvance: int = 0,
     ) -> None:
-        super().__init__({"SobolParams": self.SobolParams})
+        super().__init__({"SobolParams": self.SobolParams}, {"autoAdvance"})
         # save params
         self._scrambled = scrambled
         if seed is None:
             seed = urandom(4)
-        self.setParams(seed=seed, offset=offset)
+        self.setParams(seed=seed, offset=offset, autoAdvance=autoAdvance)
 
         # load sobol matrices
         path = importlib.resources.files("theia").joinpath("data/sobolmatrices.npy")
@@ -297,6 +327,15 @@ class SobolQRNG(RNG):
         # while it would make sense to cache the matrices between instances,
         # we'd have to somehow detect when the device was destroyed and recreate
         # the tensor. Since it's not that big, this is far easier and safer
+
+    @property
+    def autoAdvance(self) -> int:
+        """Amount the offset gets incremented with each update call."""
+        return self._autoAdvance
+
+    @autoAdvance.setter
+    def autoAdvance(self, value: int) -> int:
+        self._autoAdvance = value
 
     @property
     def scrambled(self) -> bool:
@@ -314,6 +353,12 @@ class SobolQRNG(RNG):
             return preamble + self._sourceCode
         else:
             return self._sourceCode
+
+    def _finishParams(self, i: int) -> None:
+        if self.autoAdvance != 0:
+            offset = self.getParam("offset")
+            self.setParam("offset", offset + self.autoAdvance)
+        super()._finishParams(i)
 
     def bindParams(self, program: hp.Program, i: int) -> None:
         super().bindParams(program, i)
