@@ -2,6 +2,7 @@ import numpy as np
 import hephaistos as hp
 import os.path
 import theia.material
+import theia.units as u
 import warnings
 from ctypes import Structure, c_uint64, c_float
 from scipy.integrate import quad
@@ -13,14 +14,12 @@ def test_BK7Model(dataDir, testDataDir):
     n_exp = np.loadtxt(
         os.path.join(testDataDir, "bk7_refractive_index.csv"), delimiter=",", skiprows=2
     )
-    assert np.abs(n_exp[:, 1] - model.refractive_index(n_exp[:, 0])).max() < 5e-5
+    assert np.abs(n_exp[:, 1] - model.refractive_index(n_exp[:, 0] * u.nm)).max() < 5e-5
 
     # numerically derive group velocity to check against
-    l = np.linspace(300.0, 800.0, 200)
+    l = np.linspace(300.0, 800.0, 200) * u.nm
     n = model.refractive_index(l)
-    vg_exp = theia.material.speed_of_light / (
-        n - l * np.gradient(n, 500 / (len(l) - 1))
-    )
+    vg_exp = 1.0 / (n - l * np.gradient(n, 500 / (len(l) - 1))) * u.c
     assert np.abs((vg_exp - model.group_velocity(l)) / vg_exp).max() < 1e-3
     # TODO: finetune limit
 
@@ -28,9 +27,9 @@ def test_BK7Model(dataDir, testDataDir):
     trans = np.loadtxt(
         os.path.join(dataDir, "bk7_transmission.csv"), delimiter=",", skiprows=2
     )
-    mu_a = model.absorption_coef(trans[:, 0])
-    t_10mm = np.exp(-mu_a * 0.01)
-    t_25mm = np.exp(-mu_a * 0.025)
+    mu_a = model.absorption_coef(trans[:, 0] * u.nm)
+    t_10mm = np.exp(-mu_a * 10.0 * u.mm)
+    t_25mm = np.exp(-mu_a * 25.0 * u.mm)
     assert np.abs(t_10mm - trans[:, 1]).max() < 0.1  # larger error expected
     assert np.abs(t_10mm - trans[:, 1]).mean() < 0.02  # but on average better
     assert np.abs(t_25mm - trans[:, 2]).max() < 0.01  # larger error expected
@@ -44,14 +43,12 @@ def test_WaterBaseModel(dataDir, testDataDir):
     data = np.loadtxt(
         os.path.join(testDataDir, "water_n_10C_35S.csv"), delimiter=",", skiprows=3
     )
-    assert np.abs(data[:, 1] - model.refractive_index(data[:, 0])).max() < 0.005
+    assert np.abs(data[:, 1] - model.refractive_index(data[:, 0] * u.nm)).max() < 0.005
 
     # numerically derive group velocity to check against
-    l = np.linspace(300.0, 800.0, 200)
+    l = np.linspace(300.0, 800.0, 200) * u.nm
     n = model.refractive_index(l)
-    vg_exp = theia.material.speed_of_light / (
-        n - l * np.gradient(n, 500 / (len(l) - 1))
-    )
+    vg_exp = 1.0 / (n - l * np.gradient(n, 500 / (len(l) - 1))) * u.c
     assert (
         np.abs((vg_exp - model.group_velocity(l)) / vg_exp).max() < 5e-3
     )  # TODO: finetune limit
@@ -61,8 +58,8 @@ def test_WaterBaseModel(dataDir, testDataDir):
         os.path.join(dataDir, "water_smith81.csv"), delimiter=",", skiprows=2
     )
     # test against expected data
-    assert np.abs(data[:, 1] - model.absorption_coef(data[:, 0])).max() < 1e-6
-    assert np.abs(data[:, 2] - model.scattering_coef(data[:, 0])).max() < 1e-6
+    assert np.abs(data[:, 1] - model.absorption_coef(data[:, 0] * u.nm)).max() < 1e-6
+    assert np.abs(data[:, 2] - model.scattering_coef(data[:, 0] * u.nm)).max() < 1e-6
 
 
 def getSamplingError(rng, model, bins=50, N=int(1e6)):
@@ -180,8 +177,8 @@ def test_MediumShader(shaderUtil, rng):
     result_buffer = hp.ArrayBuffer(Result, N)
     # fill query structures with random parameters
     queries = query_buffer.numpy()
-    delta_lambda = water.lambda_max - water.lambda_min
-    queries["wavelength"] = rng.random(N, np.float32) * delta_lambda + water.lambda_min
+    dLam = water.lambda_max - water.lambda_min
+    queries["wavelength"] = (rng.random(N, np.float32) * dLam + water.lambda_min) * u.nm
     queries["theta"] = 1.0 - 2 * rng.random(N, np.float32)  # [-1,1]
     queries["eta"] = rng.random(N, np.float32)  # [0,1]
 
@@ -274,7 +271,7 @@ def test_MaterialShader(shaderUtil, rng):
     ] * (N // 2) + [
         mat_store.material["vac_glass"],
     ] * (N // 2)
-    queries["lam"] = rng.random(N, np.float32) * 600.0 + 200.0  # [200,800]nm
+    queries["lam"] = (rng.random(N, np.float32) * 600.0 + 200.0) * u.nm
     queries["theta"] = 1.0 - 2 * rng.random(N, np.float32)  # [-1,1]
     queries["eta"] = rng.random(N, np.float32)  # [0,1]
 
@@ -305,7 +302,7 @@ def test_MaterialShader(shaderUtil, rng):
     # group velocity
     cpu[:N:2, 1] = water_model.group_velocity(queries["lam"][: N // 2])
     cpu[1:N:2, 1] = glass_model.group_velocity(queries["lam"][: N // 2])
-    cpu[N::2, 1] = theia.material.speed_of_light  # vacuum
+    cpu[N::2, 1] = 1.0 * u.c  # vacuum
     cpu[N + 1 :: 2, 1] = glass_model.group_velocity(queries["lam"][N // 2 :])
     # scattering coef
     cpu[:N:2, 2] = water_model.scattering_coef(queries["lam"][: N // 2])

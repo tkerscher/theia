@@ -10,6 +10,7 @@ import theia.material
 import theia.random
 import theia.scene
 import theia.trace
+import theia.units as u
 
 from common.models import WaterModel
 
@@ -18,11 +19,11 @@ def test_VolumeTracer():
     N = 32 * 256
     N_LAMBDA = 4
     N_SCATTER = 6
-    T0, T1 = 10.0, 20.0
-    T_MAX = 500.0
-    light_pos = (-1.0, -7.0, 0.0)
+    T0, T1 = 10.0 * u.ns, 20.0 * u.ns
+    T_MAX = 500.0 * u.ns
+    light_pos = (-1.0, -7.0, 0.0) * u.m
     light_intensity = 1000.0
-    target_pos, target_radius = (5.0, 2.0, -8.0), 4.0
+    target_pos, target_radius = (5.0, 2.0, -8.0) * u.m, 4.0 * u.m
 
     # create water medium
     water = WaterModel().createMedium()
@@ -33,7 +34,7 @@ def test_VolumeTracer():
         np.sqrt(np.square(np.subtract(light_pos, target_pos)).sum(-1)) - target_radius
     )
     v_max = np.max(water.group_velocity)
-    t_min = d_min / v_max + T0  # ns
+    t_min = d_min / v_max + T0
 
     # create pipeline
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
@@ -78,9 +79,9 @@ def test_SceneShadowTracer(vol: bool, trans: bool):
     N = 32 * 256
     N_LAMBDA = 4
     N_SCATTER = 6
-    T0, T1 = 10.0, 20.0
-    T_MAX = 500.0
-    light_pos = (-1.0, -7.0, 0.0)
+    T0, T1 = 10.0 * u.ns, 20.0 * u.ns
+    T_MAX = 500.0 * u.ns
+    light_pos = (-1.0, -7.0, 0.0) * u.m
     light_intensity = 1000.0
 
     # create materials
@@ -92,8 +93,8 @@ def test_SceneShadowTracer(vol: bool, trans: bool):
     store = theia.scene.MeshStore(
         {"cube": "assets/cone.stl", "sphere": "assets/sphere.stl"}
     )
-    r, d = 40.0, 5.0
-    r_scale = 0.99547149974733  # radius of inscribed sphere (icosphere)
+    r, d = 40.0 * u.m, 5.0 * u.m
+    r_scale = 0.99547149974733 * u.m  # radius of inscribed sphere (icosphere)
     r_insc = r * r_scale
     x, y, z = 10.0, 5.0, -5.0
     t1 = theia.scene.Transform.Scale(r, r, r).translate(x, y, z + r + d)
@@ -109,10 +110,10 @@ def test_SceneShadowTracer(vol: bool, trans: bool):
     )
 
     # calculate min time
-    target_pos = (x, y, z - r - d)  # detector #1
+    target_pos = (x, y, z - r - d) * u.m  # detector #1
     d_min = np.sqrt(np.square(np.subtract(target_pos, light_pos)).sum(-1)) - r
     v_max = np.max(water.group_velocity)
-    t_min = d_min / v_max + T0  # ns
+    t_min = d_min / v_max + T0
 
     # create pipeline stages
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
@@ -159,9 +160,9 @@ def test_SceneWalkTracer(vol: bool, trans: bool):
     N = 32 * 256
     N_LAMBDA = 4
     N_SCATTER = 6
-    T0, T1 = 10.0, 20.0
-    T_MAX = 500.0
-    light_pos = (-1.0, -7.0, 0.0)
+    T0, T1 = 10.0 * u.ns, 20.0 * u.ns
+    T_MAX = 500.0 * u.ns
+    light_pos = (-1.0, -7.0, 0.0) * u.m
     light_intensity = 1000.0
 
     # create materials
@@ -237,7 +238,7 @@ def test_EventStatisticCallback():
         pytest.skip("ray tracing is not supported")
 
     N = 32 * 1024
-    T0, T1 = 10.0, 20.0
+    T0, T1 = 10.0 * u.ns, 20.0 * u.ns
 
     # create materials
     water = WaterModel().createMedium()
@@ -333,11 +334,11 @@ def test_TrackRecordCallback():
     N_LAMBDA = 4
     N_SCATTER = 6
     LENGTH = N_SCATTER + 2  # one more than needed
-    T0, T1 = 10.0, 20.0
-    T_MAX = 500.0
-    target_pos, target_radius = (5.0, 2.0, -8.0), 4.0
-    light_pos = (100.0, -50.0, 20.0)
-    light_dir = (1.0, 0.0, 0.0)
+    T0, T1 = 10.0 * u.ns, 20.0 * u.ns
+    T_MAX = 500.0 * u.ns
+    target_pos, target_radius = (5.0, 2.0, -8.0) * u.m, 4.0 * u.m
+    light_pos = (100.0, -50.0, 20.0) * u.m
+    light_dir = (1.0, 0.0, 0.0) * u.m
 
     # create water medium
     water = WaterModel().createMedium()
@@ -360,7 +361,7 @@ def test_TrackRecordCallback():
         nScattering=N_SCATTER,
         scatterCoefficient=0.1,
         maxTime=T_MAX,
-        traceBBox=theia.scene.RectBBox((-200.0,) * 3, (200.0,) * 3),
+        traceBBox=theia.scene.RectBBox((-200.0 * u.m,) * 3, (200.0 * u.m,) * 3),
         target=theia.scene.SphereBBox(target_pos, target_radius),
     )
     # run pipeline
@@ -396,7 +397,7 @@ def test_volumeBorder():
         pytest.skip("ray tracing is not supported")
 
     N = 32 * 256
-    LAMBDA = 500.0
+    LAMBDA = 500.0 * u.nm
 
     # create materials
     model = theia.material.BK7Model()
@@ -507,10 +508,10 @@ def test_tracer_reflection(flag, reflectance, err):
     # create pipeline
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
     rays = theia.light.PencilRaySource(
-        position=(-20.0, 0.0, 0.0), direction=(1.0, 0.0, 0.0)
+        position=(-20.0, 0.0, 0.0) * u.m, direction=(1.0, 0.0, 0.0)
     )
     photons = theia.light.UniformPhotonSource(
-        lambdaRange=(500.0, 500.0),  # const lambda
+        lambdaRange=(500.0, 500.0) * u.nm,  # const lambda
         timeRange=(0.0, 0.0),  # const time
         intensity=1.0,
     )

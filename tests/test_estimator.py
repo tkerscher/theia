@@ -1,5 +1,6 @@
 import numpy as np
 import theia.estimator
+import theia.units as u
 
 from hephaistos.pipeline import RetrieveTensorStage, UpdateTensorStage, runPipeline
 from hephaistos.queue import QueueTensor, as_queue
@@ -12,11 +13,11 @@ def test_record(rng):
     replay = theia.estimator.HitReplay(N, record)
 
     samples = replay.view(0)
-    samples["position"] = 10.0 * rng.random((N, 3)) - 5.0
+    samples["position"] = (10.0 * rng.random((N, 3)) - 5.0) * u.m
     samples["direction"] = rng.random((N, 3))
     samples["normal"] = rng.random((N, 3))
-    samples["wavelength"] = rng.random((N,)) * 100.0 + 400.0
-    samples["time"] = rng.random((N,)) * 100.0
+    samples["wavelength"] = (rng.random((N,)) * 100.0 + 400.0) * u.nm
+    samples["time"] = (rng.random((N,)) * 100.0) * u.ns
     # use contrib to encode ordering (gpu will scramble items)
     samples["contrib"] = np.arange(N).astype(np.float32)
 
@@ -37,8 +38,8 @@ def test_record(rng):
 def test_histogram(rng):
     N = 32 * 1024
     N_BINS = 50
-    BIN_SIZE = 4.0
-    T0 = 20.0
+    BIN_SIZE = 4.0 * u.ns
+    T0 = 20.0 * u.ns
     T1 = T0 + N_BINS * BIN_SIZE
     NORM = 0.01
 
@@ -56,7 +57,7 @@ def test_histogram(rng):
 
     data.count = N
     data["value"] = rng.random(N)
-    data["time"] = rng.random(N) * 300.0
+    data["time"] = rng.random(N) * 300.0 * u.ns
 
     runPipeline([updater, estimator])
 
@@ -74,17 +75,17 @@ def test_lambertResponse(rng):
     fetch = RetrieveTensorStage(queue)
 
     hits = replay.view(0)
-    hits["position"] = 10.0 * rng.random((N, 3)) - 5.0
+    hits["position"] = (10.0 * rng.random((N, 3)) - 5.0) * u.m
     dir = rng.random((N, 3))
     dir = dir / np.sqrt(np.square(dir).sum(-1))[:, None]
     hits["direction"] = dir
     nrm = -rng.random((N, 3))  # put normal in opposite octant
     nrm = nrm / np.sqrt(np.square(nrm).sum(-1))[:, None]
     hits["normal"] = nrm
-    hits["wavelength"] = rng.random((N,)) * 100.0 + 400.0
+    hits["wavelength"] = (rng.random((N,)) * 100.0 + 400.0) * u.nm
     hits["contrib"] = rng.random((N,))
     # use time to match samples
-    hits["time"] = np.arange(N).astype(np.float32)
+    hits["time"] = np.arange(N).astype(np.float32) * u.ns
 
     runPipeline([replay, fetch])
 

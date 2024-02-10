@@ -9,6 +9,7 @@ from ctypes import Structure, c_float, c_uint32, c_uint64, memmove, sizeof
 from types import MappingProxyType
 
 from theia.lookup import *
+import theia.units as u
 
 import numpy.typing as npt
 from collections.abc import Iterable
@@ -40,8 +41,8 @@ def __dir__():
 #################################### COMMON ####################################
 
 
-speed_of_light: Final[float] = 0.299_792_458  # m / ns
-"""speed of light in meter per nanosecond"""
+speed_of_light: Final[float] = 1.0 * u.c
+"""speed of light in internal units"""
 
 
 class Medium:
@@ -63,13 +64,13 @@ class Medium:
         Table of refractive index as function of wavelength.
         None defaults to a constant value of 1.0.
     group_velocity: ArrayLike | None, default = None
-        Table of group velocity in m/ns as function of wavelength.
-        None defaults to a constant value of `speed_of_light`.
+        Table of group velocity as function of wavelength.
+        None defaults to a constant value of `c`.
     absorption_coef: ArrayLike | None, default = None
-        Table of absorption coefficient in units of 1/m as function of wavelength.
+        Table of absorption coefficient as function of wavelength.
         None defaults to a constant value of 0.0.
     scattering_coef: ArrayLike | None, default = None
-        Table of scattering coefficient in units of 1/m as function of wavelength.
+        Table of scattering coefficient as function of wavelength.
         None defaults to a constant value of 0.0.
     log_phase_function: ArrayLike | None, default = None
         Table of logarithmic scattering phase function as a function of the
@@ -173,10 +174,10 @@ class Medium:
     @property
     def group_velocity(self) -> Union[npt.ArrayLike, None]:
         """
-        Table containing values of the group velocity in units of m/ns as a
-        function of wavelength sampled at equidistant points on the range
-        defined by lambda min/max.
-        If None, a constant value of `speed_of_light` is assumed.
+        Table containing values of the group velocity as a function of
+        wavelength sampled at equidistant points on the range defined by lambda
+        min/max.
+        If None, a constant value of `c` is assumed.
         """
         return self._group_velocity
 
@@ -191,9 +192,9 @@ class Medium:
     @property
     def absorption_coef(self) -> Union[npt.ArrayLike, None]:
         """
-        Table containing values of the absorption coefficient in units of 1/m
-        as a function of wavelength sampled at equidistant points on the range
-        defined by lambda min/max.
+        Table containing values of the absorption coefficient as a function of
+        wavelength sampled at equidistant points on the range defined by lambda
+        min/max.
         If None, a constant value of 0.0 is assumed.
         """
         return self._absorption_coef
@@ -209,9 +210,9 @@ class Medium:
     @property
     def scattering_coef(self) -> Union[npt.ArrayLike, None]:
         """
-        Table containing values of the scattering coefficient in units of 1/m
-        as a function of wavelength sampled at equidistant points on the range
-        defined by lambda min/max.
+        Table containing values of the scattering coefficient as a function of
+        wavelength sampled at equidistant points on the range defined by lambda
+        min/max.
         If None, a constant value of 0.0 is assumed.
         """
         return self._scattering_coef
@@ -718,30 +719,28 @@ class MediumModel:
 
     def refractive_index(self, wavelength: npt.ArrayLike) -> Union[npt.NDArray, None]:
         """
-        Calculates the refractive index for the given wavelengths in nm.
+        Calculates the refractive index for the given wavelengths.
         Returns None if not defined.
         """
         return None
 
     def group_velocity(self, wavelength: npt.ArrayLike) -> Union[npt.NDArray, None]:
         """
-        Calculates the group velocity in m/ns for the given wavelengths in nm.
+        Calculates the group velocity for the given wavelengths.
         Returns None if not defined.
         """
         return None
 
     def absorption_coef(self, wavelength: npt.ArrayLike) -> Union[npt.NDArray, None]:
         """
-        Returns the absorption coefficient in units 1/m for the given
-        wavelengths in nm.
+        Returns the absorption coefficient for the given wavelengths.
         Returns None if not defined.
         """
         return None
 
     def scattering_coef(self, wavelength: npt.ArrayLike) -> Union[npt.NDArray, None]:
         """
-        Returns the scattering coefficient in units 1/m for the given
-        wavelengths in nm.
+        Returns the scattering coefficient for the given wavelengths.
         Returns None if not defined.
         """
         return None
@@ -765,8 +764,8 @@ class MediumModel:
 
     def createMedium(
         self,
-        lambda_min=200.0,
-        lambda_max=800.0,
+        lambda_min=200.0 * u.nm,
+        lambda_max=800.0 * u.nm,
         num_lambda=1024,
         num_theta=1024,
         *,
@@ -828,8 +827,9 @@ class SellmeierEquation:
         self.C3 = C3
 
     def refractive_index(self, wavelength: npt.ArrayLike) -> npt.NDArray:
-        """Calculates the refractive index for the given wavelengths in nm"""
-        L2 = np.square(wavelength)
+        """Calculates the refractive index for the given wavelengths"""
+        L2 = np.square(u.convert(wavelength, u.nm))
+        # L2 = np.square(wavelength)
         S1 = self.B1 * L2 / (L2 - self.C1)
         S2 = self.B2 * L2 / (L2 - self.C2)
         S3 = self.B3 * L2 / (L2 - self.C3)
@@ -837,16 +837,16 @@ class SellmeierEquation:
 
     def group_velocity(self, wavelength: npt.ArrayLike) -> npt.NDArray:
         """
-        Calculates the group velocity in m/ns for the given wavelengths in nm
+        Calculates the group velocity in for the given wavelengths
         """
         n = self.refractive_index(wavelength)
-        L = wavelength
+        L = u.convert(wavelength, u.nm)
         L2 = np.square(wavelength)
         S1 = self.B1 * self.C1 * L / np.square(L2 - self.C1)
         S2 = self.B2 * self.C2 * L / np.square(L2 - self.C2)
         S3 = self.B3 * self.C3 * L / np.square(L2 - self.C3)
         grad = -1.0 * (S1 + S2 + S3) / n
-        return speed_of_light / (n - wavelength * grad)
+        return 1.0 / (n - wavelength * grad) * u.c
 
 
 class BK7Model(SellmeierEquation, MediumModel):
@@ -882,10 +882,7 @@ class BK7Model(SellmeierEquation, MediumModel):
             )
 
     def absorption_coef(self, wavelength: npt.ArrayLike) -> npt.NDArray:
-        """
-        Returns the absorption coefficient in units 1/m for the given
-        wavelengths in nm
-        """
+        """Returns the absorption coefficient for the given wavelengths"""
         # we can transform the transmission measurements to absorption
         # coefficients via the Beer-Lambert law. Unfortunately, they two
         # measurements disagree a lot. So we take the average weighted by
@@ -900,9 +897,11 @@ class BK7Model(SellmeierEquation, MediumModel):
             tau_25mm = -0.025 / np.log(BK7Model.TransmissionTable[:, 2])
             tau_avg = (10.0 * tau_10mm + 25.0 * tau_25mm) / 35.0
             # interpolate without inf
-            tau = np.interp(wavelength, BK7Model.TransmissionTable[:, 0], tau_avg)
+            tau = np.interp(
+                u.convert(wavelength, u.nm), BK7Model.TransmissionTable[:, 0], tau_avg
+            )
             # convert back to coefficients
-            return np.reciprocal(tau)
+            return np.reciprocal(tau) / u.m
 
 
 class HenyeyGreensteinPhaseFunction:
@@ -1155,7 +1154,7 @@ class WaterBaseModel:
     def refractive_index(self, wavelength: npt.ArrayLike) -> npt.NDArray:
         """Calculates the refractive index for the given wavelengths"""
         # formula expects wavelengths in micrometers -> convert
-        L = wavelength / 1000.0
+        L = u.convert(wavelength, u.um)
         T = self.temperature
         p = self.pressure
         S = self.salinity
@@ -1195,10 +1194,10 @@ class WaterBaseModel:
 
     def group_velocity(self, wavelength: npt.ArrayLike) -> npt.NDArray:
         """
-        Calculates the group velocity in m/ns for the given wavelengths in nm
+        Calculates the group velocity for the given wavelengths
         """
         # formula expects wavelengths in micrometers -> convert
-        L = wavelength / 1000.0
+        L = u.convert(wavelength, u.um)
         T = self.temperature
         p = self.pressure
         S = self.salinity
@@ -1218,22 +1217,30 @@ class WaterBaseModel:
         G = G1 + G2 + G3 + G4
         # vg = c / (n - L*dn/dL)
         n = self.refractive_index(wavelength)
-        return speed_of_light / (n - L * G)
+        return 1.0 / (n - L * G) * u.c
 
     def absorption_coef(self, wavelength: npt.ArrayLike) -> npt.NDArray:
         """
-        Returns the absorption coefficient in units 1/m for the given
-        wavelengths in nm
+        Returns the absorption coefficient for the given wavelengths
         """
-        return np.interp(
-            wavelength, WaterBaseModel.DataTable[:, 0], WaterBaseModel.DataTable[:, 1]
+        return (
+            np.interp(
+                u.convert(wavelength, u.nm),
+                WaterBaseModel.DataTable[:, 0],
+                WaterBaseModel.DataTable[:, 1],
+            )
+            / u.m
         )
 
     def scattering_coef(self, wavelength: npt.ArrayLike) -> npt.NDArray:
         """
-        Returns the scattering coefficient in units 1/m for the given
-        wavelengths in nm
+        Returns the scattering coefficient for the given wavelengths
         """
-        return np.interp(
-            wavelength, WaterBaseModel.DataTable[:, 0], WaterBaseModel.DataTable[:, 2]
+        return (
+            np.interp(
+                u.convert(wavelength, u.nm),
+                WaterBaseModel.DataTable[:, 0],
+                WaterBaseModel.DataTable[:, 2],
+            )
+            / u.m
         )

@@ -27,6 +27,7 @@ submodules = [
     "random",
     "scene",
     "trace",
+    "units",
 ]
 for module in submodules:
     globals()[module] = importlib.import_module(f"theia.{module}")

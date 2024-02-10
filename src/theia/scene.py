@@ -1,12 +1,14 @@
 from __future__ import annotations
+import importlib.resources
 
+import numpy as np
 import hephaistos as hp
 from hephaistos.glsl import vec2, vec3
-import numpy as np
 
-import importlib.resources
 import os.path
 import trimesh
+
+import theia.units as u
 
 from collections.abc import Mapping
 from ctypes import Structure, c_float, c_uint64
@@ -112,7 +114,7 @@ class Transform:
 def loadMesh(filepath: str) -> hp.Mesh:
     """
     Loads the mesh stored at the given file path and returns a
-    hephaistos.Mesh to be used in MeshStore.
+    `hephaistos.Mesh` to be used in MeshStore.
     """
     result = hp.Mesh()
     mesh = trimesh.load_mesh(filepath)
@@ -204,6 +206,7 @@ class MeshStore:
         *,
         transform: Union[Transform, None] = None,
         detectorId: int = 0,
+        scale: Union[float, None] = None,
     ) -> MeshInstance:
         """
         Creates and returns a new MeshInstance of a mesh specified via its name.
@@ -221,6 +224,8 @@ class MeshStore:
             If None, identity transformation is applied.
         detectorId: int, default = 0
             Id of the instance if used as a detector/target.
+        scale: float | None, default=None
+            Dimension of the vertex positions. Defaults to 1m.
 
         Returns
         -------
@@ -236,8 +241,15 @@ class MeshStore:
             material,
         )
         instance.instance.customIndex = detectorId
-        if transform is not None:
-            instance.transform = transform.numpy()
+        if scale is None:
+            # default to 1m
+            scale = 1.0 * u.m
+        if scale != 1.0 or transform is not None:
+            trafo = Transform.Scale(scale, scale, scale)
+            if transform is not None:
+                # scale first
+                trafo = transform @ trafo
+            instance.transform = trafo.numpy()
         return instance
 
 
@@ -380,7 +392,7 @@ class Scene:
         specifying vacuum.
     bbox: RectBBox, default=None
         bounding box containing the scene, limiting traced rays inside. Defaults
-        to a cube of 1,000 units in each primal direction.
+        to a cube of 1km in each primal direction.
     targets: Iterable[SphereBBox], default=[]
         during scatter events, tracers may use targets each corresponding to the
         detector of the same index to sample the next ray direction instead of
@@ -440,7 +452,7 @@ class Scene:
         self.medium = medium
         # save bbox
         if bbox is None:
-            bbox = RectBBox((-1000,) * 3, (1000,) * 3)
+            bbox = RectBBox((-1.0 * u.km,) * 3, (1.0 * u.km,) * 3)
         self.bbox = bbox
 
     @property

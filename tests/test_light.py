@@ -3,6 +3,7 @@ import pytest
 import numpy as np
 import scipy.constants as c
 from hephaistos.pipeline import runPipeline
+import theia.units as u
 
 import theia.light
 import theia.material
@@ -23,9 +24,9 @@ def test_lightsource(rng):
 
     # fill input buffer
     rays = light.view(0)
-    x = rng.random(N) * 10.0 - 5.0
-    y = rng.random(N) * 10.0 - 5.0
-    z = rng.random(N) * 10.0 - 5.0
+    x = (rng.random(N) * 10.0 - 5.0) * u.m
+    y = (rng.random(N) * 10.0 - 5.0) * u.m
+    z = (rng.random(N) * 10.0 - 5.0) * u.m
     cos_theta = 2.0 * rng.random(N) - 1.0
     sin_theta = np.sqrt(1.0 - cos_theta**2)
     phi = rng.random(N) * 2.0 * np.pi
@@ -34,9 +35,9 @@ def test_lightsource(rng):
         [sin_theta * np.cos(phi), sin_theta * np.sin(phi), cos_theta],
         axis=-1,
     )
-    lam = rng.random((N, N_LAMBDA)) * 600.0 + 200.0
+    lam = (rng.random((N, N_LAMBDA)) * 600.0 + 200.0) * u.nm
     rays["wavelength"] = lam
-    rays["startTime"] = rng.random((N, N_LAMBDA)) * 50.0
+    rays["startTime"] = rng.random((N, N_LAMBDA)) * 50.0 * u.ns
     rays["contrib"] = rng.random((N, N_LAMBDA)) + 1.0
 
     # run
@@ -54,15 +55,15 @@ def test_lightsource(rng):
 
 def test_diskRay():
     N = 32 * 1024
-    center = (14.0, -2.0, 3.0)
+    center = (14.0, -2.0, 3.0) * u.m
     direction = (0.8, 0.36, 0.48)  # unit
-    radius = 5.0
+    radius = 5.0 * u.m
 
     # create pipeline
     philox = theia.random.SobolQRNG(seed=0xC0110FFC0FFEE)
     rays = theia.light.DiskRaySource(center=center, direction=direction, radius=radius)
     photons = theia.light.UniformPhotonSource(
-        lambdaRange=(100.0, 100.0), timeRange=(10.0, 10.0)
+        lambdaRange=(100.0, 100.0) * u.nm, timeRange=(10.0, 10.0) * u.ns
     )
     light = theia.light.ModularLightSource(rays, photons, 1)
     sampler = theia.light.LightSampler(light, N, rng=philox)
@@ -90,14 +91,14 @@ def test_diskRay():
 
 def test_pencilRay():
     N = 32 * 256
-    position = (14.0, -2.0, 3.0)
+    position = (14.0, -2.0, 3.0) * u.m
     direction = (0.8, 0.36, 0.48)  # unit
 
     # create pipeline
     philox = theia.random.PhiloxRNG(key=0xC0110FFC0FFEE)
     rays = theia.light.PencilRaySource(position=position, direction=direction)
     photons = theia.light.UniformPhotonSource(
-        lambdaRange=(100.0, 100.0), timeRange=(10.0, 10.0)
+        lambdaRange=(100.0, 100.0) * u.nm, timeRange=(10.0, 10.0) * u.ns
     )
     light = theia.light.ModularLightSource(rays, photons, 1)
     sampler = theia.light.LightSampler(light, N, rng=philox)
@@ -117,13 +118,13 @@ def test_pencilRay():
 
 def test_sphericalRay():
     N = 32 * 256
-    position = (14.0, -2.0, 3.0)
+    position = (14.0, -2.0, 3.0) * u.m
 
     # create pipeline
     philox = theia.random.PhiloxRNG(key=0xC0110FFC0FFEE)
     rays = theia.light.SphericalRaySource(position)
     photons = theia.light.UniformPhotonSource(
-        lambdaRange=(100.0, 100.0), timeRange=(10.0, 10.0)
+        lambdaRange=(100.0, 100.0) * u.nm, timeRange=(10.0, 10.0) * u.ns
     )
     light = theia.light.ModularLightSource(rays, photons, 1)
     sampler = theia.light.LightSampler(light, N, rng=philox)
@@ -146,8 +147,8 @@ def test_sphericalRay():
 def test_uniformPhoton():
     N = 32 * 256
     N_LAMBDA = 4
-    lamRange, dLam = (350.0, 750.0), 400.0
-    timeRange, dt = (20.0, 70.0), 50.0
+    lamRange, dLam = (350.0, 750.0) * u.nm, 400.0 * u.nm
+    timeRange, dt = (20.0, 70.0) * u.ns, 50.0 * u.ns
     intensity = 8.0
     # contrib = L/p(t,lam); p(t, lam) = 1.0 / (|dLam|*|dt|)
     contrib = intensity * dLam * dt
