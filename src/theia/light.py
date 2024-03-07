@@ -288,8 +288,10 @@ class HostLightSource(LightSource):
 
         # allocate memory
         item = createLightSampleItem(nLambda)
-        self._buffers = [QueueBuffer(item, capacity, skipHeader=True) for _ in range(2)]
-        self._tensor = QueueTensor(item, capacity, skipHeader=True)
+        self._buffers = [
+            QueueBuffer(item, capacity, skipCounter=True) for _ in range(2)
+        ]
+        self._tensor = QueueTensor(item, capacity, skipCounter=True)
 
     @property
     def capacity(self) -> int:
