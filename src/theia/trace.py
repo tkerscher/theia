@@ -300,31 +300,45 @@ class Tracer(PipelineStage):
 
     def __init__(
         self,
+        response: HitResponse,
         params: Dict[str, type[Structure]] = {},
         extra: Set[str] = set(),
+        *,
+        maxHits: int,
+        normalization: float,
+        nRNGSamples: int,
     ) -> None:
         super().__init__(params, extra)
+        # save props
+        self._response = response
+        self._maxHits = maxHits
+        self._normalization = normalization
+        self._nRNGSamples = nRNGSamples
+        # prepare response
+        response.prepare(maxHits)
 
     @property
-    @abstractmethod
     def maxHits(self) -> int:
         """Maximum amount of hits the tracer can produce per run"""
-        ...
+        return self._maxHits
 
     @property
-    @abstractmethod
     def normalization(self) -> float:
         """
         Normalization factor that must be applied to each sample to get a
         correct estimate.
         """
-        ...
+        return self._normalization
 
     @property
-    @abstractmethod
     def nRNGSamples(self) -> int:
         """Amount of random numbers drawn per ray"""
-        ...
+        return self._nRNGSamples
+
+    @property
+    def response(self) -> HitResponse:
+        """Response function processing each simulated hit"""
+        return self._response
 
 
 class VolumeTracer(Tracer):
@@ -425,11 +439,16 @@ class VolumeTracer(Tracer):
         blockSize: int = 128,
         code: Optional[bytes] = None,
     ) -> None:
-        super().__init__({"TraceParams": self.TraceParams})
+        super().__init__(
+            response,
+            {"TraceParams": self.TraceParams},
+            maxHits=batchSize * nScattering * source.nLambda,
+            normalization=1.0 / (batchSize * source.nLambda),
+            nRNGSamples=source.nRNGSamples + 5 * nScattering,
+        )
         # save params
         self._batchSize = batchSize
         self._source = source
-        self._response = response
         self._rng = rng
         self._callback = callback
         self._nScattering = nScattering
@@ -446,9 +465,6 @@ class VolumeTracer(Tracer):
         )
         # calculate group size
         self._groups = -(batchSize // -blockSize)
-
-        # prepare response
-        response.prepare(self.maxHits)
 
         # compile code if needed
         if code is None:
@@ -491,27 +507,9 @@ class VolumeTracer(Tracer):
         return self._code
 
     @property
-    def maxHits(self) -> int:
-        return self.batchSize * self.nScattering * self.source.nLambda
-
-    @property
-    def normalization(self) -> float:
-        return 1.0 / (self.batchSize * self.source.nLambda)
-
-    @property
-    def nRNGSamples(self) -> int:
-        """Amount of random numbers drawn per ray"""
-        return self.source.nRNGSamples + 5 * self.nScattering
-
-    @property
     def nScattering(self) -> int:
         """Number of simulated scattering events"""
         return self._nScattering
-
-    @property
-    def response(self) -> HitResponse:
-        """Response function processing each simulated hit"""
-        return self._response
 
     @property
     def rng(self) -> RNG:
@@ -654,12 +652,17 @@ class SceneShadowTracer(Tracer):
         disableTransmission: bool = False,
         code: Optional[bytes] = None,
     ) -> None:
-        super().__init__({"TraceParams": self.TraceParams})
+        super().__init__(
+            response,
+            {"TraceParams": self.TraceParams},
+            maxHits=batchSize * nScattering * source.nLambda,
+            normalization=1.0 / (batchSize * source.nLambda),
+            nRNGSamples=source.nRNGSamples + 6 * nScattering,
+        )
         # save params
         self._batchSize = batchSize
         self._source = source
         self._callback = callback
-        self._response = response
         self._rng = rng
         self._scene = scene
         self._blockSize = blockSize
@@ -678,9 +681,6 @@ class SceneShadowTracer(Tracer):
         # check if scene defines targets
         if scene.targets is None:
             raise ValueError("provided scene has no targets defined")
-
-        # prepare response
-        response.prepare(self.maxHits)
 
         # compile code if needed
         if code is None:
@@ -732,27 +732,9 @@ class SceneShadowTracer(Tracer):
         return self._code
 
     @property
-    def maxHits(self) -> int:
-        return self.batchSize * self.nScattering * self.source.nLambda
-
-    @property
-    def normalization(self) -> float:
-        return 1.0 / (self.batchSize * self.source.nLambda)
-
-    @property
-    def nRNGSamples(self) -> int:
-        """Amount of random numbers drawn per ray"""
-        return self.source.nRNGSamples + 6 * self.nScattering
-
-    @property
     def nScattering(self) -> int:
         """Number of simulated scattering events"""
         return self._nScattering
-
-    @property
-    def response(self) -> HitResponse:
-        """Response function processing each simulated hit"""
-        return self._response
 
     @property
     def rng(self) -> RNG:
@@ -885,12 +867,20 @@ class SceneWalkTracer(Tracer):
         disableMIS: bool = False,
         code: Optional[bytes] = None,
     ) -> None:
-        super().__init__({"TraceParams": self.TraceParams})
+        # check if we have any targets
+        if scene.targets is None:
+            disableMIS = True
+        super().__init__(
+            response,
+            {"TraceParams": self.TraceParams},
+            maxHits=batchSize * nScattering * source.nLambda,
+            normalization=1.0 / (batchSize * source.nLambda),
+            nRNGSamples=(source.nRNGSamples + (5 if disableMIS else 7) * nScattering),
+        )
         # save params
         self._batchSize = batchSize
         self._callback = callback
         self._source = source
-        self._response = response
         self._rng = rng
         self._scene = scene
         self._nScattering = nScattering
@@ -910,12 +900,6 @@ class SceneWalkTracer(Tracer):
         )
         # calculate group size
         self._groups = -(batchSize // -blockSize)
-        # check if we have any targets
-        if scene.targets is None:
-            disableMIS = True
-
-        # prepare response
-        response.prepare(self.maxHits)
 
         # compile code if needed
         if code is None:
@@ -985,28 +969,9 @@ class SceneWalkTracer(Tracer):
         return self._code
 
     @property
-    def maxHits(self) -> int:
-        return self.batchSize * self.nScattering * self.source.nLambda
-
-    @property
-    def normalization(self) -> float:
-        return 1.0 / (self.batchSize * self.source.nLambda)
-
-    @property
-    def nRNGSamples(self) -> int:
-        """Amount of random numbers drawn per ray"""
-        stride = 5 if self.misDisabled else 7
-        return self.source.nRNGSamples + stride * self.nScattering
-
-    @property
     def nScattering(self) -> int:
         """Number of simulated scattering events"""
         return self._nScattering
-
-    @property
-    def response(self) -> HitResponse:
-        """Response function processing each simulated hit"""
-        return self._response
 
     @property
     def rng(self) -> RNG:
