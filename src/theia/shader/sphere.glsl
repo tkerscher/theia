@@ -27,7 +27,7 @@ vec3 sampleSphere(
     float cos_max = d / t;
 
     //sample cone
-    float phi = rng.x;
+    float phi = TWO_PI * rng.x;
     float cos_theta = (1.0 - rng.y) + rng.y * cos_max;
     float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
     //calc sample point in local space (need only to guarentee it hit the disk)
