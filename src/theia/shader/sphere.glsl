@@ -16,7 +16,6 @@ vec3 sampleSphere(
     const Sphere sphere,
     const vec3 observer,
     const vec2 rng,
-    out float dist,
     out float p
 ) {
     //calculate visible cone
@@ -31,7 +30,6 @@ vec3 sampleSphere(
     float cos_theta = (1.0 - rng.y) + rng.y * cos_max;
     float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
     //calc sample point in local space (need only to guarentee it hit the disk)
-    dist = d + sphere.radius; //ensure we will "always" hit something
     vec3 pos = vec3(
         sin_theta * sin(phi),
         sin_theta * cos(phi),

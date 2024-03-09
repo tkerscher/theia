@@ -12,7 +12,7 @@ def test_sampleSphere(rng, shaderUtil):
 
     # define types
     class Result(Structure):
-        _fields_ = [("sample", vec3), ("prob", c_float)]
+        _fields_ = [("dir", vec3), ("prob", c_float)]
 
     class Push(Structure):
         _fields_ = [("position", vec3), ("radius", c_float)]
@@ -67,14 +67,10 @@ def test_sampleSphere(rng, shaderUtil):
     assert np.allclose(o["prob"], prob_expected, 1e-4)
     center_dir = np.stack([dx, dy, dz], -1)
     center_dir /= center_dist[:, None]
-    sample_pos = structured_to_unstructured(o["sample"])
-    sample_dir = sample_pos - observer
-    sample_dist = np.sqrt(np.square(sample_dir).sum(-1))
-    sample_dir /= sample_dist[:, None]
+    sample_dir = structured_to_unstructured(o["dir"])
+    assert np.allclose(np.square(sample_dir).sum(-1), 1.0)
     cos_sample = -np.multiply(center_dir, sample_dir).sum(-1)
     assert np.all(cos_sample > cos_cone)  # larger cos => smaller angle
-    # bit a wonky test, but good enough for now: test if sample_dir intersects sphere
-    assert np.all(sample_dist >= edge_dist)
 
 
 def test_sampleProb(rng, shaderUtil):

@@ -6,7 +6,7 @@
 layout(local_size_x = 32) in;
 
 struct Result {
-    vec3 pos;
+    vec3 dir;
     float prob;
 };
 
@@ -29,8 +29,7 @@ void main() {
     vec2 rng = vec2(u[2*idx], u[2*idx + 1]);
     vec3 o = observer[idx];
 
-    float p, d;
-    vec3 dir = sampleSphere(push.sphere, o, rng, d, p);
-    vec3 pos = dir * d + o;
-    result[idx] = Result(pos, p);
+    float p;
+    vec3 dir = sampleSphere(push.sphere, o, rng, p);
+    result[idx] = Result(dir, p);
 }
