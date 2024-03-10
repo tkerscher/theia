@@ -12,21 +12,20 @@ layout(scalar) writeonly buffer HitQueueOut {
     HitQueue queue;
 } hitQueueOut;
 
-void response(HitItem item) {
-    //count how many items we will be adding in this subgroup
-    uint n = subgroupAdd(1);
-    //elect one invocation to update counter in queue
-    uint oldCount = 0;
-    if (subgroupElect()) {
-        oldCount = atomicAdd(hitQueueOut.count, n);
-    }
-    //only the first (i.e. elected) one has correct oldCount value -> broadcast
-    oldCount = subgroupBroadcastFirst(oldCount);
-    //now we effectevily reserved us the range [oldCount ... oldcount+n-1]
+// void response(HitItem item) {
+//     uint n = subgroupAdd(1);
+//     uint begin = 0;
+//     if (subgroupElect()) {
+//         begin = atomicAdd(hitQueueOut.count, n);
+//     }
+//     begin = subgroupBroadcastFirst(begin);
+//     uint offset = subgroupExclusiveAdd(1);
+//     SAVE_HIT(item, hitQueueOut.queue, begin + offset)
+// }
 
-    //order the active invocations so each can write at their own spot
-    uint id = subgroupExclusiveAdd(1);
-    SAVE_HIT(item, hitQueueOut.queue, oldCount + id)
+void response(HitItem item) {
+    uint id = atomicAdd(hitQueueOut.count, 1);
+    SAVE_HIT(item, hitQueueOut.queue, id)
 }
 
 #endif

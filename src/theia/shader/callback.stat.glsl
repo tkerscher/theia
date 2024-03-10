@@ -19,42 +19,33 @@ void onEvent(const Ray ray, ResultCode code, uint idx, uint i) {
     uint n;
     switch(code) {
     case RESULT_CODE_RAY_CREATED:
-        n = subgroupAdd(1);
-        if (subgroupElect()) atomicAdd(stats.created, n);
+        atomicAdd(stats.created, 1);
         break;
     case RESULT_CODE_RAY_SCATTERED:
-        n = subgroupAdd(1);
-        if (subgroupElect()) atomicAdd(stats.scattered, n);
+        atomicAdd(stats.scattered, 1);
         break;
     case RESULT_CODE_RAY_HIT:
-        n = subgroupAdd(1);
-        if (subgroupElect()) atomicAdd(stats.hit, n);
+        atomicAdd(stats.hit, 1);
         break;
     case RESULT_CODE_RAY_DETECTED:
-        n = subgroupAdd(1);
-        if (subgroupElect()) atomicAdd(stats.detect, n);
+        atomicAdd(stats.detect, 1);
         break;
     case RESULT_CODE_VOLUME_HIT:
-        n = subgroupAdd(1);
-        if (subgroupElect()) atomicAdd(stats.volume, n);
+        atomicAdd(stats.volume, 1);
         break;
     case RESULT_CODE_RAY_LOST:
-        n = subgroupAdd(1);
-        if (subgroupElect()) atomicAdd(stats.lost, n);
+        atomicAdd(stats.lost, 1);
         break;
     case RESULT_CODE_RAY_DECAYED:
-        n = subgroupAdd(1);
-        if (subgroupElect()) atomicAdd(stats.decayed, n);
+        atomicAdd(stats.decayed, 1);
         break;
     case RESULT_CODE_RAY_ABSORBED:
-        n = subgroupAdd(1);
-        if (subgroupElect()) atomicAdd(stats.absorbed, n);
+        atomicAdd(stats.absorbed, 1);
         break;
     default:
         //collect all errors in one statistic
         if (code <= ERROR_CODE_MAX_VALUE) {
-            n = subgroupAdd(1);
-            if (subgroupElect()) atomicAdd(stats.error, n);
+            atomicAdd(stats.error, 1);
         }
         break;
     }
