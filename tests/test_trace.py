@@ -15,12 +15,15 @@ import theia.units as u
 from common.models import WaterModel
 
 
-def test_VolumeTracer():
+@pytest.mark.parametrize("disableDirect", [True, False])
+@pytest.mark.parametrize("disableTarget", [True, False])
+@pytest.mark.parametrize("limitTime", [True, False])
+def test_VolumeTracer(disableDirect: bool, disableTarget: bool, limitTime: bool):
     N = 32 * 256
     N_LAMBDA = 4
     N_SCATTER = 6
     T0, T1 = 10.0 * u.ns, 20.0 * u.ns
-    T_MAX = 500.0 * u.ns
+    T_MAX = 1.0 * u.us if limitTime else 100.0 * u.us
     light_pos = (-1.0, -7.0, 0.0) * u.m
     light_intensity = 1000.0
     target_pos, target_radius = (5.0, 2.0, -8.0) * u.m, 4.0 * u.m
@@ -45,6 +48,7 @@ def test_VolumeTracer():
     )
     source = theia.light.ModularLightSource(rays, photons, N_LAMBDA)
     recorder = theia.estimator.HitRecorder()
+    stats = theia.trace.EventStatisticCallback()
     tracer = theia.trace.VolumeTracer(
         N,
         source,
@@ -52,8 +56,11 @@ def test_VolumeTracer():
         rng,
         medium=store.media["water"],
         nScattering=N_SCATTER,
+        callback=stats,
         maxTime=T_MAX,
         target=theia.scene.SphereBBox(target_pos, target_radius),
+        disableDirectLighting=disableDirect,
+        disableTargetSampling=disableTarget,
     )
     # run pipeline
     pl.runPipeline([rng, rays, photons, source, tracer, recorder])
@@ -61,26 +68,59 @@ def test_VolumeTracer():
     # check hits
     hits = recorder.view(0)
     assert hits.count > 0
+    assert hits.count <= tracer.maxHits
     hits = hits[: hits.count]
 
     assert np.allclose(np.square(hits["position"]).sum(-1), target_radius**2)
     assert np.allclose(np.square(hits["normal"]).sum(-1), 1.0)
     assert np.min(hits["time"]) >= t_min
     assert np.max(hits["time"]) <= T_MAX
+
+    # check config via stats
+    assert stats.created == tracer.batchSize
+    assert stats.scattered > 0
+    if disableDirect and disableTarget:
+        assert stats.absorbed > 0
+        assert stats.detected > 0
+        if not limitTime:
+            assert len(hits) == stats.detected * N_LAMBDA
+    elif disableDirect and not disableTarget:
+        assert stats.absorbed > 0
+        assert stats.detected == 0
+        if not limitTime:
+            assert len(hits) > stats.scattered * N_LAMBDA
+    elif not disableDirect and disableTarget:
+        assert stats.absorbed == 0
+        assert stats.detected > 0
+        if not limitTime:
+            assert len(hits) == stats.detected * N_LAMBDA
+    elif not disableDirect and not disableTarget:
+        assert stats.absorbed > 0
+        assert stats.detected > 0
+        if not limitTime:
+            assert len(hits) > (stats.detected + stats.scattered) * N_LAMBDA
+
     # TODO: more sophisticated tests...
 
 
-@pytest.mark.parametrize("vol", [True, False])
-@pytest.mark.parametrize("trans", [True, False])
-def test_SceneShadowTracer(vol: bool, trans: bool):
+@pytest.mark.parametrize("disableDirect", [True, False])
+@pytest.mark.parametrize("disableVolumeBorder", [True, False])
+@pytest.mark.parametrize("disableTransmission", [True, False])
+@pytest.mark.parametrize("disableTarget", [True, False])
+def test_SceneTracer(
+    disableDirect: bool,
+    disableVolumeBorder: bool,
+    disableTransmission: bool,
+    disableTarget: bool,
+):
     if not hp.isRaytracingEnabled():
         pytest.skip("ray tracing is not supported")
 
     N = 32 * 256
     N_LAMBDA = 4
-    N_SCATTER = 6
+    MAX_PATH = 10
     T0, T1 = 10.0 * u.ns, 20.0 * u.ns
-    T_MAX = 500.0 * u.ns
+    T_MAX = 1.0 * u.us
     light_pos = (-1.0, -7.0, 0.0) * u.m
     light_intensity = 1000.0
 
@@ -124,17 +164,21 @@ def test_SceneShadowTracer(vol: bool, trans: bool):
     )
     source = theia.light.ModularLightSource(rays, photons, N_LAMBDA)
     recorder = theia.estimator.HitRecorder()
-    tracer = theia.trace.SceneShadowTracer(
+    stats = theia.trace.EventStatisticCallback()
+    tracer = theia.trace.SceneTracer(
         N,
         source,
         recorder,
         rng,
-        scene=scene,
-        nScattering=N_SCATTER,
+        scene,
+        maxPathLength=MAX_PATH,
         targetIdx=1,
         maxTime=T_MAX,
-        disableVolumeBorder=vol,
-        disableTransmission=trans,
+        callback=stats,
+        disableDirectLighting=disableDirect,
+        disableTargetSampling=disableTarget,
+        disableTransmission=disableTransmission,
+        disableVolumeBorder=disableVolumeBorder,
     )
     # run pipeline
     pl.runPipeline([rng, rays, photons, source, tracer, recorder])
@@ -142,6 +186,7 @@ def test_SceneShadowTracer(vol: bool, trans: bool):
     # check hits
     hits = recorder.view(0)
     assert hits.count > 0
+    assert hits.count <= tracer.maxHits
     hits = hits[: hits.count]
 
     r_hits = np.sqrt(np.square(hits["position"]).sum(-1))
@@ -150,87 +195,7 @@ def test_SceneShadowTracer(vol: bool, trans: bool):
     assert np.min(hits["time"]) >= t_min
     assert np.max(hits["time"]) <= T_MAX
 
-
-@pytest.mark.parametrize("vol", [True, False])
-@pytest.mark.parametrize("trans", [True, False])
-def test_SceneWalkTracer(vol: bool, trans: bool):
-    if not hp.isRaytracingEnabled():
-        pytest.skip("ray tracing is not supported")
-
-    N = 32 * 256
-    N_LAMBDA = 4
-    N_SCATTER = 6
-    T0, T1 = 10.0 * u.ns, 20.0 * u.ns
-    T_MAX = 500.0 * u.ns
-    light_pos = (-1.0, -7.0, 0.0) * u.m
-    light_intensity = 1000.0
-
-    # create materials
-    water = WaterModel().createMedium()
-    glass = theia.material.BK7Model().createMedium()
-    mat = theia.material.Material("mat", glass, water, flags=("DR", "B"))
-    matStore = theia.material.MaterialStore([mat])
-    # create scene
-    store = theia.scene.MeshStore(
-        {"cube": "assets/cone.stl", "sphere": "assets/sphere.stl"}
-    )
-    r, d = 40.0, 5.0
-    r_scale = 0.99547149974733  # radius of inscribed sphere (icosphere)
-    r_insc = r * r_scale
-    x, y, z = 10.0, 5.0, -5.0
-    t1 = theia.scene.Transform.Scale(r, r, r).translate(x, y, z + r + d)
-    c1 = store.createInstance("sphere", "mat", transform=t1, detectorId=0)
-    t2 = theia.scene.Transform.Scale(r, r, r).translate(x, y, z - r - d)
-    c2 = store.createInstance("sphere", "mat", transform=t2, detectorId=1)
-    targets = [
-        theia.scene.SphereBBox((x, y, z + r + d), r),
-        theia.scene.SphereBBox((x, y, z - r - d), r),
-    ]
-    scene = theia.scene.Scene(
-        [c1, c2], matStore.material, medium=matStore.media["water"], targets=targets
-    )
-
-    # calculate min time
-    target_pos = (x, y, z - r - d)  # detector #1
-    d_min = np.sqrt(np.square(np.subtract(target_pos, light_pos)).sum(-1)) - r
-    v_max = np.max(water.group_velocity)
-    t_min = d_min / v_max + T0  # ns
-
-    # create pipeline stages
-    rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
-    rays = theia.light.SphericalRaySource(position=light_pos)
-    photons = theia.light.UniformPhotonSource(
-        intensity=light_intensity,
-        timeRange=(T0, T1),
-    )
-    source = theia.light.ModularLightSource(rays, photons, N_LAMBDA)
-    recorder = theia.estimator.HitRecorder()
-    tracer = theia.trace.SceneWalkTracer(
-        N,
-        source,
-        recorder,
-        rng,
-        scene=scene,
-        nScattering=N_SCATTER,
-        targetSampleProb=0.4,
-        targetIdx=1,
-        maxTime=T_MAX,
-        disableVolumeBorder=vol,
-        disableTransmission=trans,
-    )
-    # run pipeline
-    pl.runPipeline([rng, rays, photons, source, tracer, recorder])
-
-    # check hits
-    hits = recorder.view(0)
-    assert hits.count > 0
-    hits = hits[: hits.count]
-
-    r_hits = np.sqrt(np.square(hits["position"]).sum(-1))
-    assert np.all((r_hits <= 1.0) & (r_hits >= r_scale))
-    assert np.allclose(np.square(hits["normal"]).sum(-1), 1.0)
-    assert np.min(hits["time"]) >= t_min
-    assert np.max(hits["time"]) <= T_MAX
+    # TODO: more sophisticated tests
 
 
 def test_EventStatisticCallback():
@@ -270,7 +235,7 @@ def test_EventStatisticCallback():
     source = theia.light.ModularLightSource(rays, photons, 1)
     response = theia.estimator.EmptyResponse()
     stats = theia.trace.EventStatisticCallback()
-    tracer = theia.trace.SceneWalkTracer(
+    tracer = theia.trace.SceneTracer(
         N,
         source,
         response,
@@ -278,10 +243,10 @@ def test_EventStatisticCallback():
         callback=stats,
         scene=scene,
         targetIdx=1,
-        nScattering=1,
-        scatterCoefficient=0.005,
-        maxTime=100,
-        disableMIS=True,
+        maxPathLength=1,
+        scatterCoefficient=0.005 / u.m,
+        maxTime=100.0 * u.ns,
+        disableTargetSampling=True,
     )
     # assert stats start empty
     assert stats.created == 0
@@ -425,7 +390,7 @@ def test_volumeBorder():
     source = theia.light.ModularLightSource(rays, photons, 1)
     estimator = theia.estimator.EmptyResponse()
     tracker = theia.trace.TrackRecordCallback(N, 4)
-    tracer = theia.trace.SceneWalkTracer(
+    tracer = theia.trace.SceneTracer(
         N,
         source,
         estimator,
@@ -433,8 +398,8 @@ def test_volumeBorder():
         callback=tracker,
         scene=scene,
         targetIdx=1,
-        nScattering=2,
-        disableMIS=True,  # there's no scattering anyway
+        maxPathLength=2,
+        disableTargetSampling=True,  # there's no scattering anyway
     )
     # run pipeline
     pl.runPipeline([rng, rays, photons, source, tracer, tracker])
@@ -517,15 +482,17 @@ def test_tracer_reflection(flag, reflectance, err):
     )
     source = theia.light.ModularLightSource(rays, photons, 1)
     recorder = theia.estimator.HitRecorder()
-    tracer = theia.trace.SceneWalkTracer(
+    stats = theia.trace.EventStatisticCallback()
+    tracer = theia.trace.SceneTracer(
         N,
         source,
         recorder,
         rng,
         scene=scene,
         targetIdx=1,
-        nScattering=4,
-        disableMIS=True,  # there's no scattering anyway
+        maxPathLength=4,
+        callback=stats,
+        disableTargetSampling=True,  # there's no scattering anyway
     )
     pipeline = pl.Pipeline([rng, rays, photons, source, tracer, recorder])
     # run pipeline

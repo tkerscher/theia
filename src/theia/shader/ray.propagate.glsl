@@ -31,25 +31,25 @@ float sampleScatterLength(const Ray ray, const PropagateParams params, float u) 
 //Updates samples in ray as if they traveled a given distance.
 //Includes sampling propabilities and check for maxTime
 //Set scatter=true, if mu_s should be applied to lin_contrib
-//Set hit=true, if the was stopped by a hit (affects probability calculations)
 ResultCode updateSamples(
     inout Ray ray,
     const float dist,
     const PropagateParams params,
-    bool scatter, bool hit
+    bool scatter
 ) {
     bool anyBelowMaxTime = false;
     [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
         float mu_e = ray.samples[i].constants.mu_e;
-        ray.samples[i].log_contrib += params.scatterCoefficient * dist - mu_e * dist;
+        ray.samples[i].log_contrib -= mu_e * dist;
         ray.samples[i].time += dist / ray.samples[i].constants.vg;
-        if (scatter)
-            ray.samples[i].lin_contrib *= ray.samples[i].constants.mu_s;
-        if (!hit)
-            ray.samples[i].lin_contrib /= params.scatterCoefficient;
         //time boundary check
         if (ray.samples[i].time <= params.maxTime)
             anyBelowMaxTime = true;
+    }
+    if (scatter) {
+        [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
+            ray.samples[i].lin_contrib *= ray.samples[i].constants.mu_s;
+        }
     }
     //return result of boundary check
     return anyBelowMaxTime ? RESULT_CODE_SUCCESS : RESULT_CODE_RAY_DECAYED;
@@ -58,15 +58,14 @@ ResultCode updateSamples(
 //Propagates the given ray in its direction for the given distance
 //Updates its samples accordingly (see updateSamples())
 //Set scatter=true, if mu_s should be applied to lin_contrib
-//Set hit=true, if the was stopped by a hit (affects probability calculations)
 ResultCode propagateRay(
     inout Ray ray,
     float dist,
     const PropagateParams params,
-    bool scatter, bool hit
+    bool scatter
 ) {
     //update ray
-    ray.position += dist * normalize(ray.direction);
+    ray.position += dist * ray.direction;
     //boundary check
     bool outside =
         any(lessThan(ray.position, params.lowerBBoxCorner)) ||
@@ -76,7 +75,22 @@ ResultCode propagateRay(
     }
 
     //update samples
-    return updateSamples(ray, dist, params, scatter, hit);
+    return updateSamples(ray, dist, params, scatter);
+}
+
+//updates ray with contribution from importance sampling
+//Set hit=true, if the was stopped by a hit (affects probability calculations)
+void updateRayIS(inout Ray ray, float dist, const PropagateParams params, bool hit) {
+    [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
+        ray.samples[i].log_contrib += params.scatterCoefficient * dist;
+    }
+    if (!hit) {
+        //if we hit anything, the actual prob is to travel at least dist
+        // -> happens to drop the coefficient
+        [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
+            ray.samples[i].lin_contrib /= params.scatterCoefficient;
+        }
+    }
 }
 
 #endif

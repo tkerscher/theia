@@ -11,8 +11,10 @@ from theia.light import LightSource
 from theia.random import RNG
 from theia.scene import RectBBox, Scene, SphereBBox
 from theia.util import ShaderLoader, compileShader
+import theia.units as u
 
-from abc import abstractmethod
+import warnings
+
 from enum import IntEnum
 from numpy.typing import NDArray
 from typing import Dict, List, Optional, Set, Tuple, Type
@@ -369,15 +371,24 @@ class VolumeTracer(Tracer):
         Number of simulated scattering events
     target: SphereBBox, default=((0,0,0), r=1.0)
         Sphere the tracer targets
-    scatterCoefficient: float, default=0.01
+    scatterCoefficient: float, default=0.01 1/m
         Scatter coefficient used for sampling ray lengths. Tuning this parameter
         affects the time distribution of the hits.
-    traceBBox: RectBBox, default=(-1000,1000)^3
+    traceBBox: RectBBox, default=(-1km,1km)^3
         Boundary box marking limits beyond tracing of an individual ray is
         stopped
-    maxTime: float, default=1000.0
+    maxTime: float, default=1000.0 ns
         Max total time including delay from the source and travel time, after
         which a ray gets stopped
+    disableDirectLighting: bool, default=False
+        Whether to ignore contributions from direct lighting, i.e. light paths
+        with no scattering. If True, one can use a more performant direct
+        lighting estimator in addition to increase overall performance.
+    disableTargetSampling: bool, default=False
+        Whether to disable sampling the target after scatter event. Disabling it
+        means that targets will only be hit by chance and it is therefore
+        recommended to not disable this as it hugely improves the performance.
+        The simulated light path is not affected by this.
     blockSize: int, default=128
         Number of threads in a single work group
     code: Optional[bytes], default=None
@@ -432,19 +443,32 @@ class VolumeTracer(Tracer):
         callback: TraceEventCallback = EmptyEventCallback(),
         medium: int = 0,
         nScattering: int = 6,
-        target: SphereBBox = SphereBBox((0.0, 0.0, 0.0), 1.0),
-        scatterCoefficient: float = 0.01,
-        traceBBox: RectBBox = RectBBox((-1000.0,) * 3, (1000.0,) * 3),
-        maxTime: float = 1000.0,
+        target: SphereBBox = SphereBBox((0.0, 0.0, 0.0), 1.0 * u.m),
+        scatterCoefficient: float = 0.01 / u.m,
+        traceBBox: RectBBox = RectBBox((-1.0 * u.km,) * 3, (1.0 * u.km,) * 3),
+        maxTime: float = 1000.0 * u.ns,
+        disableDirectLighting: bool = False,
+        disableTargetSampling: bool = False,
         blockSize: int = 128,
         code: Optional[bytes] = None,
     ) -> None:
+        # calculate max hits
+        maxHits = nScattering
+        if not disableTargetSampling:
+            maxHits *= 2
+        if not disableDirectLighting:
+            maxHits += 1
+        maxHits *= batchSize * source.nLambda
+        # MIS also scatters -> one less trace command
+        pathLength = nScattering if disableTargetSampling else nScattering - 1
+        rngStride = 3 if disableTargetSampling else 7
+        # init tracer
         super().__init__(
             response,
             {"TraceParams": self.TraceParams},
-            maxHits=batchSize * nScattering * source.nLambda,
+            maxHits=maxHits,
             normalization=1.0 / (batchSize * source.nLambda),
-            nRNGSamples=source.nRNGSamples + 5 * nScattering,
+            nRNGSamples=source.nRNGSamples + rngStride * pathLength,
         )
         # save params
         self._batchSize = batchSize
@@ -452,6 +476,8 @@ class VolumeTracer(Tracer):
         self._rng = rng
         self._callback = callback
         self._nScattering = nScattering
+        self._directLightingDisabled = disableDirectLighting
+        self._targetSamplingDisabled = disableTargetSampling
         self._blockSize = blockSize
         self.setParams(
             targetPosition=target.center,
@@ -470,11 +496,15 @@ class VolumeTracer(Tracer):
         if code is None:
             # create preamble
             preamble = ""
+            if disableDirectLighting:
+                preamble += "#define DISABLE_DIRECT_LIGHTING 1\n"
+            if disableTargetSampling:
+                preamble += "#define DISABLE_MIS 1\n"
             preamble += f"#define BATCH_SIZE {batchSize}\n"
             preamble += f"#define BLOCK_SIZE {blockSize}\n"
             preamble += f"#define DIM_OFFSET {source.nRNGSamples}\n"
             preamble += f"#define N_LAMBDA {source.nLambda}\n"
-            preamble += f"#define N_SCATTER {nScattering}\n\n"
+            preamble += f"#define PATH_LENGTH {pathLength}\n\n"
             headers = {
                 "callback.glsl": callback.sourceCode,
                 "response.glsl": response.sourceCode,
@@ -505,6 +535,11 @@ class VolumeTracer(Tracer):
     def code(self) -> bytes:
         """Compiled source code. Can be used for caching"""
         return self._code
+
+    @property
+    def directLightingDisabled(self) -> bool:
+        """Wether direct lighting is disabled"""
+        return self._directLightingDisabled
 
     @property
     def nScattering(self) -> int:
@@ -540,6 +575,11 @@ class VolumeTracer(Tracer):
             self.getParam("lowerBBoxCorner"), self.getParam("upperBBoxCorner")
         )
 
+    @property
+    def targetSamplingDisabled(self) -> bool:
+        """Whether target sampling is disabled"""
+        return self._targetSamplingDisabled
+
     @traceBBox.setter
     def traceBBox(self, value: RectBBox) -> None:
         self.setParams(
@@ -557,54 +597,59 @@ class VolumeTracer(Tracer):
         return [self._program.dispatch(self._groups)]
 
 
-class SceneShadowTracer(Tracer):
+class SceneTracer(Tracer):
     """
     Path tracer simulating light traveling through media originating at a light
     source and ending at detectors. Traces rays against the geometries defined
-    in scene to simulate accurate intersections and obstructions. Depending on
-    the geometry's material, rays may reflect or transmit through them.
-
-    As a speed-up method, cast shadow rays from scatter points to the detector
-    additionally to the original light ray. Note that shadow rays must directly
-    hit the detector to make a contribution. If e.g. the detector is behind some
-    other geometry the ray needs to pass through, shadow rays will never reach
-    it. In that case you should use the `SceneWalkTracer` instead.
+    by the provided scene to simulate accurate intersections and shadowing.
+    Depending on the geometry's material, rays may reflect or transmit through
+    them.
 
     Parameters
     ----------
     batchSize: int
-        Number of rays to simulate per run. Note that a single ray may generate
-        up to nScattering hits.
+        Number of rays to simulate per run. A single ray may and most likely
+        will produce multiple responses.
     source: LightSource
         Source producing light rays
     response: HitResponse
-        Response function processing each simulated hit
+        Response function simulating the detector
     rng: RNG
         Generator for creating random numbers
-    callback: TraceEventCallback, default=EmptyEventCallback()
-        Callback called for each tracing event. See `TraceEventCallback`
     scene: Scene
         Scene in which the rays are traced
-    nScattering: int, default=6
-        Number of simulated scattering events
+    callback: TraceEventCallback, default=EmptyEventCallback()
+        Callback called for each tracing event. See `TraceEventCallback`
+    maxPathLength: int, default=6
+        Maximum number of events per simulated ray. An event includes volume
+        scatter and scene intersection.
     targetIdx: int, default=0
         Id of the detector, the tracer should try to hit.
         Hits on other detectors are ignored to make estimates easier.
-    scatterCoefficient: float, default=0.01
+    scatterCoefficient: float, default=0.01 1/m
         Scatter coefficient used for sampling ray lengths. Tuning this parameter
         affects the time distribution of the hits.
-    maxTime: float, default=1000.0
+    maxTime: float, default=1000.0 ns
         Max total time including delay from the source and travel time, after
         which a ray gets stopped
-    blockSize: int, default=128
-        Number of threads in a single work group
+    disableDirectLighting: bool, default=False
+        Whether to ignore contributions from direct lighting, i.e. light paths
+        with no scattering. If True, one can use a more performant direct
+        lighting estimator in addition to increase overall performance.
+    disableTargetSampling: bool, default=False
+        Whether to disable sampling the target after scatter event. Disabling it
+        means that targets will only be hit by chance and it is therefore
+        recommended to not disable this as it hugely improves the performance.
+        The simulated light path is not affected by this.
+    disableTransmission: bool, default=False
+        Disables GPU code handling transmission, which may improve performance.
+        Rays will default to always reflect where possible.
     disableVolumeBorder: bool, default=False
         Disables GPU code handling volume borders, which may improve performance
         if there are none. Settings this to `True` while the scene contains
         volume border will produce wrong results.
-    disableTransmission: bool, default=False
-        Disables GPU code handling transmission, which may improve performance.
-        Rays will default to always reflect where possible.
+    blockSize: int, default=128
+        Number of threads in a single work group
     code: Optional[bytes], default=None
         Cached compiled byte code. If `None` compiles it from source.
         The given byte code is not checked and must match the given
@@ -621,7 +666,7 @@ class SceneShadowTracer(Tracer):
         which a ray gets stopped
     """
 
-    name = "Scene Shadow Tracer"
+    name = "Scene Tracer"
 
     class TraceParams(Structure):
         _fields_ = [
@@ -640,25 +685,47 @@ class SceneShadowTracer(Tracer):
         source: LightSource,
         response: HitResponse,
         rng: RNG,
+        scene: Scene,
         *,
         callback: TraceEventCallback = EmptyEventCallback(),
-        scene: Scene,
-        nScattering: int = 6,
+        maxPathLength: int = 6,
         targetIdx: int = 0,
-        scatterCoefficient: float = 0.01,
-        maxTime: float = 1000.0,
-        blockSize: int = 128,
-        disableVolumeBorder: bool = False,
+        scatterCoefficient: float = 0.01 / u.m,
+        maxTime: float = 1000.0 * u.ns,
+        disableDirectLighting: bool = False,
+        disableTargetSampling: bool = False,
         disableTransmission: bool = False,
+        disableVolumeBorder: bool = False,
+        blockSize: int = 128,
         code: Optional[bytes] = None,
     ) -> None:
+        # check if ray tracing was enabled
+        if not hp.isRaytracingEnabled():
+            raise RuntimeError("Ray tracing is not supported on this system!")
+        # disable MIS if there are no targets
+        if scene.targets is None and not disableTargetSampling:
+            warnings.warn(
+                "Target sampling was requested but scene has no targets! "
+                "Disabling target sampling which will most likely hurt performance."
+            )
+            disableTargetSampling = True
+
+        # calculate max hits
+        maxHits = batchSize * source.nLambda * (maxPathLength - 1)
+        if not disableTargetSampling:
+            maxHits *= 2
+        if not disableDirectLighting:
+            maxHits += batchSize * source.nLambda
+        # init tracer
+        rngStride = 4 if disableTargetSampling else 8
         super().__init__(
             response,
             {"TraceParams": self.TraceParams},
-            maxHits=batchSize * nScattering * source.nLambda,
-            normalization=1.0 / (batchSize * source.nLambda),
-            nRNGSamples=source.nRNGSamples + 6 * nScattering,
+            maxHits=maxHits,
+            normalization=1.0 / (batchSize / source.nLambda),
+            nRNGSamples=source.nRNGSamples + rngStride * maxPathLength,
         )
+
         # save params
         self._batchSize = batchSize
         self._source = source
@@ -666,7 +733,11 @@ class SceneShadowTracer(Tracer):
         self._rng = rng
         self._scene = scene
         self._blockSize = blockSize
-        self._nScattering = nScattering
+        self._maxPathLength = maxPathLength
+        self._directLightingDisabled = disableDirectLighting
+        self._transmissionDisabled = disableTransmission
+        self._targetSamplingDisabled = disableTargetSampling
+        self._volumeBorderDisabled = disableVolumeBorder
         self.setParams(
             targetIdx=targetIdx,
             scatterCoefficient=scatterCoefficient,
@@ -678,38 +749,37 @@ class SceneShadowTracer(Tracer):
         )
         # calculate group size
         self._groups = -(batchSize // -blockSize)
-        # check if scene defines targets
-        if scene.targets is None:
-            raise ValueError("provided scene has no targets defined")
 
         # compile code if needed
         if code is None:
             preamble = ""
-            if disableVolumeBorder:
-                preamble += "#define DISABLE_VOLUME_BORDER 1\n"
+            if disableDirectLighting:
+                preamble += "#define DISABLE_DIRECT_LIGHTING 1\n"
+            if disableTargetSampling:
+                preamble += "#define DISABLE_MIS 1\n"
             if disableTransmission:
                 preamble += "#define DISABLE_TRANSMISSION 1\n"
+            if disableVolumeBorder:
+                preamble += "#define DISABLE_VOLUME_BORDER 1\n"
             preamble += f"#define BATCH_SIZE {batchSize}\n"
             preamble += f"#define BLOCK_SIZE {blockSize}\n"
             preamble += f"#define DIM_OFFSET {source.nRNGSamples}\n"
             preamble += f"#define N_LAMBDA {source.nLambda}\n"
-            preamble += f"#define N_SCATTER {nScattering}\n\n"
+            preamble += f"#define PATH_LENGTH {maxPathLength}\n\n"
             headers = {
                 "callback.glsl": callback.sourceCode,
                 "response.glsl": response.sourceCode,
                 "rng.glsl": rng.sourceCode,
                 "source.glsl": source.sourceCode,
             }
-            code = compileShader("tracer.scene.shadow.glsl", preamble, headers)
+            code = compileShader("tracer.scene.glsl", preamble, headers)
         self._code = code
         # create program
         self._program = hp.Program(self._code)
         # bind scene
-        self._program.bindParams(
-            Targets=scene.targets,
-            Geometries=scene.geometries,
-            tlas=scene.tlas,
-        )
+        self._program.bindParams(Geometries=scene.geometries, tlas=scene.tlas)
+        if not disableTargetSampling:
+            self._program.bindParams(Targets=scene.targets)
 
     @property
     def batchSize(self) -> int:
@@ -732,9 +802,14 @@ class SceneShadowTracer(Tracer):
         return self._code
 
     @property
-    def nScattering(self) -> int:
-        """Number of simulated scattering events"""
-        return self._nScattering
+    def directLightingDisabled(self) -> bool:
+        """Whether direct lighting is disabled"""
+        return self._directLightingDisabled
+
+    @property
+    def maxPathLength(self) -> int:
+        """Maximum number of events per simulated ray"""
+        return self._maxPathLength
 
     @property
     def rng(self) -> RNG:
@@ -751,242 +826,20 @@ class SceneShadowTracer(Tracer):
         """Source producing light rays"""
         return self._source
 
-    def run(self, i: int) -> List[hp.Command]:
-        self._bindParams(self._program, i)
-        self.callback.bindParams(self._program, i)
-        self.source.bindParams(self._program, i)
-        self.response.bindParams(self._program, i)
-        self.rng.bindParams(self._program, i)
-        return [self._program.dispatch(self._groups)]
-
-
-class SceneWalkTracer(Tracer):
-    """
-    Path tracer simulating light traveling through media originating at a light
-    source and ending at detectors. Traces rays against the geometries defined
-    in scene to simulate accurate intersections and obstructions. Depending on
-    the geometry's material, rays may reflect or transmit through them.
-
-    As a speed-up method at each volume scatter event by chance a new direction
-    is either sampled from the scattering phase function or from the general
-    direction of the target detector, thus increasing the chances of actually
-    hitting the latter.
-
-    Parameters
-    ----------
-    batchSize: int
-        Number of rays to simulate per run. Note that a single ray may generate
-        up to nScattering hits.
-    source: LightSource
-        Source producing light rays
-    response: HitResponse
-        Response function processing each simulated hit
-    rng: RNG
-        Generator for creating random numbers
-    callback: TraceEventCallback, default=EmptyEventCallback()
-        Callback called for each tracing event. See `TraceEventCallback`
-    scene: Scene
-        Scene in which the rays are traced
-    nScattering: int, default=6
-        Number of simulated scattering events
-    targetIdx: int, default=0
-        Id of the detector, the tracer should try to hit.
-        Hits on other detectors are ignored to make estimates easier.
-    scatterCoefficient: float, default=0.01
-        Scatter coefficient used for sampling ray lengths. Tuning this parameter
-        affects the time distribution of the hits.
-    targetSampleProb: float, default=0.2
-        Probability of sampling the target instead of the scattering phase
-        function in scattering events for determining the scattered direction.
-    maxTime: float, default=1000.0
-        Max total time including delay from the source and travel time, after
-        which a ray gets stopped
-    blockSize: int, default=128
-        Number of threads in a single work group
-    disableVolumeBorder: bool, default=False
-        Disables GPU code handling volume borders, which may improve performance
-        if there are none. Settings this to `True` while the scene contains
-        volume border will produce wrong results.
-    disableTransmission: bool, default=False
-        Disables GPU code handling transmission, which may improve performance.
-        Rays will default to always reflect where possible.
-    disableMIS: bool, default=False
-        Disables importance sampling the target. Setting this to True, should be
-        preferred to setting targetSampleProb to zero. Automatically set to
-        True, if the scene has no targets.
-    code: Optional[bytes], default=None
-        Cached compiled byte code. If `None` compiles it from source.
-        The given byte code is not checked and must match the given
-        configuration
-
-    Stage Parameters
-    ----------------
-    targetIdx: int
-        Id of the detector, the tracer should try to hit.
-    scatterCoefficient: float
-        Scatter coefficient used for sampling ray lengths
-    targetSampleProb: float, default=0.2
-        Probability of sampling the target instead of the scattering phase
-        function in scattering events for determining the scattered direction
-    maxTime: float
-        Max total time including delay from the source and travel time, after
-        which a ray gets stopped
-    """
-
-    name = "Scene Walk Tracer"
-
-    class TraceParams(Structure):
-        _fields_ = [
-            ("targetIdx", c_uint32),
-            ("_sceneMedium", buffer_reference),
-            ("targetSampleProb", c_float),
-            ("scatterCoefficient", c_float),
-            ("_lowerBBoxCorner", vec3),
-            ("_upperBBoxCorner", vec3),
-            ("maxTime", c_float),
-            ("_maxDist", c_float),
-        ]
-
-    def __init__(
-        self,
-        batchSize: int,
-        source: LightSource,
-        response: HitResponse,
-        rng: RNG,
-        *,
-        callback: TraceEventCallback = EmptyEventCallback(),
-        scene: Scene,
-        nScattering: int = 6,
-        targetIdx: int = 0,
-        scatterCoefficient: float = 0.01,
-        targetSampleProb: float = 0.2,
-        maxTime: float = 1000.0,
-        blockSize: int = 128,
-        disableVolumeBorder: bool = False,
-        disableTransmission: bool = False,
-        disableMIS: bool = False,
-        code: Optional[bytes] = None,
-    ) -> None:
-        # check if we have any targets
-        if scene.targets is None:
-            disableMIS = True
-        super().__init__(
-            response,
-            {"TraceParams": self.TraceParams},
-            maxHits=batchSize * nScattering * source.nLambda,
-            normalization=1.0 / (batchSize * source.nLambda),
-            nRNGSamples=(source.nRNGSamples + (5 if disableMIS else 7) * nScattering),
-        )
-        # save params
-        self._batchSize = batchSize
-        self._callback = callback
-        self._source = source
-        self._rng = rng
-        self._scene = scene
-        self._nScattering = nScattering
-        self._blockSize = blockSize
-        self._misDisabled = disableMIS
-        self._transmissionDisabled = disableTransmission
-        self._volumeBorderDisabled = disableVolumeBorder
-        self.setParams(
-            targetIdx=targetIdx,
-            _sceneMedium=scene.medium,
-            targetSampleProb=targetSampleProb,
-            scatterCoefficient=scatterCoefficient,
-            _lowerBBoxCorner=scene.bbox.lowerCorner,
-            _upperBBoxCorner=scene.bbox.upperCorner,
-            maxTime=maxTime,
-            _maxDist=scene.bbox.diagonal,
-        )
-        # calculate group size
-        self._groups = -(batchSize // -blockSize)
-
-        # compile code if needed
-        if code is None:
-            preamble = ""
-            if disableVolumeBorder:
-                preamble += "#define DISABLE_VOLUME_BORDER 1\n"
-            if disableTransmission:
-                preamble += "#define DISABLE_TRANSMISSION 1\n"
-            if disableMIS:
-                preamble += "#define DISABLE_MIS 1\n"
-            preamble += f"#define BATCH_SIZE {batchSize}\n"
-            preamble += f"#define BLOCK_SIZE {blockSize}\n"
-            preamble += f"#define DIM_OFFSET {source.nRNGSamples}\n"
-            preamble += f"#define N_LAMBDA {source.nLambda}\n"
-            preamble += f"#define N_SCATTER {nScattering}\n\n"
-            headers = {
-                "callback.glsl": callback.sourceCode,
-                "response.glsl": response.sourceCode,
-                "rng.glsl": rng.sourceCode,
-                "source.glsl": source.sourceCode,
-            }
-            code = compileShader("tracer.scene.walker.glsl", preamble, headers)
-        self._code = code
-        # create program
-        self._program = hp.Program(self._code)
-        # bind scene
-        self._program.bindParams(
-            Geometries=scene.geometries,
-            tlas=scene.tlas,
-        )
-        if not disableMIS:
-            self._program.bindParams(Targets=scene.targets)
-
     @property
-    def misDisabled(self) -> bool:
-        """Wether MIS was disabled"""
-        return self._misDisabled
+    def targetSamplingDisabled(self) -> bool:
+        """Whether target sampling is disabled"""
+        return self._targetSamplingDisabled
 
     @property
     def transmissionDisabled(self) -> bool:
-        """Wether transmission was disabled"""
+        """Whether transmission is disabled"""
         return self._transmissionDisabled
 
     @property
     def volumeBorderDisabled(self) -> bool:
-        """Wether volume border support was disabled"""
+        """Whether volume borders are disabled"""
         return self._volumeBorderDisabled
-
-    @property
-    def batchSize(self) -> int:
-        """Number of rays to simulate per run"""
-        return self._batchSize
-
-    @property
-    def blockSize(self) -> int:
-        """Number of threads in a single work group"""
-        return self._blockSize
-
-    @property
-    def callback(self) -> TraceEventCallback:
-        """Callback called for each tracing event"""
-        return self._callback
-
-    @property
-    def code(self) -> bytes:
-        """Compiled source code. Can be used for caching"""
-        return self._code
-
-    @property
-    def nScattering(self) -> int:
-        """Number of simulated scattering events"""
-        return self._nScattering
-
-    @property
-    def rng(self) -> RNG:
-        """Generator for creating random numbers"""
-        return self._rng
-
-    @property
-    def scene(self) -> Scene:
-        """Scene in which the rays are traced"""
-        return self._scene
-
-    @property
-    def source(self) -> LightSource:
-        """Source producing light rays"""
-        return self._source
 
     def run(self, i: int) -> List[hp.Command]:
         self._bindParams(self._program, i)

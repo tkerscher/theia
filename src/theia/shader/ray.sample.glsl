@@ -18,7 +18,7 @@ Ray createRay(const SourceRay source, const Medium medium) {
     }
     return Ray(
         source.position,
-        source.direction,
+        normalize(source.direction), //just to be safe
 #ifndef USE_GLOBAL_MEDIUM
         uvec2(medium),
 #endif

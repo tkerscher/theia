@@ -3,7 +3,6 @@
 #extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_EXT_control_flow_attributes : require
 #extension GL_EXT_scalar_block_layout : require
-#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 #extension GL_KHR_shader_subgroup_arithmetic : require
@@ -11,7 +10,7 @@
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_vote : require
 
-//check expected macros
+//Check expected macros
 #ifndef BATCH_SIZE
 #error "BATCH_SIZE not defined"
 #endif
@@ -21,14 +20,18 @@
 #ifndef N_LAMBDA
 #error "N_LAMBDA not defined"
 #endif
-#ifndef N_SCATTER
-#error "N_SCATTER not defined"
+#ifndef PATH_LENGTH
+#error "PATH_LENGTH not defined"
 #endif
 #ifndef DIM_OFFSET
 #error "DIM_OFFSET not defined"
 #endif
-// #samples per iteration
-#define DIM_STRIDE 5
+//#samples per iteration
+#ifndef DISABLE_MIS
+#define DIM_STRIDE 7
+#else
+#define DIM_STRIDE 3
+#endif
 //alter ray layout
 #define USE_GLOBAL_MEDIUM
 
@@ -57,124 +60,152 @@ layout(scalar) uniform TraceParams {
     PropagateParams propagation;
 } params;
 
-//traces ray
-ResultCode trace(inout Ray ray, uint idx, uint dim) {
+void createHit(Ray ray, vec3 dir, float weight) {
+    //try to hit target: dist == inf if no hit
+    float dist = intersectSphere(params.target, ray.position, dir);
+    if (isinf(dist))
+        return; // missed target -> no response
+
+    //update ray (local copy)
+    ray.direction = dir;
+    ResultCode code = propagateRay(ray, dist, params.propagation, true);
+    if (code < 0)
+        return; //lost ray or time ran out -> create no response
+
+    //calculate hit coordinates
+    vec3 normal = normalize(ray.position - params.target.position);
+    vec3 hitPos = normal * params.target.radius;
+    //create hits
+    [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
+        if (ray.samples[i].time <= params.propagation.maxTime) {
+            response(HitItem(
+                hitPos, dir, normal,
+                ray.samples[i].wavelength,
+                ray.samples[i].time,
+                ray.samples[i].lin_contrib * exp(ray.samples[i].log_contrib)
+            ));
+        }
+    }
+}
+
+ResultCode trace(inout Ray ray, uint idx, uint dim, bool first, bool allowResponse) {
     //sample distance
     float u = random(idx, dim); dim++;
     float dist = sampleScatterLength(ray, params.propagation, u);
 
     //trace sphere
-    vec3 dir = normalize(ray.direction); //just to be safe
-    float t = intersectSphere(params.target, ray.position, dir);
-
+    float t = intersectSphere(params.target, ray.position, ray.direction);
     //check if we hit
     bool hit = t <= dist;
-    //update ray
-    ResultCode result = propagateRay(ray, hit ? t : dist, params.propagation, false, hit);
-    //check if trace is still in bounds
-    if (CHECK_BRANCH(result < 0))
+
+    //update ray (ray, dist, params, scatter)
+    //only on the first trace the ray has not scattered
+    dist = min(t, dist);
+    ResultCode result = propagateRay(ray, dist, params.propagation, !first);
+    updateRayIS(ray, dist, params.propagation, hit);
+    //check if ray is still in bounds
+    if (result < 0)
         return result; //abort tracing
 
-    //do either:
-    // - create a hit item if we hit target
-    // - volume scatter + MIS target
-    //either way, we'll create hits on the queue
-
-    vec3 pos, nrm;
-    HitItem hits[N_LAMBDA];
-    
+    //if we hit the sphere we assume the ray got absorbed -> abort tracing
+    //we won't create a hit, as we already created a path of that length
+    //in the previous step via MIS.
+    //Only exception: first trace step, as we didn't MIS from the light source
+    // can be disabled to use a direct light integrator instead
+    // (partition of the path space)
+    if (hit && allowResponse) {
+        //calculate local coordinates (dir is the same)
+        vec3 hitNormal = normalize(ray.position - params.target.position);
+        vec3 hitPos = hitNormal * params.target.radius;
+        //create response for each wavelength
+        [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
+            if (ray.samples[i].time <= params.propagation.maxTime) {
+                response(HitItem(
+                    hitPos, ray.direction, hitNormal,
+                    ray.samples[i].wavelength,
+                    ray.samples[i].time,
+                    ray.samples[i].lin_contrib * exp(ray.samples[i].log_contrib)
+                ));
+            }
+        }
+        return RESULT_CODE_RAY_DETECTED;
+    }
     if (hit) {
-        //create normal
-        nrm = normalize(ray.position - params.target.position);
-        //transform pos to sphere local coords / recalc to improve float error
-        pos = nrm * params.target.radius;
-        [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
-            hits[i] = HitItem(
-                pos, dir, nrm,
-                ray.samples[i].wavelength,
-                ray.samples[i].time,
-                exp(ray.samples[i].log_contrib) * ray.samples[i].lin_contrib
-            );
-        }
-    }
-    else {
-        //volume scatter event: MIS both phase function and detector
-        vec3 detDir, scatterDir;
-        float w_det, w_scatter, detDist;
-        scatterMIS_power(
-            params.target, Medium(params.medium),
-            ray.position, ray.direction,
-            random2D(idx, dim), random2D(idx, dim + 2),
-            detDir, w_det, detDist, scatterDir, w_scatter
-        );
-        //advance rng
-        dim += 4;
-
-        //hit detector
-        detDist = intersectSphere(params.target, ray.position, detDir);
-        //create hit params
-        //in the rare case, that we dit not hit the target: detDist = +inf
-        //it's easier programming wise to check for this later and ignore the
-        //corresponding hit. Due to branching there should not be any performance hit
-        pos = ray.position + detDir * detDist;
-        dir = detDir;
-        nrm = normalize(pos - params.target.position);
-        //transform pos to sphere local coords / recalc to improve float error
-        pos = nrm * params.target.radius;
-
-        //update ray
-        ray.direction = scatterDir;
-        //iterate samples to update and create hits
-        [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
-            ray.samples[i].lin_contrib *= ray.samples[i].constants.mu_s;
-            //create hits
-            float mu_e = ray.samples[i].constants.mu_e;
-            float contrib = exp(ray.samples[i].log_contrib - mu_e * dist);
-            contrib *= ray.samples[i].lin_contrib * w_det;
-            hits[i] = HitItem(
-                pos, dir, nrm,
-                ray.samples[i].wavelength,
-                ray.samples[i].time + detDist / ray.samples[i].constants.vg,
-                contrib
-            );
-            //update ray weight
-            ray.samples[i].lin_contrib *= w_scatter;
-        }
-
-        //sanity check: did we actually hit the target after sampling it?
-        //if not, do not create a hit, but keep tracing
-        if (isinf(detDist))
-            return RESULT_CODE_RAY_SCATTERED;
+        return RESULT_CODE_RAY_ABSORBED;
     }
 
-    //process all hit items
-    [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
-        if (hits[i].time <= params.propagation.maxTime)
-            response(hits[i]);
-    }
+#ifndef DISABLE_MIS
+    //MIS detector:
+    //we both sample the scattering phase function as well as the detector
+    //sphere for a possible hit direction
+    float wTarget, wPhase;
+    vec3 dirTarget, dirPhase;
+    vec2 uTarget = random2D(idx, dim), uPhase = random2D(idx, dim + 2); dim += 4;
+    sampleTargetMIS(
+        Medium(params.medium),
+        ray.position, ray.direction, params.target,
+        uTarget, uPhase,
+        wTarget, dirTarget,
+        wPhase, dirPhase
+    );
+    //create hits
+    createHit(ray, dirTarget, wTarget);
+    createHit(ray, dirPhase, wPhase);
+#endif
 
-    //done -> return hit flag
-    return hit ? RESULT_CODE_RAY_DETECTED : RESULT_CODE_RAY_SCATTERED;
+    //no hit -> scatter
+    return RESULT_CODE_RAY_SCATTERED;
 }
 
+//process macro flags
+#ifndef DISABLE_DIRECT_LIGHTING
+#define DIRECT_LIGHTING true
+#else
+#define DIRECT_LIGHTING false
+#endif
+
+#ifndef DISABLE_MIS
+#define ALLOW_RESPONSE false
+#else
+#define ALLOW_RESPONSE true
+#endif
+
 void main() {
-    uint idx = gl_GlobalInvocationID.x;  
+    uint idx = gl_GlobalInvocationID.x;
     if (idx >= BATCH_SIZE)
         return;
 
-    Ray ray = createRay(sampleLight(idx), Medium(params.medium));
-    //discard ray if inside target
-    if (distance(ray.position, params.target.position) <= params.target.radius)
-        return;
+    //sample ray
+    Medium medium = Medium(params.medium);
+    Ray ray = createRay(sampleLight(idx), medium);
     onEvent(ray, RESULT_CODE_RAY_CREATED, idx, 0);
-    
-    //trace loop
+    //discard ray if inside target
+    if (distance(ray.position, params.target.position) <= params.target.radius) {
+        onEvent(ray, ERROR_CODE_TRACE_ABORT, idx, 0);
+        return;
+    }
+
+    //advance rng by amount used by the source
     uint dim = DIM_OFFSET;
-    [[unroll]] for (uint i = 1; i <= N_SCATTER; ++i, dim += DIM_STRIDE) {
-        ResultCode result = trace(ray, idx, dim);
-        //user provided callback
-        onEvent(ray, result, idx, i);
+    //trace loop: first iteration
+    // special as it is allowed to create a direct hit (there was no MIS yet)
+    ResultCode result = trace(ray, idx, dim, true, DIRECT_LIGHTING);
+    onEvent(ray, result, idx, 1);
+    if (result < 0)
+        return;
+    //trace loop: rest
+    [[unroll]] for (uint i = 0; i < PATH_LENGTH; ++i, dim += DIM_STRIDE) {
+        //scatter ray: Importance sample phase function -> no change in contrib
+        vec2 u = random2D(idx, dim);
+        float _ignore;
+        ray.direction = scatter(medium, ray.direction, u, _ignore);
+
+        //trace ray
+        ResultCode result = trace(ray, idx, dim + 2, false, ALLOW_RESPONSE);
+        onEvent(ray, result, idx, i + 2);
+        
         //stop codes are negative
-        if (result < 0) return;
+        if (result < 0)
+            return;
     }
 }
