@@ -38,6 +38,23 @@ class Transform:
     def __init__(self) -> None:
         self._arr = np.identity(4)
 
+    def apply(self, points: NDArray) -> NDArray:
+        """Applies the transformation to the given points of shape (N,3)"""
+        return points @ self._arr[:3, :3].T + self._arr[:3, 3]
+
+    def applyVec(self, vector: NDArray) -> NDArray:
+        """
+        Applies the transformation to the given vectors of shape (N,3).
+        Similar to `apply`, but translation are ignored.
+        """
+        return vector @ self._arr[:3, :3].T
+
+    def inverse(self) -> Transform:
+        """Returns the inverse transformation"""
+        inv = Transform()
+        inv._arr = np.linalg.inv(self._arr)
+        return inv
+
     def numpy(self) -> NDArray:
         """
         Returns a numpy array in the correct format to be used with mesh
@@ -68,8 +85,7 @@ class Transform:
         Rotates the transformation around (dx,dy,dz) counter-clockwise angle
         radians.
         """
-        self @= Transform.Rotation(dx, dy, dz, angle)
-        return self
+        return Transform.Rotation(dx, dy, dz, angle) @ self
 
     @staticmethod
     def Scale(x: float, y: float, z: float) -> Transform:
@@ -82,8 +98,7 @@ class Transform:
 
     def scale(self, x: float, y: float, z: float) -> Transform:
         """Scales the transformation in each dimension independently"""
-        self @= Transform.Scale(x, y, z)
-        return self
+        return Transform.Scale(x, y, z) @ self
 
     @staticmethod
     def Translation(x: float, y: float, z: float) -> Transform:
@@ -94,8 +109,7 @@ class Transform:
 
     def translate(self, x: float, y: float, z: float) -> Transform:
         """Translates the transform by the given amount"""
-        self @= Transform.Translation(x, y, z)
-        return self
+        return Transform.Translation(x, y, z) @ self
 
     def __matmul__(self, other: Transform) -> Transform:
         if type(other) != Transform:
