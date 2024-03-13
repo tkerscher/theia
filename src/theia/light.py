@@ -120,8 +120,6 @@ class LightSampler(PipelineStage):
 
     Stage Parameters
     ----------------
-    medium: buffer_reference
-        Address of the medium the source is embedded in. Zero represents vacuum
     count: int, default=capacity
         Number of samples to draw per run. Must be at most `capacity`.
     baseCount: int, default=0
