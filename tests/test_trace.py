@@ -4,6 +4,7 @@ import numpy as np
 import hephaistos as hp
 import hephaistos.pipeline as pl
 
+import theia.camera
 import theia.estimator
 import theia.light
 import theia.material
@@ -196,6 +197,89 @@ def test_SceneTracer(
     assert np.max(hits["time"]) <= T_MAX
 
     # TODO: more sophisticated tests
+
+
+def test_BidirectionalPathTracer():
+    if not hp.isRaytracingEnabled():
+        pytest.skip("ray tracing is not supported")
+
+    N = 32 * 256
+    T0, T1 = 10 * u.ns, 20.0 * u.ns
+    T_MAX = 100.0 * u.us
+    L_LIGHT = 8
+    L_CAMERA = 8
+
+    det_pos = (-10.0, 0.0, 0.0) * u.m
+    src_pos = (10.0, 0.0, 0.0) * u.m
+    r_inner = 0.95
+    r_outer = 1.0
+    shield_scale = 100.0
+    shield_size = (0.1, shield_scale, shield_scale)  # scale
+    bbox = ((-500.0 * u.m,) * 3, (500.0 * u.m,) * 3)
+
+    # create materials
+    water = WaterModel().createMedium()
+    glass = theia.material.BK7Model().createMedium()
+    sphere_inner = theia.material.Material("sph_inner", None, glass, flags="T")
+    sphere_outer = theia.material.Material("sph_outer", glass, water, flags="T")
+    absorber = theia.material.Material("absorber", None, water, flags="B")
+    matStore = theia.material.MaterialStore([sphere_inner, sphere_outer, absorber])
+    # create scene
+    store = theia.scene.MeshStore(
+        {"cube": "assets/cube.ply", "sphere": "assets/sphere.stl"}
+    )
+    t_det_inner = theia.scene.Transform().scale(*(r_inner,) * 3).translate(*det_pos)
+    det_inner = store.createInstance("sphere", "sph_inner", transform=t_det_inner)
+    t_det_outer = theia.scene.Transform().scale(*(r_outer,) * 3).translate(*det_pos)
+    det_outer = store.createInstance("sphere", "sph_outer", transform=t_det_outer)
+    t_src_inner = theia.scene.Transform().scale(*(r_inner,) * 3).translate(*src_pos)
+    src_inner = store.createInstance("sphere", "sph_inner", transform=t_src_inner)
+    t_src_outer = theia.scene.Transform().scale(*(r_outer,) * 3).translate(*src_pos)
+    src_outer = store.createInstance("sphere", "sph_outer", transform=t_src_outer)
+    t_shield = theia.scene.Transform().scale(*shield_size)
+    shield = store.createInstance("cube", "absorber", transform=t_shield)
+    scene = theia.scene.Scene(
+        [det_outer, det_inner, src_outer, src_inner, shield],
+        matStore.material,
+        bbox=theia.scene.RectBBox(*bbox),
+    )
+
+    # calc expected shortest time for light paths
+    d_min = 2.0 * np.sqrt(det_pos[0] ** 2 + shield_scale**2)
+    v_max = np.max(water.group_velocity)
+    t_min = d_min / v_max + T0  # short path in air/glass ignored (should be fine)
+
+    # create pipeline
+    rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
+    cam = theia.camera.PencilCameraRaySource(rayPosition=det_pos)
+    ray = theia.light.PencilRaySource(position=src_pos)
+    ph = theia.light.UniformPhotonSource(timeRange=(T0, T1))
+    src = theia.light.ModularLightSource(ray, ph, 1)
+    rec = theia.estimator.HitRecorder()
+    stats = theia.trace.EventStatisticCallback()
+    trace = theia.trace.BidirectionalPathTracer(
+        N,
+        src,
+        cam,
+        rec,
+        rng,
+        scene,
+        callback=stats,
+        lightPathLength=L_LIGHT,
+        cameraPathLength=L_CAMERA,
+        maxTime=T_MAX,
+    )
+    # run pipeline
+    pl.runPipeline([rng, cam, ray, ph, src, trace, rec])
+
+    # check hits
+    hits = rec.view(0)
+    assert hits.count > 0
+    assert hits.count <= trace.maxHits
+    hits = hits[: hits.count]
+
+    assert np.max(hits["time"]) >= t_min
+    assert np.max(hits["time"]) <= T_MAX
 
 
 def test_EventStatisticCallback():

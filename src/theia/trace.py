@@ -6,6 +6,7 @@ from hephaistos.pipeline import PipelineStage, SourceCodeMixin
 from ctypes import Structure, c_float, c_int32, c_uint32, addressof, memset, sizeof
 from numpy.ctypeslib import as_array
 
+from theia.camera import CameraRaySource
 from theia.estimator import HitResponse
 from theia.light import LightSource
 from theia.random import RNG
@@ -21,11 +22,11 @@ from typing import Dict, List, Optional, Set, Tuple, Type
 
 
 __all__ = [
+    "BidirectionalPathTracer",
     "EmptyEventCallback",
     "EventResultCode",
     "EventStatisticCallback",
-    "SceneShadowTracer",
-    "SceneWalkTracer",
+    "SceneTracer",
     "Tracer",
     "TraceEventCallback",
     "TrackRecordCallback",
@@ -844,6 +845,278 @@ class SceneTracer(Tracer):
     def run(self, i: int) -> List[hp.Command]:
         self._bindParams(self._program, i)
         self.callback.bindParams(self._program, i)
+        self.source.bindParams(self._program, i)
+        self.response.bindParams(self._program, i)
+        self.rng.bindParams(self._program, i)
+        return [self._program.dispatch(self._groups)]
+
+
+class BidirectionalPathTracer(Tracer):
+    """
+    Path tracer simulating subpath from both the camera and light source
+    creating complete light paths by establishing all possible connections
+    between the two subpath. Suffers from higher variance but may show a much
+    higher performance in difficult scenes like the detector being placed
+    behind a refracting surface.
+
+    Parameters
+    ----------
+    batchSize: int
+        Number of subpath pairs to simulate per run, each producing multiple
+        responses.
+    source: LightSource
+        Source producing light rays
+    camera: CameraRaySource
+        Source producing camera rays
+    response: HitResponse
+        Response function simulating the detector
+    rng: RNG
+        Generator for creating random numbers
+    scene: Scene
+        Scene in which the rays are traced
+    callback: TraceEventCallback, default=EmptyEventCallback()
+        Callback called for each tracing event. See `TraceEventCallback`.
+        Starts with the light sub path followed by the camera sub path.
+        Each subpath starts with an `RAY_CREATED` event.
+    lightPathLength: int, default=6
+        Length of the light subpath
+    cameraPathLength: int, default=6
+        Length of the camera subpath
+    targetIdx: int, default=0
+        Id of the detector, the tracer should generate hits for.
+        Hits on other detectors are ignored to make estimates easier.
+    scatterCoefficient: float, default=0.01 1/m
+        Scatter coefficient used for sampling ray lengths. Tuning this parameter
+        affects the time distribution of the hits.
+    maxTime: float, default=1000.0 ns
+        Max total time including delay from each source and travel time, after
+        which no responses are generated.
+    cameraMedium: Optional[int], default=None
+        Medium the camera is submerged in. If `None`, same as `scene.medium`.
+    disableDirectLighting: bool, default=False
+        Whether to ignore contributions from direct lighting, i.e. light paths
+        with no scattering. If True, one can use a more performant direct
+        lighting estimator in addition to increase overall performance.
+    disableLightPathResponse: bool, default=False
+        Whether the light subpath can generate hits on its own, i.e. before
+        connecting with the camera subpath.
+    disableTransmission: bool, default=False
+        Disables GPU code handling transmission, which may improve performance.
+        Rays will default to always reflect where possible.
+    disableVolumeBorder: bool, default=False
+        Disables GPU code handling volume borders, which may improve performance
+        if there are none. Settings this to `True` while the scene contains
+        volume border will produce wrong results.
+    blockSize: int, default=128
+        Number of threads in a single work group
+    code: Optional[bytes], default=None
+        Cached compiled byte code. If `None` compiles it from source.
+        The given byte code is not checked and must match the given
+        configuration
+
+    Stage Parameters
+    ----------------
+    targetIdx: int
+        Id of the detector, the tracer should generate hits for.
+    scatterCoefficient: float
+        Scatter coefficient used for sampling ray lengths
+    maxTime: float
+        Max total time including delay from each source and travel time, after
+        which no responses are generated.
+    """
+
+    name = "Bidirectional Path Tracer"
+
+    class TraceParams(Structure):
+        _fields_ = [
+            ("targetIdx", c_uint32),
+            ("_sceneMedium", buffer_reference),
+            ("_cameraMedium", buffer_reference),
+            ("scatterCoefficient", c_float),
+            ("_lowerBBoxCorner", vec3),
+            ("_upperBBoxCorner", vec3),
+            ("maxTime", c_float),
+            ("_maxDist", c_float),
+        ]
+
+    def __init__(
+        self,
+        batchSize: int,
+        source: LightSource,
+        camera: CameraRaySource,
+        response: HitResponse,
+        rng: RNG,
+        scene: Scene,
+        *,
+        callback: TraceEventCallback = EmptyEventCallback(),
+        lightPathLength: int = 6,
+        cameraPathLength: int = 6,
+        targetIdx: int = 0,
+        scatterCoefficient: float = 0.01 / u.m,
+        maxTime: float = 1000.0 * u.ns,
+        cameraMedium: Optional[int] = None,
+        disableDirectLighting: bool = False,
+        disableLightPathResponse: bool = False,
+        disableTransmission: bool = False,
+        disableVolumeBorder: bool = False,
+        blockSize: int = 128,
+        code: Optional[bytes] = None,
+    ) -> None:
+        # check if ray tracing was enabled
+        if not hp.isRaytracingEnabled():
+            raise RuntimeError("Ray tracing is not supported on this system")
+        # calculate max hits
+        maxHits = lightPathLength * cameraPathLength
+        if not disableLightPathResponse:
+            maxHits += lightPathLength - 1
+        if not disableDirectLighting:
+            maxHits += 1
+        maxHits *= batchSize * source.nLambda
+        # calculate rng samples
+        nRNG = source.nRNGSamples + camera.nRNGSamples
+        nRNG += (lightPathLength + cameraPathLength) * 4
+        # init tracer
+        super().__init__(
+            response,
+            {"TraceParams": self.TraceParams},
+            maxHits=maxHits,
+            normalization=(1.0 / batchSize),
+            nRNGSamples=nRNG,
+        )
+
+        # save params
+        self._batchSize = batchSize
+        self._source = source
+        self._camera = camera
+        self._callback = callback
+        self._rng = rng
+        self._scene = scene
+        self._blockSize = blockSize
+        self._lightPathLength = lightPathLength
+        self._cameraPathLength = cameraPathLength
+        self._directLightingDisabled = disableDirectLighting
+        self._lightPathResponseDisabled = disableLightPathResponse
+        self._transmissionDisabled = disableTransmission
+        self._volumeBorderDisabled = disableVolumeBorder
+        self.setParams(
+            targetIdx=targetIdx,
+            _sceneMedium=scene.medium,
+            _cameraMedium=(scene.medium if cameraMedium is None else cameraMedium),
+            scatterCoefficient=scatterCoefficient,
+            maxTime=maxTime,
+            _lowerBBoxCorner=scene.bbox.lowerCorner,
+            _upperBBoxCorner=scene.bbox.upperCorner,
+            _maxDist=scene.bbox.diagonal,
+        )
+        # calculate group size
+        self._groups = -(batchSize // -blockSize)
+
+        # compile code if needed
+        if code is None:
+            preamble = ""
+            if disableDirectLighting:
+                preamble += "#define DISABLE_DIRECT_LIGHTING 1\n"
+            if disableLightPathResponse:
+                preamble += "#define DISABLE_LIGHT_PATH_RESPONSE 1\n"
+            if disableTransmission:
+                preamble += "#define DISABLE_TRANSMISSION 1\n"
+            if disableVolumeBorder:
+                preamble += "#define DISABLE_VOLUME_BORDER 1\n"
+            preamble += f"#define BATCH_SIZE {batchSize}\n"
+            preamble += f"#define BLOCK_SIZE {blockSize}\n"
+            preamble += f"#define N_LAMBDA {source.nLambda}\n"
+            preamble += f"#define DIM_OFFSET_LIGHT {source.nRNGSamples}\n"
+            preamble += f"#define DIM_OFFSET_CAMERA {camera.nRNGSamples}\n"
+            preamble += f"#define LIGHT_PATH_LENGTH {lightPathLength}\n"
+            preamble += f"#define CAMERA_PATH_LENGTH {cameraPathLength}\n\n"
+            headers = {
+                "callback.glsl": callback.sourceCode,
+                "response.glsl": response.sourceCode,
+                "rng.glsl": rng.sourceCode,
+                "source.glsl": source.sourceCode,
+                "camera.glsl": camera.sourceCode,
+            }
+            code = compileShader("tracer.bidirectional.glsl", preamble, headers)
+        self._code = code
+        # create program
+        self._program = hp.Program(self._code)
+        # bind scene
+        self._program.bindParams(Geometries=scene.geometries, tlas=scene.tlas)
+
+    @property
+    def batchSize(self) -> int:
+        """Number of rays to simulate per run"""
+        return self._batchSize
+
+    @property
+    def blockSize(self) -> int:
+        """Number of threads in a single work group"""
+        return self._blockSize
+
+    @property
+    def callback(self) -> TraceEventCallback:
+        """Callback called for each tracing event"""
+        return self._callback
+
+    @property
+    def camera(self) -> CameraRaySource:
+        """Source generating camera rays"""
+        return self._camera
+
+    @property
+    def cameraPathLength(self) -> int:
+        """Length of the camera subpath"""
+        return self._cameraPathLength
+
+    @property
+    def code(self) -> bytes:
+        """Compiled source code. Can be used for caching"""
+        return self._code
+
+    @property
+    def directLightingDisabled(self) -> bool:
+        """Whether direct lighting is disabled"""
+        return self._directLightingDisabled
+
+    @property
+    def lightPathLength(self) -> int:
+        """Length of the light subpath"""
+        return self._lightPathLength
+
+    @property
+    def lightPathResponseDisabled(self) -> bool:
+        """Whether contributions are generated from the light path"""
+        return self._lightPathResponseDisabled
+
+    @property
+    def rng(self) -> RNG:
+        """Generator for creating random numbers"""
+        return self._rng
+
+    @property
+    def scene(self) -> Scene:
+        """Scene in which the rays are traced"""
+        return self._scene
+
+    @property
+    def source(self) -> LightSource:
+        """Source producing light rays"""
+        return self._source
+
+    @property
+    def transmissionDisabled(self) -> bool:
+        """Whether transmission is disabled"""
+        return self._transmissionDisabled
+
+    @property
+    def volumeBorderDisabled(self) -> bool:
+        """Whether volume borders are disabled"""
+        return self._volumeBorderDisabled
+
+    def run(self, i: int) -> List[hp.Command]:
+        self._bindParams(self._program, i)
+        self.callback.bindParams(self._program, i)
+        self.camera.bindParams(self._program, i)
         self.source.bindParams(self._program, i)
         self.response.bindParams(self._program, i)
         self.rng.bindParams(self._program, i)
