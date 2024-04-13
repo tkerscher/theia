@@ -221,11 +221,15 @@ def test_MaterialShader(shaderUtil, rng):
     class WaterModel(
         theia.material.WaterBaseModel,
         theia.material.HenyeyGreensteinPhaseFunction,
+        theia.material.KokhanovskyOceanWaterPhaseMatrix,
         theia.material.MediumModel,
     ):
         def __init__(self) -> None:
             theia.material.WaterBaseModel.__init__(self, 5.0, 1000.0, 35.0)
             theia.material.HenyeyGreensteinPhaseFunction.__init__(self, 0.6)
+            theia.material.KokhanovskyOceanWaterPhaseMatrix.__init__(self,
+                p90=0.66, theta0=0.25, alpha=4.0, xi=25.6 # voss measurement fit
+            )
 
         ModelName = "water"
 
@@ -255,6 +259,10 @@ def test_MaterialShader(shaderUtil, rng):
             ("mu_e", c_float),
             ("log_phase", c_float),
             ("angle", c_float),
+            ("m12", c_float),
+            ("m22", c_float),
+            ("m33", c_float),
+            ("m34", c_float),
         ]
 
     # reserve memory for shader
@@ -293,7 +301,7 @@ def test_MaterialShader(shaderUtil, rng):
 
     # recreate expected result
     gpu = result_buffer.numpy()
-    cpu = np.empty((N * 2, 6))
+    cpu = np.empty((N * 2, 10))
     # refractive index
     cpu[:N:2, 0] = water_model.refractive_index(queries["lam"][: N // 2])
     cpu[1:N:2, 0] = glass_model.refractive_index(queries["lam"][: N // 2])
@@ -326,6 +334,26 @@ def test_MaterialShader(shaderUtil, rng):
     cpu[1:N:2, 5] = 0.0  # glass does not (volume) scatter
     cpu[N::2, 5] = 0.0  # vacuum
     cpu[N + 1 :: 2, 5] = 0.0  # glass does not (volume) scatter
+    # m12
+    cpu[:N:2, 6] = water_model.phase_m12(queries["theta"][: N // 2])
+    cpu[1:N:2, 6] = 0.0  # glass does not (volume) scatter
+    cpu[N::2, 6] = 0.0  # vacuum
+    cpu[N + 1 :: 2, 6] = 0.0  # glass does not (volume) scatter
+    # m22
+    cpu[:N:2, 7] = water_model.phase_m22(queries["theta"][: N // 2])
+    cpu[1:N:2, 7] = 0.0  # glass does not (volume) scatter
+    cpu[N::2, 7] = 0.0  # vacuum
+    cpu[N + 1 :: 2, 7] = 0.0  # glass does not (volume) scatter
+    # m33
+    cpu[:N:2, 8] = water_model.phase_m33(queries["theta"][: N // 2])
+    cpu[1:N:2, 8] = 0.0  # glass does not (volume) scatter
+    cpu[N::2, 8] = 0.0  # vacuum
+    cpu[N + 1 :: 2, 8] = 0.0  # glass does not (volume) scatter
+    # m34
+    cpu[:N:2, 9] = 0.0 # no m34 for water
+    cpu[1:N:2, 9] = 0.0  # glass does not (volume) scatter
+    cpu[N::2, 9] = 0.0  # vacuum
+    cpu[N + 1 :: 2, 9] = 0.0  # glass does not (volume) scatter
 
     # check result
     assert np.allclose(gpu["n"], cpu[:, 0], 1e-4)
@@ -335,5 +363,9 @@ def test_MaterialShader(shaderUtil, rng):
     # assert np.allclose(gpu["log_phase"], cpu[:, 4], 1e-4)
     assert np.abs(gpu["log_phase"] - cpu[:, 4]).max() < 5e-4
     assert np.allclose(gpu["angle"], cpu[:, 5], 1e-4, 1e-5)
+    assert np.abs(gpu["m12"] - cpu[:,6]).max() < 1e-3
+    assert np.abs(gpu["m22"] - cpu[:,7]).max() < 1e-3
+    assert np.abs(gpu["m33"] - cpu[:,8]).max() < 1e-3
+    assert np.abs(gpu["m34"] - cpu[:,9]).max() < 1e-3
     assert flag_buffer.numpy()[0] == mat_vac_glass.flagsInward
     assert flag_buffer.numpy()[1] == mat_vac_glass.flagsOutward

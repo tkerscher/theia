@@ -23,6 +23,7 @@ __all__ = [
     "BK7Model",
     "FournierForandPhaseFunction",
     "HenyeyGreensteinPhaseFunction",
+    "KokhanovskyOceanWaterPhaseMatrix",
     "Material",
     "MaterialFlags",
     "MaterialStore",
@@ -81,6 +82,29 @@ class Medium:
         Table containing values of the inverse cumulative density function of
         the phase function used for importance sampling.
         If None, sampling happens uniform random.
+    phase_m12: ArrayLike | None, default = None
+        Table of normalized m12 element of the phase matrix as function of cos
+        theta. Constant zero if None.
+    phase_m22: ArrayLike | None, default = None
+        Table of normalized m22 element of the phase matrix as function of cos
+        theta. Constant zero if None.
+    phase_m33: ArrayLike | None, default = None
+        Table of normalized m33 element of the phase matrix as function of cos
+        theta. Constant zero if None.
+    phase_m34: ArrayLike | None, default = None
+        Table of normalized m34 element of the phase matrix as function of cos
+        theta. Constant zero if None.
+    
+    Note
+    ----
+    The phase matrix and its elements m12, m33, m34 govern how polarization as
+    described by the Stokes' vector changes after volumetric scattering. We
+    assume some symmetry in the medium causing the matrix to be of the following
+    form (note it's normalized to the volume scattering function)
+        /  1  m12  0   0  \\  \n
+        | m12 m22  0   0  |   \n
+        |  0   0  m33 m34 |   \n
+        \  0   0 -m34 m33 /   \n
     """
 
     class GLSL(Structure):
@@ -95,6 +119,10 @@ class Medium:
             ("mu_s", c_uint64),  # Table1D
             ("log_phase", c_uint64),  # Table1D
             ("phase_sampling", c_uint64),  # Table1D
+            ("phase_m12", c_uint64), # Table1D
+            ("phase_m22", c_uint64), # Table1D
+            ("phase_m33", c_uint64), # Table1D
+            ("phase_m34", c_uint64), # Table1D
         ]
 
     ALIGNMENT: Final[int] = 8
@@ -112,6 +140,10 @@ class Medium:
         scattering_coef: Union[npt.ArrayLike, None] = None,
         log_phase_function: Union[npt.ArrayLike, None] = None,
         phase_sampling: Union[npt.ArrayLike, None] = None,
+        phase_m12: Union[npt.ArrayLike, None] = None,
+        phase_m22: Union[npt.ArrayLike, None] = None,
+        phase_m33: Union[npt.ArrayLike, None] = None,
+        phase_m34: Union[npt.ArrayLike, None] = None,
     ) -> None:
         # store properties
         self.name = name
@@ -123,6 +155,10 @@ class Medium:
         self.scattering_coef = scattering_coef
         self.log_phase_function = log_phase_function
         self.phase_sampling = phase_sampling
+        self.phase_m12 = phase_m12
+        self.phase_m22 = phase_m22
+        self.phase_m33 = phase_m33
+        self.phase_m34 = phase_m34
 
     @property
     def name(self) -> str:
@@ -259,6 +295,62 @@ class Medium:
     @phase_sampling.deleter
     def phase_sampling(self) -> None:
         self._phase_sampling = None
+
+    @property
+    def phase_m12(self) -> Union[npt.ArrayLike, None]:
+        """
+        Table of normalized m12 element of the phase matrix as function of cos
+        theta. Constant zero if None.
+        """
+        return self._phase_m12
+    @phase_m12.setter
+    def phase_m12(self, value: Union[npt.ArrayLike, None]) -> None:
+        self._phase_m12 = value
+    @phase_m12.deleter
+    def phase_m12(self) -> None:
+        self._phase_m12 = None
+    
+    @property
+    def phase_m22(self) -> Union[npt.ArrayLike, None]:
+        """
+        Table of normalized m22 element of the phase matrix as function of cos
+        theta. Constant zero if None.
+        """
+        return self._phase_m22
+    @phase_m22.setter
+    def phase_m22(self, value: Union[npt.ArrayLike, None]) -> None:
+        self._phase_m22 = value
+    @phase_m22.deleter
+    def phase_m22(self) -> None:
+        self._phase_m22 = None
+    
+    @property
+    def phase_m33(self) -> Union[npt.ArrayLike, None]:
+        """
+        Table of normalized m33 element of the phase matrix as function of cos
+        theta. Constant zero if None.
+        """
+        return self._phase_m33
+    @phase_m33.setter
+    def phase_m33(self, value: Union[npt.ArrayLike, None]) -> None:
+        self._phase_m33 = value
+    @phase_m33.deleter
+    def phase_m33(self) -> None:
+        self._phase_m33 = None
+    
+    @property
+    def phase_m34(self) -> Union[npt.ArrayLike, None]:
+        """
+        Table of normalized m34 element of the phase matrix as function of cos
+        theta. Constant zero if None.
+        """
+        return self._phase_m34
+    @phase_m34.setter
+    def phase_m34(self, value: Union[npt.ArrayLike, None]) -> None:
+        self._phase_m34 = value
+    @phase_m34.deleter
+    def phase_m34(self) -> None:
+        self._phase_m34 = None
 
 
 class MaterialFlags(IntFlag):
@@ -543,6 +635,10 @@ class MaterialStore:
             allocTable(f"{name}_mus", medium.scattering_coef)
             allocTable(f"{name}_lpf", medium.log_phase_function)
             allocTable(f"{name}_ps", medium.phase_sampling)
+            allocTable(f"{name}_m12", medium.phase_m12)
+            allocTable(f"{name}_m22", medium.phase_m22)
+            allocTable(f"{name}_m33", medium.phase_m33)
+            allocTable(f"{name}_m34", medium.phase_m34)
 
         def allocMaterial(mat: Material):
             if mat.name in self._mat_ptr:
@@ -658,16 +754,17 @@ class MaterialStore:
         glsl.lambda_min = medium.lambda_min
         glsl.lambda_max = medium.lambda_max
         # save tables
-        glsl.n = self._updateTable(f"{medium.name}_n", medium.refractive_index)
-        glsl.vg = self._updateTable(f"{medium.name}_vg", medium.group_velocity)
-        glsl.mu_a = self._updateTable(f"{medium.name}_mua", medium.absorption_coef)
-        glsl.mu_s = self._updateTable(f"{medium.name}_mus", medium.scattering_coef)
-        glsl.log_phase = self._updateTable(
-            f"{medium.name}_lpf", medium.log_phase_function
-        )
-        glsl.phase_sampling = self._updateTable(
-            f"{medium.name}_ps", medium.phase_sampling
-        )
+        name = medium.name
+        glsl.n = self._updateTable(f"{name}_n", medium.refractive_index)
+        glsl.vg = self._updateTable(f"{name}_vg", medium.group_velocity)
+        glsl.mu_a = self._updateTable(f"{name}_mua", medium.absorption_coef)
+        glsl.mu_s = self._updateTable(f"{name}_mus", medium.scattering_coef)
+        glsl.log_phase = self._updateTable(f"{name}_lpf", medium.log_phase_function)
+        glsl.phase_sampling = self._updateTable(f"{name}_ps", medium.phase_sampling)
+        glsl.phase_m12 = self._updateTable(f"{name}_m12", medium.phase_m12)
+        glsl.phase_m22 = self._updateTable(f"{name}_m22", medium.phase_m22)
+        glsl.phase_m33 = self._updateTable(f"{name}_m33", medium.phase_m33)
+        glsl.phase_m34 = self._updateTable(f"{name}_m34", medium.phase_m34)
 
     def updateMaterial(self, material: Material, *, updateMedia: bool = False) -> None:
         """
@@ -761,6 +858,42 @@ class MediumModel:
         Returns None if not defined.
         """
         return None
+    
+    def phase_m12(self, cos_theta: npt.ArrayLike) -> Union[npt.ArrayLike, None]:
+        """
+        Returns samples of the m12 element of the phase matrix for the given
+        values of cos theta with theta being the angle between incoming and
+        outgoing ray after scattering.
+        Returns None if not defined.
+        """
+        return None
+    
+    def phase_m22(self, cos_theta: npt.ArrayLike) -> Union[npt.ArrayLike, None]:
+        """
+        Returns samples of the m22 element of the phase matrix for the given
+        values of cos theta with theta being the angle between incoming and
+        outgoing ray after scattering.
+        Returns None if not defined.
+        """
+        return None
+    
+    def phase_m33(self, cos_theta: npt.ArrayLike) -> Union[npt.ArrayLike, None]:
+        """
+        Returns samples of the m33 element of the phase matrix for the given
+        values of cos theta with theta being the angle between incoming and
+        outgoing ray after scattering.
+        Returns None if not defined.
+        """
+        return None
+    
+    def phase_m34(self, cos_theta: npt.ArrayLike) -> Union[npt.ArrayLike, None]:
+        """
+        Returns samples of the m34 element of the phase matrix for the given
+        values of cos theta with theta being the angle between incoming and
+        outgoing ray after scattering.
+        Returns None if not defined.
+        """
+        return None
 
     def createMedium(
         self,
@@ -801,6 +934,10 @@ class MediumModel:
             scattering_coef=self.scattering_coef(l),
             log_phase_function=self.log_phase_function(t),
             phase_sampling=self.phase_sampling(e),
+            phase_m12=self.phase_m12(t),
+            phase_m22=self.phase_m22(t),
+            phase_m33=self.phase_m33(t),
+            phase_m34=self.phase_m34(t),
         )
 
 
@@ -1244,3 +1381,86 @@ class WaterBaseModel:
             )
             / u.m
         )
+
+
+class KokhanovskyOceanWaterPhaseMatrix:
+    """
+    Empirical model for the phase matrix of ocean water as described by
+    Kokhanovsky[1].
+
+    Parameters
+    ----------
+    p90: float
+        Degree of polarization at 90°
+    theta0: float
+        Shift in angle
+    alpha: float
+        multipole scatter slope
+    xi: float
+        multipole scatter scale
+
+    References
+    ----------
+    [1] Alexander A. Kokhanovsky. "Parameterization of the Mueller matrix of oceanic
+        waters". Journal of Geophysical Research, Vol. 108, No. C6, 3175,
+        doi:10.1029/2001JC001222, 2003 
+    """
+
+    def __init__(self, p90, theta0, alpha, xi) -> None:
+        self.p90 = p90
+        self.theta0 = theta0
+        self.alpha = alpha
+        self.xi = xi
+    
+    @property
+    def p90(self) -> float:
+        """Degree of polarization at 90°"""
+        return self._p90
+    @p90.setter
+    def p90(self, value: float) -> None:
+        self._p90 = value
+    
+    @property
+    def theta0(self) -> float:
+        """Shift in angle"""
+        return self._theta0
+    @theta0.setter
+    def theta0(self, value) -> None:
+        self._theta0 = value
+    
+    @property
+    def alpha(self) -> float:
+        """multipole scatter slope"""
+        return self._alpha
+    @alpha.setter
+    def alpha(self, value) -> None:
+        self._alpha = value
+    
+    @property
+    def xi(self) -> float:
+        """multipole scatter scale"""
+        return self._xi
+    @xi.setter
+    def xi(self, value: float) -> None:
+        self._xi = value
+    
+    def phase_m12(self, cos_theta: npt.ArrayLike) -> npt.NDArray:
+        """m12 element of the phase matrix"""
+        cos_theta_sq = np.square(cos_theta)
+        sin_theta_sq = 1.0 - cos_theta_sq
+        return self.p90 * sin_theta_sq / (1.0 + self.p90 * cos_theta_sq)
+    
+    def phase_m22(self, cos_theta: npt.ArrayLike) -> npt.NDArray:
+        """m22 element of the phase matrix"""
+        theta = np.arccos(cos_theta)
+        z = theta - self.theta0
+        cos_z_sq = np.square(np.cos(z))
+        e = self.xi * np.exp(-self.alpha * theta)
+        return (self.p90 * (1.0 + cos_z_sq) + e) / (1.0 + self.p90 * cos_z_sq + e)
+    
+    def phase_m33(self, cos_theta: npt.ArrayLike) -> npt.NDArray:
+        """m33 element of the phase matrix"""
+        theta = np.arccos(cos_theta)
+        ct_sq = np.square(cos_theta)
+        e = self.xi * np.exp(-self.alpha * theta)
+        return (2*self.p90*cos_theta + e) / (1.0 + self.p90*ct_sq + e)

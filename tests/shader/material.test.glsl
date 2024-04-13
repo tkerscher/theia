@@ -24,6 +24,10 @@ struct Result {
     float mu_e;
     float log_phase;
     float angle; //cos theta
+    float m12;
+    float m22;
+    float m33;
+    float m34;
 };
 
 // TODO: Figure out how I can apply readonly here...
@@ -34,13 +38,18 @@ layout(scalar) writeonly buffer Flags{ uint32_t flags[]; };
 Result sampleMedium(const Medium medium, float lambda, float theta, float eta) {
     MediumConstants constants = lookUpMedium(medium, lambda);
     bool hasMedium = uint64_t(medium) != 0;
+    float t = 0.5 * (theta + 1.0); //remap [-1,1] -> [0,1]
     return Result(
         constants.n,
         constants.vg,
         constants.mu_s,
         constants.mu_e,
-        hasMedium ? lookUp(medium.log_phase, 0.5 * (theta + 1.0)) : 0.0,
-        hasMedium ? lookUp(medium.phase_sampling, eta) : 0.0
+        hasMedium ? lookUp(medium.log_phase, t) : 0.0,
+        hasMedium ? lookUp(medium.phase_sampling, eta) : 0.0,
+        hasMedium ? lookUp(medium.phase_m12, t) : 0.0,
+        hasMedium ? lookUp(medium.phase_m22, t) : 0.0,
+        hasMedium ? lookUp(medium.phase_m33, t) : 0.0,
+        hasMedium ? lookUp(medium.phase_m34, t) : 0.0
     );
 }
 

@@ -25,6 +25,11 @@ layout(buffer_reference, scalar, buffer_reference_align=8) buffer Medium {
     Table1D mu_s;           //scattering coefficient
     Table1D log_phase;      //scattering phase function
     Table1D phase_sampling; //used for sampling
+    //phase/mueller matrix
+    Table1D phase_m12;
+    Table1D phase_m22;
+    Table1D phase_m33;
+    Table1D phase_m34;
 };
 
 //util function to make things more readable
