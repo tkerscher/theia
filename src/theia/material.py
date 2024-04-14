@@ -1460,7 +1460,7 @@ class KokhanovskyOceanWaterPhaseMatrix:
         """m12 element of the phase matrix"""
         cos_theta_sq = np.square(cos_theta)
         sin_theta_sq = 1.0 - cos_theta_sq
-        return self.p90 * sin_theta_sq / (1.0 + self.p90 * cos_theta_sq)
+        return -self.p90 * sin_theta_sq / (1.0 + self.p90 * cos_theta_sq)
 
     def phase_m22(self, cos_theta: npt.ArrayLike) -> npt.NDArray:
         """m22 element of the phase matrix"""
