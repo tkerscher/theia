@@ -94,7 +94,7 @@ class Medium:
     phase_m34: ArrayLike | None, default = None
         Table of normalized m34 element of the phase matrix as function of cos
         theta. Constant zero if None.
-    
+
     Note
     ----
     The phase matrix and its elements m12, m33, m34 govern how polarization as
@@ -119,10 +119,10 @@ class Medium:
             ("mu_s", c_uint64),  # Table1D
             ("log_phase", c_uint64),  # Table1D
             ("phase_sampling", c_uint64),  # Table1D
-            ("phase_m12", c_uint64), # Table1D
-            ("phase_m22", c_uint64), # Table1D
-            ("phase_m33", c_uint64), # Table1D
-            ("phase_m34", c_uint64), # Table1D
+            ("phase_m12", c_uint64),  # Table1D
+            ("phase_m22", c_uint64),  # Table1D
+            ("phase_m33", c_uint64),  # Table1D
+            ("phase_m34", c_uint64),  # Table1D
         ]
 
     ALIGNMENT: Final[int] = 8
@@ -303,13 +303,15 @@ class Medium:
         theta. Constant zero if None.
         """
         return self._phase_m12
+
     @phase_m12.setter
     def phase_m12(self, value: Union[npt.ArrayLike, None]) -> None:
         self._phase_m12 = value
+
     @phase_m12.deleter
     def phase_m12(self) -> None:
         self._phase_m12 = None
-    
+
     @property
     def phase_m22(self) -> Union[npt.ArrayLike, None]:
         """
@@ -317,13 +319,15 @@ class Medium:
         theta. Constant zero if None.
         """
         return self._phase_m22
+
     @phase_m22.setter
     def phase_m22(self, value: Union[npt.ArrayLike, None]) -> None:
         self._phase_m22 = value
+
     @phase_m22.deleter
     def phase_m22(self) -> None:
         self._phase_m22 = None
-    
+
     @property
     def phase_m33(self) -> Union[npt.ArrayLike, None]:
         """
@@ -331,13 +335,15 @@ class Medium:
         theta. Constant zero if None.
         """
         return self._phase_m33
+
     @phase_m33.setter
     def phase_m33(self, value: Union[npt.ArrayLike, None]) -> None:
         self._phase_m33 = value
+
     @phase_m33.deleter
     def phase_m33(self) -> None:
         self._phase_m33 = None
-    
+
     @property
     def phase_m34(self) -> Union[npt.ArrayLike, None]:
         """
@@ -345,9 +351,11 @@ class Medium:
         theta. Constant zero if None.
         """
         return self._phase_m34
+
     @phase_m34.setter
     def phase_m34(self, value: Union[npt.ArrayLike, None]) -> None:
         self._phase_m34 = value
+
     @phase_m34.deleter
     def phase_m34(self) -> None:
         self._phase_m34 = None
@@ -858,7 +866,7 @@ class MediumModel:
         Returns None if not defined.
         """
         return None
-    
+
     def phase_m12(self, cos_theta: npt.ArrayLike) -> Union[npt.ArrayLike, None]:
         """
         Returns samples of the m12 element of the phase matrix for the given
@@ -867,7 +875,7 @@ class MediumModel:
         Returns None if not defined.
         """
         return None
-    
+
     def phase_m22(self, cos_theta: npt.ArrayLike) -> Union[npt.ArrayLike, None]:
         """
         Returns samples of the m22 element of the phase matrix for the given
@@ -876,7 +884,7 @@ class MediumModel:
         Returns None if not defined.
         """
         return None
-    
+
     def phase_m33(self, cos_theta: npt.ArrayLike) -> Union[npt.ArrayLike, None]:
         """
         Returns samples of the m33 element of the phase matrix for the given
@@ -885,7 +893,7 @@ class MediumModel:
         Returns None if not defined.
         """
         return None
-    
+
     def phase_m34(self, cos_theta: npt.ArrayLike) -> Union[npt.ArrayLike, None]:
         """
         Returns samples of the m34 element of the phase matrix for the given
@@ -1403,7 +1411,7 @@ class KokhanovskyOceanWaterPhaseMatrix:
     ----------
     [1] Alexander A. Kokhanovsky. "Parameterization of the Mueller matrix of oceanic
         waters". Journal of Geophysical Research, Vol. 108, No. C6, 3175,
-        doi:10.1029/2001JC001222, 2003 
+        doi:10.1029/2001JC001222, 2003
     """
 
     def __init__(self, p90, theta0, alpha, xi) -> None:
@@ -1411,45 +1419,49 @@ class KokhanovskyOceanWaterPhaseMatrix:
         self.theta0 = theta0
         self.alpha = alpha
         self.xi = xi
-    
+
     @property
     def p90(self) -> float:
         """Degree of polarization at 90°"""
         return self._p90
+
     @p90.setter
     def p90(self, value: float) -> None:
         self._p90 = value
-    
+
     @property
     def theta0(self) -> float:
         """Shift in angle"""
         return self._theta0
+
     @theta0.setter
     def theta0(self, value) -> None:
         self._theta0 = value
-    
+
     @property
     def alpha(self) -> float:
         """multipole scatter slope"""
         return self._alpha
+
     @alpha.setter
     def alpha(self, value) -> None:
         self._alpha = value
-    
+
     @property
     def xi(self) -> float:
         """multipole scatter scale"""
         return self._xi
+
     @xi.setter
     def xi(self, value: float) -> None:
         self._xi = value
-    
+
     def phase_m12(self, cos_theta: npt.ArrayLike) -> npt.NDArray:
         """m12 element of the phase matrix"""
         cos_theta_sq = np.square(cos_theta)
         sin_theta_sq = 1.0 - cos_theta_sq
         return self.p90 * sin_theta_sq / (1.0 + self.p90 * cos_theta_sq)
-    
+
     def phase_m22(self, cos_theta: npt.ArrayLike) -> npt.NDArray:
         """m22 element of the phase matrix"""
         theta = np.arccos(cos_theta)
@@ -1457,10 +1469,10 @@ class KokhanovskyOceanWaterPhaseMatrix:
         cos_z_sq = np.square(np.cos(z))
         e = self.xi * np.exp(-self.alpha * theta)
         return (self.p90 * (1.0 + cos_z_sq) + e) / (1.0 + self.p90 * cos_z_sq + e)
-    
+
     def phase_m33(self, cos_theta: npt.ArrayLike) -> npt.NDArray:
         """m33 element of the phase matrix"""
         theta = np.arccos(cos_theta)
         ct_sq = np.square(cos_theta)
         e = self.xi * np.exp(-self.alpha * theta)
-        return (2*self.p90*cos_theta + e) / (1.0 + self.p90*ct_sq + e)
+        return (2 * self.p90 * cos_theta + e) / (1.0 + self.p90 * ct_sq + e)
