@@ -23,7 +23,7 @@ void onEvent(const Ray ray, ResultCode code, uint idx, uint i) {
     trackBuffer.y[i][idx] = ray.position.y;
     trackBuffer.z[i][idx] = ray.position.z;
     // //TODO: should we really ignore other samples?
-    trackBuffer.t[i][idx] = ray.samples[0].time;
+    trackBuffer.t[i][idx] = ray.time;
 }
 
 #endif

@@ -18,9 +18,6 @@
 #ifndef BLOCK_SIZE
 #error "BLOCK_SIZE not defined"
 #endif
-#ifndef N_LAMBDA
-#error "N_LAMBDA not defined"
-#endif
 #ifndef LIGHT_PATH_LENGTH
 #error "LIGHT_PATH_LENGTH not defined"
 #endif
@@ -63,10 +60,6 @@ layout(scalar) uniform TraceParams {
     PropagateParams propagation;
 } params;
 
-struct PathVertexSample {
-    float time;
-    float contrib;
-};
 struct PathVertex {
     bool connectable; //i.e medium scatter
 
@@ -76,23 +69,18 @@ struct PathVertex {
 
     //TODO: MIS connection strategy
 
-    PathVertexSample samples[N_LAMBDA];
+    float time;
+    float contrib;
 };
 
 PathVertex createVertex(Ray ray, vec3 dir, bool connectable) {
-    PathVertexSample samples[N_LAMBDA];
-    [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
-        samples[i] = PathVertexSample(
-            ray.samples[i].time,
-            ray.samples[i].lin_contrib * exp(ray.samples[i].log_contrib)
-        );
-    }
     return PathVertex(
         connectable,
         ray.position,
         dir,
         ray.medium,
-        samples
+        ray.time,
+        ray.lin_contrib * exp(ray.log_contrib)
     );
 }
 
@@ -149,14 +137,11 @@ void createCameraRay(inout Ray ray, CameraRay camera, uint idx) {
     ray.position = camera.position;
     ray.direction = camera.direction;
     ray.medium = params.cameraMedium;
-    //update samples
-    [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
-        //wavelength should still be valid
-        ray.samples[i].time = camera.timeDelta;
-        ray.samples[i].log_contrib = 1.0;
-        ray.samples[i].lin_contrib = camera.contrib;
-        ray.samples[i].constants = lookUpMedium(medium, ray.samples[i].wavelength);
-    }
+    //wavelength should still be valid
+    ray.time = camera.timeDelta;
+    ray.log_contrib = 1.0;
+    ray.lin_contrib = camera.contrib;
+    ray.constants = lookUpMedium(medium, ray.wavelength);
     onEvent(ray, RESULT_CODE_RAY_CREATED, idx, nLight + 1);
 }
 
@@ -212,24 +197,20 @@ void connectVertex(Ray ray, CameraRay camera, PathVertex vertex, uint pathLength
     ray.direction = con;
     propagateRay(ray, d, params.propagation, false);
 
-    //create responses
-    [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
-        //determine final time and contribution
-        float time = ray.samples[i].time + vertex.samples[i].time;
-        float contrib = ray.samples[i].lin_contrib * exp(ray.samples[i].log_contrib);
-        contrib *= attenuation * vertex.samples[i].contrib;
-        //again: the two factor mu_s were already applied by trace()
-        
-        //skip out of bound and zero contribution samples
-        if (time > params.propagation.maxTime || contrib == 0.0)
-            continue;
-        
-        //create response
+    //create response
+    //determine final time and contribution
+    float time = ray.time + vertex.time;
+    float contrib = ray.lin_contrib * exp(ray.log_contrib);
+    contrib *= attenuation * vertex.contrib;
+    //again: the two factor mu_s were already applied by trace()
+    
+    //create response
+    if (time <= params.propagation.maxTime && contrib != 0.0) {
         response(HitItem(
             camera.hitPosition,
             camera.hitDirection,
             camera.hitNormal,
-            ray.samples[i].wavelength,
+            ray.wavelength,
             time, contrib
         ));
     }

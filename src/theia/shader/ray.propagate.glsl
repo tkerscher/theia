@@ -19,7 +19,7 @@ struct PropagateParams {
 //handles non scattering media correctly, where it returns params.maxDist instead
 float sampleScatterLength(const Ray ray, const PropagateParams params, float u) {
     float dist = params.maxDist;
-    bool canScatter = ray.samples[0].constants.mu_s > 0.0;
+    bool canScatter = ray.constants.mu_s > 0.0;
     if (CHECK_BRANCH(canScatter)) {
         //sample exponential distribution
         //use u -> 1.0 - u > 0.0 to be safe on the log
@@ -37,22 +37,14 @@ ResultCode updateSamples(
     const PropagateParams params,
     bool scatter
 ) {
-    bool anyBelowMaxTime = false;
-    [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
-        float mu_e = ray.samples[i].constants.mu_e;
-        ray.samples[i].log_contrib -= mu_e * dist;
-        ray.samples[i].time += dist / ray.samples[i].constants.vg;
-        //time boundary check
-        if (ray.samples[i].time <= params.maxTime)
-            anyBelowMaxTime = true;
-    }
+    ray.log_contrib -= ray.constants.mu_e * dist;
+    ray.time += dist / ray.constants.vg;
     if (scatter) {
-        [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
-            ray.samples[i].lin_contrib *= ray.samples[i].constants.mu_s;
-        }
+        ray.lin_contrib += ray.constants.mu_s;
     }
+
     //return result of boundary check
-    return anyBelowMaxTime ? RESULT_CODE_SUCCESS : RESULT_CODE_RAY_DECAYED;
+    return ray.time <= params.maxTime ? RESULT_CODE_SUCCESS : RESULT_CODE_RAY_DECAYED;
 }
 
 //Propagates the given ray in its direction for the given distance
@@ -81,15 +73,11 @@ ResultCode propagateRay(
 //updates ray with contribution from importance sampling
 //Set hit=true, if the was stopped by a hit (affects probability calculations)
 void updateRayIS(inout Ray ray, float dist, const PropagateParams params, bool hit) {
-    [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
-        ray.samples[i].log_contrib += params.scatterCoefficient * dist;
-    }
+    ray.log_contrib += params.scatterCoefficient * dist;
     if (!hit) {
         //if we hit anything, the actual prob is to travel at least dist
         // -> happens to drop the coefficient
-        [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
-            ray.samples[i].lin_contrib /= params.scatterCoefficient;
-        }
+        ray.lin_contrib /= params.scatterCoefficient;
     }
 }
 

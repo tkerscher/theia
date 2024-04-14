@@ -27,7 +27,7 @@ layout(scalar) writeonly buffer ValueQueueOut {
 // }
 
 void response(HitItem item) {
-    uint idx = atomicAdd(hitQueueOut.count, 1);
+    uint idx = atomicAdd(valueQueueOut.count, 1);
     valueQueueOut.value[idx] = responseValue(item);
     valueQueueOut.time[idx] = item.time;
 }

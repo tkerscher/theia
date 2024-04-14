@@ -81,16 +81,16 @@ SourceRay sampleLight(uint idx) {
     float time = mix(start.time, end.time, u);
 
     //sample photon (wavelength)
-    SourceSample samples[1];
-    samples[0] = sampleSource(idx, 0);
-    //add time delta
-    samples[0].startTime += time;
+    SourceSample photon = sampleSource(idx, 0);
+    float wavelength = photon.wavelength;
+    float startTime = photon.startTime + time;
+    float contrib = photon.contrib;
 
     //get refractive index
     float n = 1.0;
     if (trackParams.medium != uvec2(0)) {
         Medium medium = Medium(trackParams.medium);
-        float l = normalize_lambda(medium, samples[0].wavelength);
+        float l = normalize_lambda(medium, wavelength);
         n = lookUp(medium.n, l, 1.0);
     }
 
@@ -110,14 +110,14 @@ SourceRay sampleLight(uint idx) {
 
     //update contribution with sampling prob (2pi included in frank-tamm)
     float segmentLength = distance(start.pos, end.pos);
-    samples[0].contrib *= float(track.trackLength) * segmentLength;
+    contrib *= float(track.trackLength) * segmentLength;
 
     //use Frank-Thamm to calculate radiance
     //clamp to 0.0 to handle n <= 1.0 cases
-    samples[0].contrib *= max(frank_tamm(n, samples[0].wavelength), 0.0);
+    contrib *= max(frank_tamm(n, wavelength), 0.0);
 
     //create and return ray
-    return SourceRay(pos, rayDir, samples);
+    return SourceRay(pos, rayDir, wavelength, startTime, contrib);
 }
 
 #endif

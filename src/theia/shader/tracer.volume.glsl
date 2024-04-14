@@ -17,9 +17,6 @@
 #ifndef BLOCK_SIZE
 #error "BLOCK_SIZE not defined"
 #endif
-#ifndef N_LAMBDA
-#error "N_LAMBDA not defined"
-#endif
 #ifndef PATH_LENGTH
 #error "PATH_LENGTH not defined"
 #endif
@@ -75,16 +72,14 @@ void createHit(Ray ray, vec3 dir, float weight) {
     //calculate hit coordinates
     vec3 normal = normalize(ray.position - params.target.position);
     vec3 hitPos = normal * params.target.radius;
-    //create hits
-    [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
-        if (ray.samples[i].time <= params.propagation.maxTime) {
-            response(HitItem(
-                hitPos, dir, normal,
-                ray.samples[i].wavelength,
-                ray.samples[i].time,
-                ray.samples[i].lin_contrib * exp(ray.samples[i].log_contrib)
-            ));
-        }
+    //create hit
+    if (ray.time <= params.propagation.maxTime) {
+        response(HitItem(
+            hitPos, dir, normal,
+            ray.wavelength,
+            ray.time,
+            ray.lin_contrib * exp(ray.log_contrib)
+        ));
     }
 }
 
@@ -117,16 +112,14 @@ ResultCode trace(inout Ray ray, uint idx, uint dim, bool first, bool allowRespon
         //calculate local coordinates (dir is the same)
         vec3 hitNormal = normalize(ray.position - params.target.position);
         vec3 hitPos = hitNormal * params.target.radius;
-        //create response for each wavelength
-        [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
-            if (ray.samples[i].time <= params.propagation.maxTime) {
-                response(HitItem(
-                    hitPos, ray.direction, hitNormal,
-                    ray.samples[i].wavelength,
-                    ray.samples[i].time,
-                    ray.samples[i].lin_contrib * exp(ray.samples[i].log_contrib)
-                ));
-            }
+        //create response
+        if (ray.time <= params.propagation.maxTime) {
+            response(HitItem(
+                hitPos, ray.direction, hitNormal,
+                ray.wavelength,
+                ray.time,
+                ray.lin_contrib * exp(ray.log_contrib)
+            ));
         }
         return RESULT_CODE_RAY_DETECTED;
     }

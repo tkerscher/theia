@@ -16,10 +16,9 @@ from .common.models import WaterModel
 
 def test_lightsource(rng):
     N = 32 * 256
-    N_LAMBDA = 4
 
     # create light & sampler
-    light = theia.light.HostLightSource(N, nLambda=N_LAMBDA)
+    light = theia.light.HostLightSource(N)
     sampler = theia.light.LightSampler(light, N)
 
     # fill input buffer
@@ -35,10 +34,10 @@ def test_lightsource(rng):
         [sin_theta * np.cos(phi), sin_theta * np.sin(phi), cos_theta],
         axis=-1,
     )
-    lam = (rng.random((N, N_LAMBDA)) * 600.0 + 200.0) * u.nm
+    lam = (rng.random((N, )) * 600.0 + 200.0) * u.nm
     rays["wavelength"] = lam
-    rays["startTime"] = rng.random((N, N_LAMBDA)) * 50.0 * u.ns
-    rays["contrib"] = rng.random((N, N_LAMBDA)) + 1.0
+    rays["startTime"] = rng.random((N, )) * 50.0 * u.ns
+    rays["contrib"] = rng.random((N, )) + 1.0
 
     # run
     runPipeline([light, sampler])
@@ -65,7 +64,7 @@ def test_diskRay():
     photons = theia.light.UniformPhotonSource(
         lambdaRange=(100.0, 100.0) * u.nm, timeRange=(10.0, 10.0) * u.ns
     )
-    light = theia.light.ModularLightSource(rays, photons, 1)
+    light = theia.light.ModularLightSource(rays, photons)
     sampler = theia.light.LightSampler(light, N, rng=philox)
     # run
     runPipeline([philox, rays, photons, light, sampler])
@@ -100,7 +99,7 @@ def test_pencilRay():
     photons = theia.light.UniformPhotonSource(
         lambdaRange=(100.0, 100.0) * u.nm, timeRange=(10.0, 10.0) * u.ns
     )
-    light = theia.light.ModularLightSource(rays, photons, 1)
+    light = theia.light.ModularLightSource(rays, photons)
     sampler = theia.light.LightSampler(light, N, rng=philox)
     # run
     runPipeline([philox, rays, photons, light, sampler])
@@ -126,7 +125,7 @@ def test_sphericalRay():
     photons = theia.light.UniformPhotonSource(
         lambdaRange=(100.0, 100.0) * u.nm, timeRange=(10.0, 10.0) * u.ns
     )
-    light = theia.light.ModularLightSource(rays, photons, 1)
+    light = theia.light.ModularLightSource(rays, photons)
     sampler = theia.light.LightSampler(light, N, rng=philox)
     # run
     runPipeline([philox, rays, photons, light, sampler])
@@ -146,7 +145,6 @@ def test_sphericalRay():
 
 def test_uniformPhoton():
     N = 32 * 256
-    N_LAMBDA = 4
     lamRange, dLam = (350.0, 750.0) * u.nm, 400.0 * u.nm
     timeRange, dt = (20.0, 70.0) * u.ns, 50.0 * u.ns
     intensity = 8.0
@@ -159,7 +157,7 @@ def test_uniformPhoton():
     photons = theia.light.UniformPhotonSource(
         lambdaRange=lamRange, timeRange=timeRange, intensity=intensity
     )
-    light = theia.light.ModularLightSource(rays, photons, N_LAMBDA)
+    light = theia.light.ModularLightSource(rays, photons)
     sampler = theia.light.LightSampler(light, N, rng=philox)
     # run
     runPipeline([philox, rays, photons, light, sampler])

@@ -16,10 +16,10 @@ from typing import Callable, Dict, List, Set, Tuple, Type, Optional
 from numpy.typing import NDArray
 
 __all__ = [
-    "createLightSampleItem",
     "CherenkovTrackLightSource",
     "DiskRaySource",
     "HostLightSource",
+    "LightSampleItem",
     "LightSampler",
     "LightSource",
     "ModularLightSource",
@@ -48,19 +48,12 @@ class LightSource(SourceCodeMixin):
     def __init__(
         self,
         *,
-        nLambda: int,
         nRNGSamples: int = 0,
         params: Dict[str, type[Structure]] = {},
         extra: Set[str] = set(),
     ) -> None:
         super().__init__(params, extra)
-        self._nLambda = nLambda
         self._nRNGSamples = nRNGSamples
-
-    @property
-    def nLambda(self) -> int:
-        """Number of sampled wavelengths in a single light source ray"""
-        return self._nLambda
 
     @property
     def nRNGSamples(self) -> int:
@@ -68,32 +61,14 @@ class LightSource(SourceCodeMixin):
         return self._nRNGSamples
 
 
-def createLightSampleItem(nLambda: int) -> Type[Structure]:
-    """
-    Creates a `Structure` describing the layout of a single light sample
-    produced by a `LightSource`.
-
-    Parameters
-    ----------
-    nLambda: int
-        Number of sampled wavelengths in a single light source ray
-
-    Returns
-    -------
-    item: Type[Structure]
-        Layout of a single light source ray
-    """
-
-    class LightSampleItem(Structure):
-        _fields_ = [
-            ("position", c_float * 3),
-            ("direction", c_float * 3),
-            ("wavelength", c_float * nLambda),
-            ("startTime", c_float * nLambda),
-            ("contrib", c_float * nLambda),
-        ]
-
-    return LightSampleItem
+class LightSampleItem(Structure):
+    _fields_ = [
+        ("position", c_float * 3),
+        ("direction", c_float * 3),
+        ("wavelength", c_float),
+        ("startTime", c_float),
+        ("contrib", c_float),
+    ]
 
 
 class LightSampler(PipelineStage):
@@ -175,8 +150,7 @@ class LightSampler(PipelineStage):
         if code is None:
             preamble = ""
             preamble += f"#define LIGHT_QUEUE_SIZE {capacity}\n"
-            preamble += f"#define BATCH_SIZE {batchSize}\n"
-            preamble += f"#define N_LAMBDA {source.nLambda}\n\n"
+            preamble += f"#define BATCH_SIZE {batchSize}\n\n"
             headers = {
                 "light.glsl": source.sourceCode,
                 "rng.glsl": rng.sourceCode if rng is not None else "",
@@ -188,10 +162,10 @@ class LightSampler(PipelineStage):
         self._groups = -(capacity // -batchSize)
 
         # create queue holding samples
-        item = createLightSampleItem(source.nLambda)
-        self._tensor = QueueTensor(item, capacity)
+        self._tensor = QueueTensor(LightSampleItem, capacity)
         self._buffer = [
-            QueueBuffer(item, capacity) if retrieve else None for _ in range(2)
+            QueueBuffer(LightSampleItem, capacity) if retrieve else None
+            for _ in range(2)
         ]
         # bind memory
         self._program.bindParams(LightQueueOut=self._tensor)
@@ -260,8 +234,6 @@ class HostLightSource(LightSource):
     ----------
     capacity: int
         Maximum number of samples that can be drawn per run
-    nLambda: int, default=4
-        Number of sampled wavelengths in a single light source ray
     updateFn: (HostLightSource, int) -> None | None, default=None
         Optional update function called before the pipeline processes a task.
         `i` is the i-th configuration the update should affect.
@@ -274,32 +246,24 @@ class HostLightSource(LightSource):
         self,
         capacity: int,
         *,
-        nLambda: int = 4,
         updateFn: Optional[Callable[[HostLightSource, int], None]] = None,
     ) -> None:
-        super().__init__(nLambda=nLambda)
+        super().__init__()
 
         # save params
         self._capacity = capacity
-        self._nLambda = nLambda
         self._updateFn = updateFn
 
         # allocate memory
-        item = createLightSampleItem(nLambda)
         self._buffers = [
-            QueueBuffer(item, capacity, skipCounter=True) for _ in range(2)
+            QueueBuffer(LightSampleItem, capacity, skipCounter=True) for _ in range(2)
         ]
-        self._tensor = QueueTensor(item, capacity, skipCounter=True)
+        self._tensor = QueueTensor(LightSampleItem, capacity, skipCounter=True)
 
     @property
     def capacity(self) -> int:
         """Maximum number of samples that can be drawn per run"""
         return self._capacity
-
-    @property
-    def nLambda(self) -> int:
-        """Number of sampled wavelengths in a single light source ray"""
-        return self._nLambda
 
     @property
     def sourceCode(self) -> str:
@@ -589,8 +553,6 @@ class ModularLightSource(LightSource):
         Sampler producing rays.
     photonSource: PhotonSource
         Sampler producing single photons
-    nLambda: int
-        Number of photons to sample
     """
 
     # lazily load template code
@@ -600,10 +562,9 @@ class ModularLightSource(LightSource):
         self,
         raySource: RaySource,
         photonSource: PhotonSource,
-        nLambda: int,
     ) -> None:
-        nRNG = raySource.nRNGSamples + nLambda * photonSource.nRNGSamples
-        super().__init__(nLambda=nLambda, nRNGSamples=nRNG)
+        nRNG = raySource.nRNGSamples + photonSource.nRNGSamples
+        super().__init__(nRNGSamples=nRNG)
         self._raySource = raySource
         self._photonSource = photonSource
 
@@ -620,7 +581,7 @@ class ModularLightSource(LightSource):
     @property
     def sourceCode(self) -> str:
         # build preamble
-        nRNGSource = self.nLambda * self.photonSource.nRNGSamples
+        nRNGSource = self.photonSource.nRNGSamples
         preamble = f"#define RNG_RAY_SAMPLE_OFFSET {nRNGSource}\n"
         # assemble full code
         return "\n".join(
@@ -757,7 +718,6 @@ class CherenkovTrackLightSource(LightSource):
         usePhotonCount: bool = False,
     ) -> None:
         super().__init__(
-            nLambda=1,
             nRNGSamples=2 + photonSource.nRNGSamples,
             params={"TrackParams": self.TrackParams},
         )

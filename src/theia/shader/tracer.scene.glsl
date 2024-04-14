@@ -18,9 +18,6 @@
 #ifndef BLOCK_SIZE
 #error "BLOCK_SIZE not defined"
 #endif
-#ifndef N_LAMBDA
-#error "N_LAMBDA not defined"
-#endif
 #ifndef PATH_LENGTH
 #error "PATH_LENGTH not defined"
 #endif

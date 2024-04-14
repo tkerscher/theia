@@ -4,19 +4,16 @@
 SourceRay sampleLight(uint idx) {
     //sample ray (offset rng behind samples to make api easier)
     RaySample ray = sampleRay(idx, RNG_RAY_SAMPLE_OFFSET);
-
     //sample photons (at rng offset 0, sampler advances itself)
-    SourceSample samples[N_LAMBDA];
-    [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
-        samples[i] = sampleSource(idx, i);
-        samples[i].contrib *= ray.contrib;
-    }
+    SourceSample photon = sampleSource(idx, 0);
 
     //assemble source ray and return
     return SourceRay(
         ray.position,
         ray.direction,
-        samples
+        photon.wavelength,
+        photon.startTime,
+        photon.contrib * ray.contrib
     );
 }
 

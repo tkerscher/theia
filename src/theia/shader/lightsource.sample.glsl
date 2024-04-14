@@ -5,9 +5,6 @@
 #ifndef BATCH_SIZE
 #error "BATCH_SIZE not defined"
 #endif
-#ifndef N_LAMBDA
-#error "N_LAMBDA not defined"
-#endif
 
 layout(local_size_x = BATCH_SIZE) in;
 

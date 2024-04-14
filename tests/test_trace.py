@@ -21,7 +21,6 @@ from common.models import WaterModel
 @pytest.mark.parametrize("limitTime", [True, False])
 def test_VolumeTracer(disableDirect: bool, disableTarget: bool, limitTime: bool):
     N = 32 * 256
-    N_LAMBDA = 4
     N_SCATTER = 6
     T0, T1 = 10.0 * u.ns, 20.0 * u.ns
     T_MAX = 1.0 * u.us if limitTime else 100.0 * u.us
@@ -47,7 +46,7 @@ def test_VolumeTracer(disableDirect: bool, disableTarget: bool, limitTime: bool)
         intensity=light_intensity,
         timeRange=(T0, T1),
     )
-    source = theia.light.ModularLightSource(rays, photons, N_LAMBDA)
+    source = theia.light.ModularLightSource(rays, photons)
     recorder = theia.estimator.HitRecorder()
     stats = theia.trace.EventStatisticCallback()
     tracer = theia.trace.VolumeTracer(
@@ -84,22 +83,22 @@ def test_VolumeTracer(disableDirect: bool, disableTarget: bool, limitTime: bool)
         assert stats.absorbed > 0
         assert stats.detected > 0
         if not limitTime:
-            assert len(hits) == stats.detected * N_LAMBDA
+            assert len(hits) == stats.detected
     elif disableDirect and not disableTarget:
         assert stats.absorbed > 0
         assert stats.detected == 0
         if not limitTime:
-            assert len(hits) > stats.scattered * N_LAMBDA
+            assert len(hits) > stats.scattered
     elif not disableDirect and disableTarget:
         assert stats.absorbed == 0
         assert stats.detected > 0
         if not limitTime:
-            assert len(hits) == stats.detected * N_LAMBDA
+            assert len(hits) == stats.detected
     elif not disableDirect and not disableTarget:
         assert stats.absorbed > 0
         assert stats.detected > 0
         if not limitTime:
-            assert len(hits) > (stats.detected + stats.scattered) * N_LAMBDA
+            assert len(hits) > (stats.detected + stats.scattered)
 
     # TODO: more sophisticated tests...
 
@@ -118,7 +117,6 @@ def test_SceneTracer(
         pytest.skip("ray tracing is not supported")
 
     N = 32 * 256
-    N_LAMBDA = 4
     MAX_PATH = 10
     T0, T1 = 10.0 * u.ns, 20.0 * u.ns
     T_MAX = 1.0 * u.us
@@ -163,7 +161,7 @@ def test_SceneTracer(
         intensity=light_intensity,
         timeRange=(T0, T1),
     )
-    source = theia.light.ModularLightSource(rays, photons, N_LAMBDA)
+    source = theia.light.ModularLightSource(rays, photons)
     recorder = theia.estimator.HitRecorder()
     stats = theia.trace.EventStatisticCallback()
     tracer = theia.trace.SceneTracer(
@@ -254,7 +252,7 @@ def test_BidirectionalPathTracer():
     cam = theia.camera.PencilCameraRaySource(rayPosition=det_pos)
     ray = theia.light.PencilRaySource(position=src_pos)
     ph = theia.light.UniformPhotonSource(timeRange=(T0, T1))
-    src = theia.light.ModularLightSource(ray, ph, 1)
+    src = theia.light.ModularLightSource(ray, ph)
     rec = theia.estimator.HitRecorder()
     stats = theia.trace.EventStatisticCallback()
     trace = theia.trace.BidirectionalPathTracer(
@@ -316,7 +314,7 @@ def test_EventStatisticCallback():
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
     rays = theia.light.SphericalRaySource()
     photons = theia.light.UniformPhotonSource(timeRange=(T0, T1))
-    source = theia.light.ModularLightSource(rays, photons, 1)
+    source = theia.light.ModularLightSource(rays, photons)
     response = theia.estimator.EmptyResponse()
     stats = theia.trace.EventStatisticCallback()
     tracer = theia.trace.SceneTracer(
@@ -380,7 +378,6 @@ def test_EventStatisticCallback():
 
 def test_TrackRecordCallback():
     N = 32 * 256
-    N_LAMBDA = 4
     N_SCATTER = 6
     LENGTH = N_SCATTER + 2  # one more than needed
     T0, T1 = 10.0 * u.ns, 20.0 * u.ns
@@ -397,7 +394,7 @@ def test_TrackRecordCallback():
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
     rays = theia.light.PencilRaySource(position=light_pos, direction=light_dir)
     photons = theia.light.UniformPhotonSource(timeRange=(T0, T1))
-    source = theia.light.ModularLightSource(rays, photons, N_LAMBDA)
+    source = theia.light.ModularLightSource(rays, photons)
     response = theia.estimator.EmptyResponse()
     track = theia.trace.TrackRecordCallback(N, LENGTH)
     tracer = theia.trace.VolumeTracer(
@@ -471,7 +468,7 @@ def test_volumeBorder():
         timeRange=(0.0, 0.0),  # const time
         intensity=1.0,
     )
-    source = theia.light.ModularLightSource(rays, photons, 1)
+    source = theia.light.ModularLightSource(rays, photons)
     estimator = theia.estimator.EmptyResponse()
     tracker = theia.trace.TrackRecordCallback(N, 4)
     tracer = theia.trace.SceneTracer(
@@ -564,7 +561,7 @@ def test_tracer_reflection(flag, reflectance, err):
         timeRange=(0.0, 0.0),  # const time
         intensity=1.0,
     )
-    source = theia.light.ModularLightSource(rays, photons, 1)
+    source = theia.light.ModularLightSource(rays, photons)
     recorder = theia.estimator.HitRecorder()
     stats = theia.trace.EventStatisticCallback()
     tracer = theia.trace.SceneTracer(

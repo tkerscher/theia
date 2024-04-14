@@ -18,9 +18,9 @@ struct LightSourceQueue {
     float dirY[LIGHT_QUEUE_SIZE];
     float dirZ[LIGHT_QUEUE_SIZE];
     //sample
-    float wavelength[N_LAMBDA][LIGHT_QUEUE_SIZE];
-    float startTime[N_LAMBDA][LIGHT_QUEUE_SIZE];
-    float contrib[N_LAMBDA][LIGHT_QUEUE_SIZE];
+    float wavelength[LIGHT_QUEUE_SIZE];
+    float startTime[LIGHT_QUEUE_SIZE];
+    float contrib[LIGHT_QUEUE_SIZE];
 };
 
 //Thanks to GLSL not having references, but only passes variables by copy we
@@ -29,29 +29,22 @@ struct LightSourceQueue {
 //Since I don't like to bet, here are some ugly macros instead
 
 #define LOAD_SAMPLE(RAY, QUEUE, IDX) \
-SourceSample RAY##_samples[N_LAMBDA];\
-[[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {\
-    RAY##_samples[i] = SourceSample(\
-        QUEUE.wavelength[i][IDX],\
-        QUEUE.startTime[i][IDX],\
-        QUEUE.contrib[i][IDX]);\
-}\
 SourceRay RAY = SourceRay(\
     vec3(QUEUE.posX[IDX], QUEUE.posY[IDX], QUEUE.posZ[IDX]),\
     vec3(QUEUE.dirX[IDX], QUEUE.dirY[IDX], QUEUE.dirZ[IDX]),\
-    RAY##_samples);
+    QUEUE.wavelength[IDX],\
+    QUEUE.startTime[IDX],\
+    QUEUE.contrib[IDX]);
 
 #define SAVE_SAMPLE(RAY, QUEUE, IDX) \
-[[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {\
-    QUEUE.wavelength[i][IDX] = RAY.samples[i].wavelength;\
-    QUEUE.startTime[i][IDX] = RAY.samples[i].startTime;\
-    QUEUE.contrib[i][IDX] = RAY.samples[i].contrib;\
-}\
 QUEUE.posX[IDX] = RAY.position.x;\
 QUEUE.posY[IDX] = RAY.position.y;\
 QUEUE.posZ[IDX] = RAY.position.z;\
 QUEUE.dirX[IDX] = RAY.direction.x;\
 QUEUE.dirY[IDX] = RAY.direction.y;\
-QUEUE.dirZ[IDX] = RAY.direction.z;
+QUEUE.dirZ[IDX] = RAY.direction.z;\
+QUEUE.wavelength[IDX] = RAY.wavelength;\
+QUEUE.startTime[IDX] = RAY.startTime;\
+QUEUE.contrib[IDX] = RAY.contrib;
 
 #endif

@@ -33,36 +33,30 @@ layout(scalar) readonly buffer Targets {
 void crossBorder(inout Ray ray, Material mat, vec3 geomNormal, bool inward) {
     //put ray on other side to prevent self intersection
     ray.position = offsetRay(ray.position, -geomNormal);
-    //update medium & constants in sample
+    //update medium & constants
     Medium medium = inward ? mat.inside : mat.outside;
     ray.medium = uvec2(medium);
-    [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
-        ray.samples[i].constants = lookUpMedium(medium, ray.samples[i].wavelength);
-    }
+    ray.constants = lookUpMedium(medium, ray.wavelength);
 }
 
 //reflects ray and updates contribution taking IS and reflectance into account
 void reflectRay(
     inout Ray ray,
     vec3 worldNrm, vec3 geomNrm,
-    float r[N_LAMBDA], //reflectance
+    float r, //reflectance
     bool canTransmit //needed for correction factor caused by importance sampling  
 ) {
     //update ray
     ray.position = offsetRay(ray.position, geomNrm); //offset to prevent self intersection
     ray.direction = normalize(reflect(ray.direction, worldNrm));
 
-    //update samples
-    float p = canTransmit ? r[0] : 1.0; //IS prob
-    [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
-        ray.samples[i].lin_contrib *= r[i] / p;
-    }
+    float p = canTransmit ? r : 1.0; //IS prob
+    ray.lin_contrib *= r / p;
 }
 
 //transmits ray; updates ray, medium and contribution:
 // - crosses border into new medium
 // - refracts direction
-//   -> due to dispersion cancels all but the first sample
 // - takes transmission into account
 // - takes IS into account
 void transmitRay(
@@ -72,16 +66,10 @@ void transmitRay(
     float r, //reflectance
     bool inward, bool canReflect //needed for IS factor
 ) {
-    //since we expect dispersion, the refracted direction would be different
-    //for each sample -> only transmit first sample
-    [[unroll]] for (uint i = 1; i < N_LAMBDA; ++i) {
-        ray.samples[i].lin_contrib = 0.0;
-    }
-
     //cross border, but remember both refractive indices
-    float n_i = ray.samples[0].constants.n;
+    float n_i = ray.constants.n;
     crossBorder(ray, mat, geomNormal, inward);
-    float n_o = ray.samples[0].constants.n;
+    float n_o = ray.constants.n;
 
     //calculate new direction
     float eta = n_i / n_o;
@@ -90,11 +78,12 @@ void transmitRay(
     //update sample contribution:
     //the factor (1-r) cancels with importance sampling the reflection leaving
     //only a factor of eta^-2 for the radiance due to rays getting denser
-    float inv_eta = n_o / n_i;
-    ray.samples[0].lin_contrib *= inv_eta * inv_eta;
+    //TODO: the factor eta^-2 only appears for camera rays
+    //float inv_eta = n_o / n_i;
+    //ray.lin_contrib *= inv_eta * inv_eta;
     if (!canReflect) {
         //no random choice happen -> need to also account for transmission factor
-        ray.samples[0].lin_contrib *= (1.0 - r);
+        ray.lin_contrib *= (1.0 - r);
     }
 }
 
@@ -105,30 +94,20 @@ void createResponse(
     vec3 objPos, vec3 objDir, vec3 objNrm, vec3 worldNrm,
     bool absorb, float weight
 ) {
-    [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {        
-        //skip out of bounds samples
-        if (ray.samples[i].time > maxTime)
-            continue;
-        
-        //calculate contribution
-        Sample s = ray.samples[i];
-        float contrib = weight * s.lin_contrib * exp(s.log_contrib);
-        //attenuate by transmission if not absorbing
-        if (!absorb) {
-            contrib *= (1.0 - reflectance(
-                mat, s.wavelength, s.constants.n, ray.direction, worldNrm
-            ));
-        }
+    float contrib = weight * ray.lin_contrib * exp(ray.log_contrib);
+    if (!absorb) {
+        contrib *= (1.0 - reflectance(
+            mat, ray.wavelength, ray.constants.n, ray.direction, worldNrm
+        ));
+    }
 
-        //ignore zero contrib samples
-        if (contrib == 0.0)
-            continue;
-
+    //ignore zero contrib samples
+    if (contrib != 0.0 && ray.time <= maxTime) {
         //create response
         response(HitItem(
             objPos, objDir, objNrm,
-            s.wavelength,
-            s.time,
+            ray.wavelength,
+            ray.time,
             contrib
         ));
     }
@@ -168,11 +147,10 @@ ResultCode processHit(
     //correction factor for worldNrm/geomNormal mismatch:
     //we importance sampled according to geomNormal (jacobian)
     //but lambert uses interpolated worldNrm
+    //TODO: This is not symmetric, i.e. different for light and camera paths
     float cosWorld = abs(dot(ray.direction, worldNrm));
     float cosGeom = abs(dot(ray.direction, geomNormal));
-    [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
-        ray.samples[i].lin_contrib *= cosWorld / cosGeom;
-    }
+    ray.lin_contrib *= cosWorld * cosGeom;
     
     //process flags
     uint flags = inward ? mat.flagsInwards : mat.flagsOutwards;
@@ -182,16 +160,13 @@ ResultCode processHit(
     bool canReflect = (flags & MATERIAL_NO_REFLECT_BIT) == 0;
 
     //calculate reflectance
-    float r[N_LAMBDA];
-    [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
-        r[i] = reflectance(
-            mat,
-            ray.samples[i].wavelength,
-            ray.samples[i].constants.n,
-            ray.direction,
-            worldNrm
-        );
-    }
+    float r = reflectance(
+        mat,
+        ray.wavelength,
+        ray.constants.n,
+        ray.direction,
+        worldNrm
+    );
 
     //check if we hit target
     int customId = rayQueryGetIntersectionInstanceCustomIndexEXT(rayQuery, true);
@@ -229,11 +204,11 @@ ResultCode processHit(
 
 #ifndef DISABLE_TRANSMISSION
     //handle reflection/transmission
-    if (canReflect && (!canTransmit || u < r[0])) {
+    if (canReflect && (!canTransmit || u < r)) {
         reflectRay(ray, worldNrm, geomNormal, r, canTransmit);
     }
     else if (canTransmit) {
-        transmitRay(ray, mat, worldNrm, geomNormal, r[0], inward, canReflect);
+        transmitRay(ray, mat, worldNrm, geomNormal, r, inward, canReflect);
     }
     else {
         //no way to proceed -> abort
@@ -324,9 +299,7 @@ void processScatter(
     PropagateParams params
 ) {
     //apply scatter coefficient
-    [[unroll]] for (uint i = 0; i < N_LAMBDA; ++i) {
-        ray.samples[i].lin_contrib *= ray.samples[i].constants.mu_s;
-    }
+    ray.lin_contrib *= ray.constants.mu_s;
 
 #ifndef SCENE_TRAVERSE_DISABLE_MIS
     //MIS detector:

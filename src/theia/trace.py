@@ -459,7 +459,7 @@ class VolumeTracer(Tracer):
             maxHits *= 2
         if not disableDirectLighting:
             maxHits += 1
-        maxHits *= batchSize * source.nLambda
+        maxHits *= batchSize
         # MIS also scatters -> one less trace command
         pathLength = nScattering if disableTargetSampling else nScattering - 1
         rngStride = 3 if disableTargetSampling else 7
@@ -468,7 +468,7 @@ class VolumeTracer(Tracer):
             response,
             {"TraceParams": self.TraceParams},
             maxHits=maxHits,
-            normalization=1.0 / (batchSize * source.nLambda),
+            normalization=1.0 / batchSize,
             nRNGSamples=source.nRNGSamples + rngStride * pathLength,
         )
         # save params
@@ -504,7 +504,6 @@ class VolumeTracer(Tracer):
             preamble += f"#define BATCH_SIZE {batchSize}\n"
             preamble += f"#define BLOCK_SIZE {blockSize}\n"
             preamble += f"#define DIM_OFFSET {source.nRNGSamples}\n"
-            preamble += f"#define N_LAMBDA {source.nLambda}\n"
             preamble += f"#define PATH_LENGTH {pathLength}\n\n"
             headers = {
                 "callback.glsl": callback.sourceCode,
@@ -712,18 +711,18 @@ class SceneTracer(Tracer):
             disableTargetSampling = True
 
         # calculate max hits
-        maxHits = batchSize * source.nLambda * (maxPathLength - 1)
+        maxHits = batchSize * (maxPathLength - 1)
         if not disableTargetSampling:
             maxHits *= 2
         if not disableDirectLighting:
-            maxHits += batchSize * source.nLambda
+            maxHits += batchSize
         # init tracer
         rngStride = 4 if disableTargetSampling else 8
         super().__init__(
             response,
             {"TraceParams": self.TraceParams},
             maxHits=maxHits,
-            normalization=1.0 / (batchSize / source.nLambda),
+            normalization=1.0 / batchSize,
             nRNGSamples=source.nRNGSamples + rngStride * maxPathLength,
         )
 
@@ -765,7 +764,6 @@ class SceneTracer(Tracer):
             preamble += f"#define BATCH_SIZE {batchSize}\n"
             preamble += f"#define BLOCK_SIZE {blockSize}\n"
             preamble += f"#define DIM_OFFSET {source.nRNGSamples}\n"
-            preamble += f"#define N_LAMBDA {source.nLambda}\n"
             preamble += f"#define PATH_LENGTH {maxPathLength}\n\n"
             headers = {
                 "callback.glsl": callback.sourceCode,
@@ -971,7 +969,7 @@ class BidirectionalPathTracer(Tracer):
             maxHits += lightPathLength - 1
         if not disableDirectLighting:
             maxHits += 1
-        maxHits *= batchSize * source.nLambda
+        maxHits *= batchSize
         # calculate rng samples
         nRNG = source.nRNGSamples + camera.nRNGSamples
         nRNG += (lightPathLength + cameraPathLength) * 4
@@ -1024,7 +1022,6 @@ class BidirectionalPathTracer(Tracer):
                 preamble += "#define DISABLE_VOLUME_BORDER 1\n"
             preamble += f"#define BATCH_SIZE {batchSize}\n"
             preamble += f"#define BLOCK_SIZE {blockSize}\n"
-            preamble += f"#define N_LAMBDA {source.nLambda}\n"
             preamble += f"#define DIM_OFFSET_LIGHT {source.nRNGSamples}\n"
             preamble += f"#define DIM_OFFSET_CAMERA {camera.nRNGSamples}\n"
             preamble += f"#define LIGHT_PATH_LENGTH {lightPathLength}\n"

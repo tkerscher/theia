@@ -16,7 +16,10 @@ struct SourceSample {
 struct SourceRay {
     vec3 position;
     vec3 direction;
-    SourceSample samples[N_LAMBDA];
+    
+    float wavelength;
+    float startTime;
+    float contrib;
 };
 
 #endif
