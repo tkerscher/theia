@@ -34,10 +34,10 @@ def test_lightsource(rng):
         [sin_theta * np.cos(phi), sin_theta * np.sin(phi), cos_theta],
         axis=-1,
     )
-    lam = (rng.random((N, )) * 600.0 + 200.0) * u.nm
+    lam = (rng.random((N,)) * 600.0 + 200.0) * u.nm
     rays["wavelength"] = lam
-    rays["startTime"] = rng.random((N, )) * 50.0 * u.ns
-    rays["contrib"] = rng.random((N, )) + 1.0
+    rays["startTime"] = rng.random((N,)) * 50.0 * u.ns
+    rays["contrib"] = rng.random((N,)) + 1.0
 
     # run
     runPipeline([light, sampler])

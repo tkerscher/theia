@@ -227,8 +227,8 @@ def test_MaterialShader(shaderUtil, rng):
         def __init__(self) -> None:
             theia.material.WaterBaseModel.__init__(self, 5.0, 1000.0, 35.0)
             theia.material.HenyeyGreensteinPhaseFunction.__init__(self, 0.6)
-            theia.material.KokhanovskyOceanWaterPhaseMatrix.__init__(self,
-                p90=0.66, theta0=0.25, alpha=4.0, xi=25.6 # voss measurement fit
+            theia.material.KokhanovskyOceanWaterPhaseMatrix.__init__(
+                self, p90=0.66, theta0=0.25, alpha=4.0, xi=25.6  # voss measurement fit
             )
 
         ModelName = "water"
@@ -350,7 +350,7 @@ def test_MaterialShader(shaderUtil, rng):
     cpu[N::2, 8] = 0.0  # vacuum
     cpu[N + 1 :: 2, 8] = 0.0  # glass does not (volume) scatter
     # m34
-    cpu[:N:2, 9] = 0.0 # no m34 for water
+    cpu[:N:2, 9] = 0.0  # no m34 for water
     cpu[1:N:2, 9] = 0.0  # glass does not (volume) scatter
     cpu[N::2, 9] = 0.0  # vacuum
     cpu[N + 1 :: 2, 9] = 0.0  # glass does not (volume) scatter
@@ -363,9 +363,9 @@ def test_MaterialShader(shaderUtil, rng):
     # assert np.allclose(gpu["log_phase"], cpu[:, 4], 1e-4)
     assert np.abs(gpu["log_phase"] - cpu[:, 4]).max() < 5e-4
     assert np.allclose(gpu["angle"], cpu[:, 5], 1e-4, 1e-5)
-    assert np.abs(gpu["m12"] - cpu[:,6]).max() < 1e-3
-    assert np.abs(gpu["m22"] - cpu[:,7]).max() < 1e-3
-    assert np.abs(gpu["m33"] - cpu[:,8]).max() < 1e-3
-    assert np.abs(gpu["m34"] - cpu[:,9]).max() < 1e-3
+    assert np.abs(gpu["m12"] - cpu[:, 6]).max() < 1e-3
+    assert np.abs(gpu["m22"] - cpu[:, 7]).max() < 1e-3
+    assert np.abs(gpu["m33"] - cpu[:, 8]).max() < 1e-3
+    assert np.abs(gpu["m34"] - cpu[:, 9]).max() < 1e-3
     assert flag_buffer.numpy()[0] == mat_vac_glass.flagsInward
     assert flag_buffer.numpy()[1] == mat_vac_glass.flagsOutward
