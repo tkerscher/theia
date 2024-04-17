@@ -8,7 +8,7 @@ from hephaistos.glsl import uvec4, uvec2
 from numpy.ctypeslib import as_array
 
 from numpy.typing import NDArray
-from typing import Dict, Type
+from typing import Any, Dict, Type
 
 
 def viewSoA(address: int, item: Type[Structure], count: int) -> NDArray:
@@ -75,6 +75,22 @@ def compileShader(file: str, preamble: str = "", headers: Dict[str, str] = {}) -
     """
     code = preamble + "\n" + loadShader(file)
     return getCompiler().compile(code, headers)
+
+
+def createPreamble(**macros: Any) -> str:
+    """
+    Creates preamble containing macros defining the values as defined in the
+    provided dictionary. If macro is of type bool, defines it without value
+    if and only if it is True. Other types are used as value for the macro.
+    """
+    preamble = ""
+    for macro, value in macros.items():
+        if type(value) is not bool:
+            preamble += f"#define {macro} {value}\n"
+        elif value:
+            preamble += f"#define {macro}\n"
+        # ignore macros defined with value False
+    return preamble
 
 
 def uvec4ToInt(value: uvec4) -> int:

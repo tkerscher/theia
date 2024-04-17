@@ -7,7 +7,7 @@ from hephaistos.queue import QueueBuffer, QueueTensor, QueueView, clearQueue
 
 from ctypes import Structure, c_float, c_uint32
 
-from theia.util import ShaderLoader, compileShader
+from theia.util import ShaderLoader, compileShader, createPreamble
 
 from numpy.typing import NDArray
 from typing import Dict, List, Set, Type, Optional
@@ -201,9 +201,10 @@ class HitReplay(PipelineStage):
 
         # create code if needed
         if code is None:
-            preamble = ""
-            preamble += f"#define HIT_QUEUE_SIZE {capacity}\n"
-            preamble += f"#define BATCH_SIZE {batchSize}\n\n"
+            preamble = createPreamble(
+                BATCH_SIZE=batchSize,
+                HIT_QUEUE_SIZE=capacity,
+            )
             headers = {"response.glsl": response.sourceCode}
             code = compileShader("response.replay.glsl", preamble, headers)
         self._code = code
@@ -612,10 +613,11 @@ class HistogramEstimator(Estimator):
 
         # compile code if needed
         if code is None:
-            preamble = ""
-            preamble += f"#define BATCH_SIZE {batchSize}\n"
-            preamble += f"#define N_BINS {nBins}\n"
-            preamble += f"#define VALUE_QUEUE_SIZE {queue.capacity}\n\n"
+            preamble = createPreamble(
+                BATCH_SIZE=batchSize,
+                N_BINS=nBins,
+                VALUE_QUEUE_SIZE=queue.capacity,
+            )
             code = compileShader("estimator.hist.glsl", preamble)
         self._code = code
         # create program

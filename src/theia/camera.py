@@ -11,7 +11,7 @@ from ctypes import Structure, c_float, c_uint32
 import theia.units as u
 from theia.random import RNG
 from theia.scene import Transform
-from theia.util import ShaderLoader, compileShader
+from theia.util import ShaderLoader, compileShader, createPreamble
 
 from typing import Callable, Dict, List, Optional, Set, Tuple, Type
 
@@ -128,9 +128,10 @@ class CameraRaySampler(PipelineStage):
 
         # create code if needed
         if code is None:
-            preamble = ""
-            preamble += f"#define CAMERA_QUEUE_SIZE {capacity}\n"
-            preamble += f"#define BATCH_SIZE {batchSize}\n\n"
+            preamble = createPreamble(
+                BATCH_SIZE=batchSize,
+                CAMERA_QUEUE_SIZE=capacity,
+            )
             headers = {
                 "camera.glsl": camera.sourceCode,
                 "rng.glsl": rng.sourceCode if rng is not None else "",

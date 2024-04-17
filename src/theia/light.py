@@ -10,7 +10,7 @@ from hephaistos.glsl import buffer_reference, vec2, vec3
 from numpy.ctypeslib import as_array
 
 from theia.random import RNG
-from theia.util import ShaderLoader, compileShader
+from theia.util import ShaderLoader, compileShader, createPreamble
 
 from typing import Callable, Dict, List, Set, Tuple, Type, Optional
 from numpy.typing import NDArray
@@ -148,9 +148,10 @@ class LightSampler(PipelineStage):
 
         # create code if needed
         if code is None:
-            preamble = ""
-            preamble += f"#define LIGHT_QUEUE_SIZE {capacity}\n"
-            preamble += f"#define BATCH_SIZE {batchSize}\n\n"
+            preamble = createPreamble(
+                BATCH_SIZE=batchSize,
+                LIGHT_QUEUE_SIZE=capacity,
+            )
             headers = {
                 "light.glsl": source.sourceCode,
                 "rng.glsl": rng.sourceCode if rng is not None else "",

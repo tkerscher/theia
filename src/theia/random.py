@@ -6,7 +6,7 @@ from ctypes import Structure, c_uint32
 from os import urandom
 
 from hephaistos.pipeline import PipelineStage, SourceCodeMixin
-from theia.util import ShaderLoader, compileShader
+from theia.util import ShaderLoader, compileShader, createPreamble
 
 from typing import Dict, List, Optional, Set, Tuple, Type
 
@@ -125,10 +125,11 @@ class RNGBufferSink(PipelineStage):
 
         # create code if needed
         if code is None:
-            preamble = ""
-            preamble += f"#define PARALLEL_STREAMS {blockSize[0]}\n"
-            preamble += f"#define BATCH_SIZE {blockSize[1]}\n"
-            preamble += f"#define DRAWS {blockSize[2]}\n\n"
+            preamble = createPreamble(
+                BATCH_SIZE=blockSize[1],
+                DRAWS=blockSize[2],
+                PARALLEL_STREAMS=blockSize[0],
+            )
             headers = {"rng.glsl": generator.sourceCode}
             code = compileShader("random.sink.glsl", preamble, headers)
         self._code = code
