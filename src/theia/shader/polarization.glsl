@@ -2,10 +2,43 @@
 #define _INCLUDE_POLARIZATION
 
 #include "material.glsl"
+#include "math.glsl"
 
 mat4 rotatePolRef(float phi) {
     float c = cos(2.0*phi);
     float s = sin(2.0*phi);
+    //assemble reference frame rotation matrix (column major!)
+    return mat4(
+        1.0, 0.0, 0.0, 0.0,
+        0.0,   c,   s, 0.0,
+        0.0,  -s,   c, 0.0,
+        0.0, 0.0, 0.0, 1.0
+    );
+}
+
+//creates rotation matrix to rotate the ref vector to be ortogonal to the plane
+//of scattering from old to new. Assumes all vectors to be normalized
+mat4 rotatePolRef(vec3 dir, vec3 ref, vec3 new, out vec3 new_ref) {
+    //new reference should be normal to dir and new -> cross product
+    //but we have an edge case: if dir == new, cross generates zero
+    //in that case we don't need to update the reference frame and just use 
+    //the old one instead. Worse, normalizing the zero would generate NaN
+    //nuking this sample. (There's no branchless version according to the hairy
+    //ball theorem)
+    new_ref = crosser(dir, new);
+    float len = length(new_ref);
+    if (len > 1.0e-7) {
+        new_ref /= len;
+    }
+    else {
+        new_ref = ref;
+    }
+    float cos_phi = dot(ref, new_ref);
+    float sin_phi = dot(crosser(ref, new_ref), dir);
+
+    //create rotation matrix
+    float c = 2.0 * cos_phi * cos_phi - 1.0;    //cos(2phi)
+    float s = 2.0 * cos_phi * sin_phi;          //sin(2phi)
     //assemble reference frame rotation matrix (column major!)
     return mat4(
         1.0, 0.0, 0.0, 0.0,
