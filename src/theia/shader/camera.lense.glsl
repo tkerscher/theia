@@ -1,7 +1,6 @@
 #ifndef _INCLUDE_CAMERARAYSOURCE_LENSE
 #define _INCLUDE_CAMERARAYSOURCE_LENSE
 
-#include "cosy.glsl"
 #include "math.glsl"
 
 layout(scalar) uniform CameraRayParams {

@@ -1,7 +1,6 @@
 #ifndef _SPHERE_INCLUDE
 #define _SPHERE_INCLUDE
 
-#include "cosy.glsl"
 #include "math.glsl"
 
 struct Sphere{

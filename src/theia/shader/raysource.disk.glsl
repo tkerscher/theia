@@ -1,7 +1,6 @@
 #ifndef _INCLUDE_RAYSAMPLER_DISK
 #define _INCLUDE_RAYSAMPLER_DISK
 
-#include "cosy.glsl"
 #include "math.glsl"
 
 layout(scalar) uniform RayParams {
