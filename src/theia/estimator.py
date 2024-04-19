@@ -24,6 +24,7 @@ __all__ = [
     "HitReplay",
     "HitResponse",
     "LambertHitResponse",
+    "PolarizedHitItem",
     "ValueHitResponse",
     "ValueItem",
 ]
@@ -50,6 +51,27 @@ class HitItem(Structure):
     ]
 
 
+class PolarizedHitItem(Structure):
+    """
+    Structure describing the layout of a single hit similar to `HitItem`, but
+    with additional fields for polarization.  Polarization is given by a Stokes'
+    vector and corresponding reference frame defined by the direction of
+    vertical polarization of unit length and perpendicular to propagation
+    direction.
+    """
+
+    _fields_ = [
+        ("position", c_float * 3),
+        ("direction", c_float * 3),
+        ("normal", c_float * 3),
+        ("stokes", c_float * 4),
+        ("polarizationRef", c_float * 3),
+        ("wavelength", c_float),
+        ("time", c_float),
+        ("contrib", c_float),
+    ]
+
+
 class HitResponse(SourceCodeMixin):
     """
     Base class for response functions called for each hit produced by a tracer.
@@ -68,7 +90,7 @@ class HitResponse(SourceCodeMixin):
     ) -> None:
         super().__init__(params, extra)
 
-    def prepare(self, maxHits: int) -> None:
+    def prepare(self, maxHits: int, polarized: bool) -> None:
         """
         Called by e.g. a `Tracer` when binding the response into its program.
         Tells the response function how many hits it has to expect at most per
@@ -94,34 +116,48 @@ class HitRecorder(HitResponse):
 
     Parameters
     ----------
+    polarized: bool, default=False
+        Whether to save the polarization state.
     retrieve: bool, default=True
-        Wether the queue gets retrieved from the device after processing.
+        Whether the queue gets retrieved from the device after processing.
         If `True`, clears the queue afterwards.
+
+    Note
+    ----
+    If the hit source (e.g. a tracer) does not produce polarized samples, the
+    polarization reference will be the null vector.
     """
 
     _sourceCode = ShaderLoader("response.record.glsl")
 
-    def __init__(self, *, retrieve: bool = True) -> None:
+    def __init__(self, *, polarized: bool = False, retrieve: bool = True) -> None:
         super().__init__()
         # save params
         self._capacity = 0
+        self._polarized = polarized
         self._retrieve = retrieve
         # set tensor and queue
         self._tensor = None
         self._buffer = [None for _ in range(2)]
 
-    def prepare(self, maxHits: int) -> None:
+    def prepare(self, maxHits: int, polarized: bool) -> None:
         self._capacity = maxHits
         # create queue
-        self._tensor = QueueTensor(HitItem, maxHits)
+        item = PolarizedHitItem if polarized else HitItem
+        self._tensor = QueueTensor(item, maxHits)
         hp.execute(clearQueue(self._tensor))
         if self.retrieve:
-            self._buffer = [QueueBuffer(HitItem, maxHits) for _ in range(2)]
+            self._buffer = [QueueBuffer(item, maxHits) for _ in range(2)]
 
     @property
     def capacity(self) -> int:
         """Maximum number of hits that can be saved per run"""
         return self._capacity
+
+    @property
+    def polarized(self) -> bool:
+        """Whether to save the polarization state"""
+        return self._polarized
 
     @property
     def retrieve(self) -> bool:
@@ -130,7 +166,10 @@ class HitRecorder(HitResponse):
 
     @property
     def sourceCode(self) -> str:
-        preamble = f"#define HIT_QUEUE_SIZE {self.capacity}\n\n"
+        preamble = createPreamble(
+            HIT_QUEUE_SIZE=self.capacity,
+            HIT_QUEUE_POLARIZED=self.polarized,
+        )
         return preamble + self._sourceCode
 
     @property
@@ -172,6 +211,8 @@ class HitReplay(PipelineStage):
         Maximum number of hits that can be processed per run
     response: HitResponse
         Response to be called on each hit
+    polarized: bool, default=False
+        Whether the hits contain polarization information.
     batchSize: int, default=128
         Number of hits processed per work group
     code: bytes | None, default=None
@@ -187,6 +228,7 @@ class HitReplay(PipelineStage):
         capacity: int,
         response: HitResponse,
         *,
+        polarized: bool = False,
         batchSize: int = 128,
         code: Optional[bytes] = None,
     ) -> None:
@@ -194,16 +236,19 @@ class HitReplay(PipelineStage):
         # save params
         self._batchSize = batchSize
         self._capacity = capacity
+        self._polarized = polarized
         self._response = response
 
         # prepare response
-        response.prepare(capacity)
+        response.prepare(capacity, polarized)
 
         # create code if needed
         if code is None:
             preamble = createPreamble(
                 BATCH_SIZE=batchSize,
                 HIT_QUEUE_SIZE=capacity,
+                HIT_QUEUE_POLARIZED=polarized,
+                POLARIZATION=polarized,
             )
             headers = {"response.glsl": response.sourceCode}
             code = compileShader("response.replay.glsl", preamble, headers)
@@ -213,8 +258,9 @@ class HitReplay(PipelineStage):
         self._groups = -(capacity // -batchSize)
 
         # create queue
-        self._tensor = QueueTensor(HitItem, capacity)
-        self._buffer = [QueueBuffer(HitItem, capacity) for _ in range(2)]
+        item = PolarizedHitItem if polarized else HitItem
+        self._tensor = QueueTensor(item, capacity)
+        self._buffer = [QueueBuffer(item, capacity) for _ in range(2)]
         # set buffer item count to max by default
         for buffer in self._buffer:
             buffer.view.count = capacity
@@ -235,6 +281,11 @@ class HitReplay(PipelineStage):
     def code(self) -> bytes:
         """Compiled source code. Can be used for caching"""
         return self._code
+
+    @property
+    def polarized(self) -> bool:
+        """Whether the hits contain polarization information"""
+        return self._polarized
 
     @property
     def response(self) -> HitResponse:
@@ -313,7 +364,7 @@ class ValueHitResponse(HitResponse):
         super().__init__(params, extra)
         self._queue = queue
 
-    def prepare(self, maxHits: int) -> None:
+    def prepare(self, maxHits: int, polarized: bool) -> None:
         if self._queue is None:
             self._queue = createValueQueue(maxHits)
         elif self.queue.capacity < maxHits:

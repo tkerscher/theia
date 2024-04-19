@@ -1,3 +1,5 @@
+import pytest
+
 import numpy as np
 import theia.estimator
 import theia.units as u
@@ -6,11 +8,12 @@ from hephaistos.pipeline import RetrieveTensorStage, UpdateTensorStage, runPipel
 from hephaistos.queue import QueueTensor, as_queue
 
 
-def test_record(rng):
+@pytest.mark.parametrize("polarized", [True, False])
+def test_record(rng, polarized: bool):
     N = 8192
 
-    record = theia.estimator.HitRecorder()
-    replay = theia.estimator.HitReplay(N, record)
+    record = theia.estimator.HitRecorder(polarized=polarized)
+    replay = theia.estimator.HitReplay(N, record, polarized=polarized)
 
     samples = replay.view(0)
     samples["position"] = (10.0 * rng.random((N, 3)) - 5.0) * u.m
@@ -20,6 +23,9 @@ def test_record(rng):
     samples["time"] = (rng.random((N,)) * 100.0) * u.ns
     # use contrib to encode ordering (gpu will scramble items)
     samples["contrib"] = np.arange(N).astype(np.float32)
+    if polarized:
+        samples["stokes"] = rng.random((N, 4))
+        samples["polarizationRef"] = rng.random((N, 3))
 
     runPipeline([replay, record])
 
@@ -33,6 +39,18 @@ def test_record(rng):
     assert np.all(samples["wavelength"] == results["wavelength"])
     assert np.all(samples["time"] == results["time"])
     assert np.all(samples["contrib"] == results["contrib"])
+    if polarized:
+        assert np.all(samples["stokes"] == results["stokes"])
+        assert np.all(samples["polarizationRef"] == results["polarizationRef"])
+
+
+def test_hitPolarizationMismatch():
+    with pytest.raises(RuntimeError):
+        record = theia.estimator.HitRecorder(polarized=True)
+        replay = theia.estimator.HitReplay(128, record, polarized=False)
+    with pytest.raises(RuntimeError):
+        record = theia.estimator.HitRecorder(polarized=False)
+        replay = theia.estimator.HitReplay(128, record, polarized=True)
 
 
 def test_histogram(rng):
