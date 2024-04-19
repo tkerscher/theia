@@ -8,7 +8,7 @@ SourceRay sampleLight(uint idx) {
     SourceSample photon = sampleSource(idx, 0);
 
     //assemble source ray and return
-    return SourceRay(
+    return createSourceRay(
         ray.position,
         ray.direction,
         photon.wavelength,

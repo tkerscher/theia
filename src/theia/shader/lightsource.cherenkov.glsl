@@ -4,7 +4,6 @@
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_buffer_reference_uvec2 : require
 
-#include "cosy.glsl"
 #include "math.glsl"
 #include "material.glsl"
 
@@ -116,8 +115,17 @@ SourceRay sampleLight(uint idx) {
     //clamp to 0.0 to handle n <= 1.0 cases
     contrib *= max(frank_tamm(n, wavelength), 0.0);
 
+#ifdef POLARIZATION
+    //reference direction is perpendicular to light and particle direction
+    vec3 polRef = normalize(cross(rayDir, particleDir));
+    //light is linear polarized in plane of rayDir and particleDir
+    vec4 stokes = vec4(1.0, 1.0, 0.0, 0.0);
+
+    return SourceRay(pos, rayDir, stokes, polRef, wavelength, startTime, contrib);
+#else
     //create and return ray
     return SourceRay(pos, rayDir, wavelength, startTime, contrib);
+#endif
 }
 
 #endif

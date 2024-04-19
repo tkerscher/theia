@@ -6,7 +6,7 @@ from hephaistos.pipeline import PipelineStage, SourceCodeMixin
 from hephaistos.queue import QueueBuffer, QueueTensor, QueueView
 
 from ctypes import Structure, c_float, c_uint32, sizeof
-from hephaistos.glsl import buffer_reference, vec2, vec3
+from hephaistos.glsl import buffer_reference, vec2, vec3, vec4
 from numpy.ctypeslib import as_array
 
 from theia.random import RNG
@@ -24,8 +24,10 @@ __all__ = [
     "LightSource",
     "ModularLightSource",
     "ParticleTrack",
+    "PencilLightSource",
     "PencilRaySource",
     "PhotonSource",
+    "PolarizedLightSampleItem",
     "RaySource",
     "SphericalRaySource",
     "UniformPhotonSource",
@@ -62,9 +64,30 @@ class LightSource(SourceCodeMixin):
 
 
 class LightSampleItem(Structure):
+    """Structure describing a single sample from a light source"""
+
     _fields_ = [
         ("position", c_float * 3),
         ("direction", c_float * 3),
+        ("wavelength", c_float),
+        ("startTime", c_float),
+        ("contrib", c_float),
+    ]
+
+
+class PolarizedLightSampleItem(Structure):
+    """
+    Structure describing a single polarized sample from a light source.
+    Polarization is given by a Stokes' vector and corresponding reference frame
+    defined by the direction of vertical polarization of unit length and
+    perpendicular to propagation direction.
+    """
+
+    _fields_ = [
+        ("position", c_float * 3),
+        ("direction", c_float * 3),
+        ("stokes", c_float * 4),
+        ("polarizationRef", c_float * 3),
         ("wavelength", c_float),
         ("startTime", c_float),
         ("contrib", c_float),
@@ -84,8 +107,10 @@ class LightSampler(PipelineStage):
     rng: RNG | None, default=None
         The random number generator used for sampling. May be `None` if `source`
         does not require random numbers.
+    polarized: bool, default=False
+        Whether to save polarization information.
     retrieve: bool, default=True
-        Wether the queue gets retrieved from the device after sampling
+        Whether the queue gets retrieved from the device after sampling
     batchSize: int, default=128
         Number of samples drawn per work group
     code: bytes | None, default=None
@@ -128,6 +153,7 @@ class LightSampler(PipelineStage):
         capacity: int,
         *,
         rng: Optional[RNG] = None,
+        polarized: bool = False,
         retrieve: bool = True,
         batchSize: int = 128,
         code: Optional[bytes] = None,
@@ -143,6 +169,7 @@ class LightSampler(PipelineStage):
         self._capacity = capacity
         self._source = source
         self._retrieve = retrieve
+        self._polarized = polarized
         self._rng = rng
         self.setParams(count=capacity, baseCount=0)
 
@@ -151,6 +178,8 @@ class LightSampler(PipelineStage):
             preamble = createPreamble(
                 BATCH_SIZE=batchSize,
                 LIGHT_QUEUE_SIZE=capacity,
+                LIGHT_QUEUE_POLARIZED=polarized,
+                POLARIZATION=polarized,
             )
             headers = {
                 "light.glsl": source.sourceCode,
@@ -163,10 +192,10 @@ class LightSampler(PipelineStage):
         self._groups = -(capacity // -batchSize)
 
         # create queue holding samples
-        self._tensor = QueueTensor(LightSampleItem, capacity)
+        item = PolarizedLightSampleItem if polarized else LightSampleItem
+        self._tensor = QueueTensor(item, capacity)
         self._buffer = [
-            QueueBuffer(LightSampleItem, capacity) if retrieve else None
-            for _ in range(2)
+            QueueBuffer(item, capacity) if retrieve else None for _ in range(2)
         ]
         # bind memory
         self._program.bindParams(LightQueueOut=self._tensor)
@@ -185,6 +214,11 @@ class LightSampler(PipelineStage):
     def code(self) -> bytes:
         """Compiled source code. Can be used for caching"""
         return self._code
+
+    @property
+    def polarized(self) -> bool:
+        """Whether to save polarization information"""
+        return self._polarized
 
     @property
     def retrieve(self) -> bool:
@@ -235,6 +269,8 @@ class HostLightSource(LightSource):
     ----------
     capacity: int
         Maximum number of samples that can be drawn per run
+    polarized: bool, default=False
+        Whether the host also provides polarization information.
     updateFn: (HostLightSource, int) -> None | None, default=None
         Optional update function called before the pipeline processes a task.
         `i` is the i-th configuration the update should affect.
@@ -247,19 +283,22 @@ class HostLightSource(LightSource):
         self,
         capacity: int,
         *,
+        polarized: bool = False,
         updateFn: Optional[Callable[[HostLightSource, int], None]] = None,
     ) -> None:
         super().__init__()
 
         # save params
         self._capacity = capacity
+        self._polarized = polarized
         self._updateFn = updateFn
 
         # allocate memory
+        item = PolarizedLightSampleItem if polarized else LightSampleItem
         self._buffers = [
-            QueueBuffer(LightSampleItem, capacity, skipCounter=True) for _ in range(2)
+            QueueBuffer(item, capacity, skipCounter=True) for _ in range(2)
         ]
-        self._tensor = QueueTensor(LightSampleItem, capacity, skipCounter=True)
+        self._tensor = QueueTensor(item, capacity, skipCounter=True)
 
     @property
     def capacity(self) -> int:
@@ -267,8 +306,16 @@ class HostLightSource(LightSource):
         return self._capacity
 
     @property
+    def polarized(self) -> bool:
+        """Whether the host also provides polarization information"""
+        return self._polarized
+
+    @property
     def sourceCode(self) -> str:
-        preamble = f"#define LIGHT_QUEUE_SIZE {self.capacity}\n\n"
+        preamble = createPreamble(
+            LIGHT_QUEUE_SIZE=self.capacity,
+            LIGHT_QUEUE_POLARIZED=self.polarized,
+        )
         return preamble + self._sourceCode
 
     def buffer(self, i: int) -> int:
@@ -597,6 +644,84 @@ class ModularLightSource(LightSource):
     def bindParams(self, program: Program, i: int) -> None:
         super().bindParams(program, i)
         self.raySource.bindParams(program, i)
+        self.photonSource.bindParams(program, i)
+
+
+class PencilLightSource(LightSource):
+    """
+    Light source generating a pencil beam.
+
+    Parameters
+    ----------
+    photonSource: PhotonSource
+        Photon source used to sample wavelengths
+    position: (float, float, float), default=(0.0, 0.0, 0.0)
+        Start point of the ray
+    direction: (float, float, float), default=(0.0, 0.0, 1.0)
+        Direction of the ray
+    stokes: (float, float, float, float), default=(1.0, 0.0, 0.0, 0.0)
+        Stokes vector describing polarization. Defaults to unpolarized.
+    polarizationRef: (float, float, float), default=(0.0, 1.0, 0.0)
+        Reference direction defining the direction of vertically polarized
+        light. Must be perpendicular to direction and normalized.
+
+    Stage Parameters
+    ----------------
+    position: (float, float, float), default=(0.0, 0.0, 0.0)
+        Start point of the ray
+    direction: (float, float, float), default=(0.0, 0.0, 1.0)
+        Direction of the ray
+    stokes: (float, float, float, float), default=(1.0, 0.0, 0.0, 0.0)
+        Stokes vector describing polarization. Defaults to unpolarized.
+    polarizationRef: (float, float, float), default=(0.0, 1.0, 0.0)
+        Reference direction defining the direction of vertically polarized
+        light. Must be perpendicular to direction and normalized.
+    """
+
+    class LightParams(Structure):
+        _fields_ = [
+            ("position", vec3),
+            ("direction", vec3),
+            ("stokes", vec4),
+            ("polarizationRef", vec3),
+        ]
+
+    # lazily load source code
+    _sourceCode = ShaderLoader("lightsource.pencil.glsl")
+
+    def __init__(
+        self,
+        photonSource: PhotonSource,
+        *,
+        position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        direction: Tuple[float, float, float] = (0.0, 0.0, 1.0),
+        stokes: Tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0),
+        polarizationRef: Tuple[float, float, float] = (0.0, 1.0, 0.0),
+    ) -> None:
+        super().__init__(
+            nRNGSamples=photonSource.nRNGSamples,
+            params={"LightParams": self.LightParams},
+        )
+        # save params
+        self._photonSource = photonSource
+        self.setParams(
+            position=position,
+            direction=direction,
+            stokes=stokes,
+            polarizationRef=polarizationRef,
+        )
+
+    @property
+    def photonSource(self) -> PhotonSource:
+        """Photon source used to sample wavelengths"""
+        return self._photonSource
+
+    @property
+    def sourceCode(self) -> str:
+        return self.photonSource.sourceCode + "\n" + self._sourceCode
+
+    def bindParams(self, program: Program, i: int) -> None:
+        super().bindParams(program, i)
         self.photonSource.bindParams(program, i)
 
 
