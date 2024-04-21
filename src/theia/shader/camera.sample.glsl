@@ -8,9 +8,23 @@
 layout(local_size_x = BATCH_SIZE) in;
 
 #include "camera.queue.glsl"
+//test for rare edge case:
+//combine HostCameraRaySource & CameraRaySampler, but mismatch polarization
+//(would require two different version of CameraQueue)
+#ifdef CAMERA_QUEUE_POLARIZED
+#define SAMPLER_CAMERA_QUEUE_POLARIZED
+#undef LIGHT_QUEUE_POLARIZED
+#endif
 //user provided code
 #include "rng.glsl"
 #include "camera.glsl"
+
+//check for queue mismatch
+#ifdef _INCLUDE_CAMERARAYSOURCE_HOST
+#if defined(SAMPLER_CAMERA_QUEUE_POLARIZED) != defined(CAMERA_QUEUE_POLARIZED)
+#error "polarization mismatch in camera queue definition"
+#endif
+#endif
 
 //output queue
 layout(scalar) writeonly buffer CameraQueueOut {

@@ -13,7 +13,7 @@ from theia.random import RNG
 from theia.scene import Transform
 from theia.util import ShaderLoader, compileShader, createPreamble
 
-from typing import Callable, Dict, List, Optional, Set, Tuple, Type
+from typing import Callable, Dict, List, Optional, Set, Tuple, Type, Union
 
 __all__ = [
     "CameraRaySampler",
@@ -23,6 +23,7 @@ __all__ = [
     "HostCameraRaySource",
     "LenseCameraRaySource",
     "PencilCameraRaySource",
+    "PolarizedCameraRayItem",
 ]
 
 
@@ -66,6 +67,19 @@ class CameraRayItem(Structure):
     ]
 
 
+class PolarizedCameraRayItem(Structure):
+    _fields_ = [
+        ("position", c_float * 3),
+        ("direction", c_float * 3),
+        ("contrib", c_float),
+        ("timeDelta", c_float),
+        ("polarizationRef", c_float * 3),
+        ("hitPosition", c_float * 3),
+        ("hitDirection", c_float * 3),
+        ("hitNormal", c_float * 3),
+    ]
+
+
 class CameraRaySampler(PipelineStage):
     """
     Utility class for sampling a `CameraRaySource` and storing the result in a
@@ -80,6 +94,8 @@ class CameraRaySampler(PipelineStage):
     rng: RNG | None, default=None
         The random number generator used for sampling. May be `None` if `camera`
         does not require random numbers.
+    polarized: bool, default=True
+        Whether to save polarization information.
     retrieve: bool, default=True
         Wether the queue gets retrieved from the device after sampling
     batchSize: int
@@ -108,6 +124,7 @@ class CameraRaySampler(PipelineStage):
         capacity: int,
         *,
         rng: Optional[RNG] = None,
+        polarized: bool = True,
         retrieve: bool = True,
         batchSize: int = 128,
         code: Optional[bytes] = None,
@@ -122,6 +139,7 @@ class CameraRaySampler(PipelineStage):
         self._batchSize = batchSize
         self._camera = camera
         self._capacity = capacity
+        self._polarized = polarized
         self._retrieve = retrieve
         self._rng = rng
         self.setParams(count=capacity, baseCount=0)
@@ -131,6 +149,8 @@ class CameraRaySampler(PipelineStage):
             preamble = createPreamble(
                 BATCH_SIZE=batchSize,
                 CAMERA_QUEUE_SIZE=capacity,
+                CAMERA_QUEUE_POLARIZED=polarized,
+                POLARIZATION=polarized,
             )
             headers = {
                 "camera.glsl": camera.sourceCode,
@@ -143,9 +163,10 @@ class CameraRaySampler(PipelineStage):
         self._groups = -(capacity // -batchSize)
 
         # create queue holding samples
-        self._tensor = QueueTensor(CameraRayItem, capacity)
+        item = PolarizedCameraRayItem if polarized else CameraRayItem
+        self._tensor = QueueTensor(item, capacity)
         self._buffer = [
-            QueueBuffer(CameraRayItem, capacity) if retrieve else None for _ in range(2)
+            QueueBuffer(item, capacity) if retrieve else None for _ in range(2)
         ]
         # bind memory
         self._program.bindParams(CameraQueueOut=self._tensor)
@@ -169,6 +190,11 @@ class CameraRaySampler(PipelineStage):
     def code(self) -> bytes:
         """Compiled source code. Can be used for caching"""
         return self._code
+
+    @property
+    def polarized(self) -> bool:
+        """Whether to save polarization information"""
+        return self._polarized
 
     @property
     def retrieve(self) -> bool:
@@ -214,6 +240,8 @@ class HostCameraRaySource(CameraRaySource):
     ----------
     capacity: int
         Maximum number of samples that can be drawn per run
+    polarized: bool, default=False
+        Whether the host also provides polarization information
     updateFn: (HostCameraRaySource, int) -> None | None, default=None
         Optional update function called before the pipeline processes a task.
         `i` is the i-th configuration the update should affect.
@@ -228,18 +256,21 @@ class HostCameraRaySource(CameraRaySource):
         self,
         capacity: int,
         *,
+        polarized: bool = False,
         updateFn: Optional[Callable[[HostCameraRaySource, int], None]] = None,
     ) -> None:
         super().__init__(nRNGSamples=0)
         # save params
         self._capacity = capacity
+        self._polarized = polarized
         self._updateFn = updateFn
 
         # allocate memory
+        item = PolarizedCameraRayItem if polarized else CameraRayItem
         self._buffers = [
-            QueueBuffer(CameraRayItem, capacity, skipCounter=True) for _ in range(2)
+            QueueBuffer(item, capacity, skipCounter=True) for _ in range(2)
         ]
-        self._tensor = QueueTensor(CameraRayItem, capacity, skipCounter=True)
+        self._tensor = QueueTensor(item, capacity, skipCounter=True)
 
     @property
     def capacity(self) -> int:
@@ -247,8 +278,16 @@ class HostCameraRaySource(CameraRaySource):
         return self._capacity
 
     @property
+    def polarized(self) -> bool:
+        """Whether the host also provides polarization information"""
+        return self._polarized
+
+    @property
     def sourceCode(self) -> str:
-        preamble = f"#define CAMERA_QUEUE_SIZE {self.capacity}\n\n"
+        preamble = createPreamble(
+            CAMERA_QUEUE_SIZE=self.capacity,
+            CAMERA_QUEUE_POLARIZED=self.polarized,
+        )
         return preamble + self._sourceCode
 
     def buffer(self, i: int) -> int:
@@ -287,6 +326,10 @@ class PencilCameraRaySource(CameraRaySource):
         Start point of the camera ray
     rayDirection: (float, float, float), default=(0.0, 0.0, 1.0)
         Direction of the camera ray
+    polarizationRef: (float, float, float)|None, default=None
+        Reference frame of polarization indicating vertical polarized light.
+        Must be unit and orthogonal to the ray direction.
+        If None, creates an unspecified orthogonal one.
     timeDelta: float, default=0.0
         Extra time delay added on the ray
     hitPosition: (float, float, float), default=(0.0,0.0,0.0)
@@ -302,6 +345,9 @@ class PencilCameraRaySource(CameraRaySource):
         Start point of the camera ray
     rayDirection: (float, float, float), default=(0.0, 0.0, 1.0)
         Direction of the camera ray
+    polarizationRef: (float, float, float)
+        Reference frame of polarization indicating vertical polarized light.
+        Must be unit and orthogonal to the ray direction.
     timeDelta: float, default=0.0
         Extra time delay added on the ray
     hitPosition: (float, float, float), default=(0.0,0.0,0.0)
@@ -318,6 +364,7 @@ class PencilCameraRaySource(CameraRaySource):
         _fields_ = [
             ("rayPosition", vec3),
             ("rayDirection", vec3),
+            ("polarizationRef", vec3),
             ("timeDelta", c_float),
             ("hitPosition", vec3),
             ("hitDirection", vec3),
@@ -329,6 +376,7 @@ class PencilCameraRaySource(CameraRaySource):
         *,
         rayPosition: Tuple[float, float, float] = (0.0, 0.0, 0.0),
         rayDirection: Tuple[float, float, float] = (0.0, 0.0, 1.0),
+        polarizationRef: Union[Tuple[float, float, float], None] = None,
         timeDelta: float = 0.0,
         hitPosition: Tuple[float, float, float] = (0.0, 0.0, 0.0),
         hitDirection: Tuple[float, float, float] = (0.0, 0.0, -1.0),
@@ -337,9 +385,21 @@ class PencilCameraRaySource(CameraRaySource):
         super().__init__(
             nRNGSamples=0, params={"CameraRayParams": self.CameraRayParams}
         )
+        # create polarization reference frame if not specified
+        if polarizationRef is None:
+            # take two cross products: with e_x and e_y
+            # both cant be parallel to dir at the same time
+            x, y, z = rayDirection
+            ref1 = np.array([0.0, -z, y])
+            ref2 = np.array([-z, 0.0, x])
+            # take the longe one and normalize
+            l1 = np.sqrt(np.square(ref1).sum())
+            l2 = np.sqrt(np.square(ref2).sum())
+            polarizationRef = tuple(ref1 / l1 if l1 > l2 else ref2 / l2)
         self.setParams(
             rayPosition=rayPosition,
             rayDirection=rayDirection,
+            polarizationRef=polarizationRef,
             timeDelta=timeDelta,
             hitPosition=hitPosition,
             hitDirection=hitDirection,

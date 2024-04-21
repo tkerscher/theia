@@ -22,15 +22,34 @@ CameraRay sampleCameraRay(uint idx, uint dim) {
         cos_theta
     );
     //convert to global space
-    vec3 rayDir = createLocalCOSY(normalize(cameraRayParams.coneDir)) * localDir;
+    mat3 trafo = createLocalCOSY(normalize(cameraRayParams.coneDir));
+    vec3 rayDir = trafo * localDir;
     //flip local dir as it should point towards the detector
     localDir *= -1.0;
+
+#ifdef POLARIZATION
+    //create polarization reference frame in plane of incidence (normal e_z)
+    vec3 polRef = vec3(localDir.y, -localDir.x, 0.0);
+    //degenerate case: localDir || e_z
+    float len = length(polRef);
+    if (len < 1e-5) {
+        polRef = vec3(1.0, 0.0, 0.0);
+    }
+    else {
+        //normalize
+        polRef /= len;
+    }
+    polRef = trafo * polRef;
+#endif
 
     //assemble camera ray
     return CameraRay(
         cameraRayParams.conePos, rayDir,             // global ray
         TWO_PI * cameraRayParams.cosOpeningAngle,   // contrib
         0.0,                                        // delta time
+#ifdef POLARIZATION
+        polRef,
+#endif
         vec3(0.0,0.0,0.0),                          // local hit pos
         localDir,                                   // local hit dir
         vec3(0.0,0.0,1.0)                           // local normal

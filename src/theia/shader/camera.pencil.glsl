@@ -5,6 +5,8 @@ layout(scalar) uniform CameraRayParams {
     vec3 rayPosition;
     vec3 rayDirection;
 
+    vec3 polRef;
+
     float timeDelta;
 
     vec3 hitPosition;
@@ -18,6 +20,9 @@ CameraRay sampleCameraRay(uint idx, uint dim) {
         cameraRayParams.rayDirection,
         1.0, //contrib
         cameraRayParams.timeDelta,
+#ifdef POLARIZATION
+        cameraRayParams.polRef,
+#endif
         cameraRayParams.hitPosition,
         cameraRayParams.hitDirection,
         cameraRayParams.hitNormal

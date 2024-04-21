@@ -30,6 +30,21 @@ CameraRay sampleCameraRay(uint idx, uint dim) {
     vec3 hitDir = normalize(localPos - lensePos);
     vec3 rayDir = cameraRayParams.trafo * (-hitDir);
 
+#ifdef POLARIZATION
+    //create polarization reference frame in plance of incidence
+    vec3 polRef = vec3(-hitDir.y, hitDir.x, 0.0);
+    //degenerate case: localDir || e_z
+    float len = length(polRef);
+    if (len < 1e-5) {
+        polRef = vec3(1.0, 0.0, 0.0);
+    }
+    else {
+        //normalize
+        polRef /= len;
+    }
+    polRef = cameraRayParams.trafo * polRef;
+#endif
+
     //p = 1/A_det * 1/A_lense * cos(theta)/d^2
     //  = 1/A_det * 1/A_lense * focal/d^3
     //contrib = 1/p = params.contrib * d^3
@@ -40,6 +55,9 @@ CameraRay sampleCameraRay(uint idx, uint dim) {
     return CameraRay(
         rayPos, rayDir,     // ray pos / dir
         contrib, 0.0,       // contrib / time delta
+#ifdef POLARIZATION
+        polRef,
+#endif
         localPos, hitDir,   // hit pos / dir
         vec3(0.0, 0.0, 1.0) // hit normal
     );

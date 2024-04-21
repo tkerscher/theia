@@ -1,3 +1,5 @@
+import pytest
+
 import numpy as np
 from hephaistos.pipeline import runPipeline
 
@@ -7,12 +9,13 @@ from theia.scene import Transform
 import theia.units as u
 
 
-def test_cameraRaySource(rng):
+@pytest.mark.parametrize("polarized", [True, False])
+def test_cameraRaySource(rng, polarized: bool):
     N = 32 * 256
 
     # create camera and sampler
-    camera = theia.camera.HostCameraRaySource(N)
-    sampler = theia.camera.CameraRaySampler(camera, N)
+    camera = theia.camera.HostCameraRaySource(N, polarized=polarized)
+    sampler = theia.camera.CameraRaySampler(camera, N, polarized=polarized)
 
     # fill input buffer with random numbers
     raysIn = camera.view(0)
@@ -24,9 +27,23 @@ def test_cameraRaySource(rng):
     raysOut = sampler.view(0)
     for field in raysOut.fields:
         assert np.allclose(raysIn[field], raysOut[field])
+    if polarized:
+        assert raysIn.item is theia.camera.PolarizedCameraRayItem
+    else:
+        assert raysIn.item is theia.camera.CameraRayItem
 
 
-def test_pencilCamera():
+def test_cameraSamplerMismatch():
+    with pytest.raises(RuntimeError):
+        camera = theia.camera.HostCameraRaySource(128, polarized=True)
+        sampler = theia.camera.CameraRaySampler(camera, 128, polarized=False)
+    with pytest.raises(RuntimeError):
+        camera = theia.camera.HostCameraRaySource(128, polarized=False)
+        sampler = theia.camera.CameraRaySampler(camera, 128, polarized=True)
+
+
+@pytest.mark.parametrize("polarized", [True, False])
+def test_pencilCamera(polarized: bool):
     N = 32 * 64
 
     # params
@@ -46,7 +63,7 @@ def test_pencilCamera():
         hitDirection=hitDir,
         hitNormal=hitNrm,
     )
-    sampler = theia.camera.CameraRaySampler(camera, N)
+    sampler = theia.camera.CameraRaySampler(camera, N, polarized=polarized)
     # run
     runPipeline([camera, sampler])
 
@@ -59,9 +76,14 @@ def test_pencilCamera():
     assert np.allclose(rays["hitPosition"], hitPos)
     assert np.allclose(rays["hitDirection"], hitDir)
     assert np.allclose(rays["hitNormal"], hitNrm)
+    if polarized:
+        # polarization ref was automatically generated, so just test its properties
+        assert (rays["direction"] * rays["polarizationRef"]).sum(-1).max() < 1e-6
+        assert np.abs(np.square(rays["polarizationRef"]).sum(-1) - 1.0).max() < 1e-6
 
 
-def test_flatCamera():
+@pytest.mark.parametrize("polarized", [True, False])
+def test_flatCamera(polarized: bool):
     N = 32 * 1024
 
     # params
@@ -75,7 +97,7 @@ def test_flatCamera():
         width=width, length=length, transform=trafo
     )
     philox = PhiloxRNG(key=0xC0FFEE)
-    sampler = theia.camera.CameraRaySampler(camera, N, rng=philox)
+    sampler = theia.camera.CameraRaySampler(camera, N, rng=philox, polarized=polarized)
     # run
     runPipeline([philox, camera, sampler])
 
@@ -91,9 +113,19 @@ def test_flatCamera():
     assert np.allclose(np.square(rays["hitDirection"]).sum(-1), 1.0)
     assert rays["hitDirection"][:, 2].max() <= 0.0
     assert np.allclose(rays["hitNormal"], (0.0, 0.0, 1.0))
+    if polarized:
+        # polarization ref was automatically generated, so just test its properties
+        assert (rays["direction"] * rays["polarizationRef"]).sum(-1).max() < 1e-6
+        assert np.abs(np.square(rays["polarizationRef"]).sum(-1) - 1.0).max() < 1e-6
+        # check if polRef is perpendicular to plane of scattering
+        hitRef = trafo.inverse().applyVec(rays["polarizationRef"])
+        inc = np.cross(rays["hitNormal"], rays["hitDirection"])
+        inc /= np.sqrt(np.square(inc).sum(-1))[:, None]
+        assert np.abs(np.abs((hitRef * inc).sum(-1)) - 1.0).max() < 1e-6
 
 
-def test_coneCamera():
+@pytest.mark.parametrize("polarized", [True, False])
+def test_coneCamera(polarized: bool):
     N = 32 * 1024
 
     # params
@@ -106,7 +138,7 @@ def test_coneCamera():
         position=pos, direction=dir, cosOpeningAngle=theta
     )
     philox = PhiloxRNG(key=0xC0FFEE)
-    sampler = theia.camera.CameraRaySampler(camera, N, rng=philox)
+    sampler = theia.camera.CameraRaySampler(camera, N, rng=philox, polarized=polarized)
     # run
     runPipeline([philox, camera, sampler])
 
@@ -121,9 +153,19 @@ def test_coneCamera():
     assert np.allclose(np.square(rays["hitDirection"]).sum(-1), 1.0)
     assert np.all(rays["hitDirection"][:, 2] <= -(1.0 - theta))
     assert np.allclose(rays["hitNormal"], (0.0, 0.0, 1.0))
+    if polarized:
+        # polarization ref was automatically generated, so just test its properties
+        assert (rays["direction"] * rays["polarizationRef"]).sum(-1).max() < 1e-6
+        assert np.abs(np.square(rays["polarizationRef"]).sum(-1) - 1.0).max() < 1e-6
+        # check if polRef is perpendicular to plane of scattering
+        inc = np.cross(dir, rays["direction"])
+        inc /= np.sqrt(np.square(inc).sum(-1))[:, None]
+        polRef = rays["polarizationRef"]
+        assert np.abs(np.abs((polRef * inc).sum(-1)) - 1.0).max() < 1e-6
 
 
-def test_lenseCamera():
+@pytest.mark.parametrize("polarized", [True, False])
+def test_lenseCamera(polarized: bool):
     N = 32 * 1024
 
     # params
@@ -139,7 +181,7 @@ def test_lenseCamera():
         width=width, length=length, focalLength=f, lenseRadius=r, transform=trafo
     )
     philox = PhiloxRNG(key=0xC0FFEE)
-    sampler = theia.camera.CameraRaySampler(camera, N, rng=philox)
+    sampler = theia.camera.CameraRaySampler(camera, N, rng=philox, polarized=polarized)
     # run
     runPipeline([philox, camera, sampler])
 
@@ -160,3 +202,12 @@ def test_lenseCamera():
     assert np.all(rays["hitPosition"].min(0) >= (-width / 2, -length / 2, 0.0))
     assert np.all(rays["hitPosition"].max(0) <= (width / 2, length / 2, 0.0))
     assert np.allclose(rays["hitNormal"], (0.0, 0.0, 1.0))
+    if polarized:
+        # polarization ref was automatically generated, so just test its properties
+        assert (rays["direction"] * rays["polarizationRef"]).sum(-1).max() < 1e-6
+        assert np.abs(np.square(rays["polarizationRef"]).sum(-1) - 1.0).max() < 1e-6
+        # check if polRef is perpendicular to plane of scattering
+        hitRef = trafo.inverse().applyVec(rays["polarizationRef"])
+        inc = np.cross(rays["hitNormal"], rays["hitDirection"])
+        inc /= np.sqrt(np.square(inc).sum(-1))[:, None]
+        assert np.abs(np.abs((hitRef * inc).sum(-1)) - 1.0).max() < 1e-6
