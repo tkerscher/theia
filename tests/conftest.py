@@ -12,9 +12,9 @@ sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 
 @pytest.fixture(scope="session", autouse=True)
 def gpu():
-    if not hp.isRaytracingSupported():
-        raise RuntimeError("This system does not support ray tracing!")
-    hp.enableRaytracing()
+    if hp.isRaytracingSupported():
+        # raise RuntimeError("This system does not support ray tracing!")
+        hp.enableRaytracing()
     # force device initialization
     hp.getCurrentDevice()
 
