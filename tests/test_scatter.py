@@ -95,7 +95,7 @@ def reflectance(cos_i, n_i, n_t):
 
     rs = (n_i * cos_i - n_t * cos_t) / (n_i * cos_i + n_t * cos_t)
     rp = (n_t * cos_i - n_i * cos_t) / (n_t * cos_i + n_i * cos_t)
-    return 0.5 * (rs * rs + rp * rp)
+    return rs, rp
 
 
 def test_reflectance(rng, shaderUtil):
@@ -124,8 +124,8 @@ def test_reflectance(rng, shaderUtil):
     # reserve memory
     query_buffer = hp.ArrayBuffer(Query, N)
     query_tensor = hp.ArrayTensor(Query, N)
-    result_buffer = hp.FloatBuffer(N)
-    result_tensor = hp.FloatTensor(N)
+    result_buffer = hp.FloatBuffer(N * 3)
+    result_tensor = hp.FloatTensor(N * 3)
 
     # fill input
     queries = query_buffer.numpy()
@@ -165,14 +165,13 @@ def test_reflectance(rng, shaderUtil):
     n_t = n_outside.copy()
     n_t[mask] = n_inside[mask]
     cos_i = np.abs(cos_theta)
-    r = reflectance(cos_i, n_i, n_t)
+    rs, rp = reflectance(cos_i, n_i, n_t)
 
     # check result
-    results = result_buffer.numpy()
-    assert results.min() >= 0.0
-    assert results.max() <= 1.0
-    # give here a little bit more error, since we also do table lookups
-    assert np.abs(r - result_buffer.numpy()).max() <= 1e-3
+    results = result_buffer.numpy().reshape((-1,3))
+    assert np.abs(rs - results[:,0]).max() < 1e-4
+    assert np.abs(rp - results[:,1]).max() < 1e-4
+    assert np.abs(n_t - results[:,2]).max() < 1e-6
 
 
 def test_volumeScatter(rng, shaderUtil):

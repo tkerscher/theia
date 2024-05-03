@@ -16,7 +16,7 @@ struct Query {
 };
 
 layout(scalar) readonly buffer QueryBuffer{ Query q[]; };
-layout(scalar) writeonly buffer ResultBuffer{ float r[]; };
+layout(scalar) writeonly buffer ResultBuffer{ vec3 r[]; };
 
 layout(push_constant) uniform Scene {
     uvec2 mat;
@@ -31,11 +31,11 @@ void main() {
     //look up refractive index
     MediumConstants consts = lookUpMedium(med, q[i].wavelength);
     //calculate reflectance
-    r[i] = reflectance(
-        mat,
-        q[i].wavelength,
-        consts.n,
-        q[i].direction,
-        q[i].normal
+    float r_s, r_p, n_t;
+    fresnelReflect(
+        mat, q[i].wavelength, consts.n,
+        q[i].direction, q[i].normal,
+        r_s, r_p, n_t
     );
+    r[i] = vec3(r_s, r_p, n_t);
 }
