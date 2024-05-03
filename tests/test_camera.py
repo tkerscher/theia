@@ -103,6 +103,9 @@ def test_flatCamera(polarized: bool):
 
     # check result
     rays = sampler.view(0)
+    localRayPos = trafo.inverse().apply(rays["position"])
+    assert np.abs(np.abs(localRayPos).max(0) - (width/2, length/2, 0)).max() < 1e-5
+    assert np.abs(localRayPos.mean(0)).max() < 5e-3
     assert np.allclose(trafo.apply(rays["hitPosition"]), rays["position"])
     assert np.abs(trafo.applyVec(rays["hitDirection"]) + rays["direction"]).max() < 5e-7
     assert np.allclose(rays["contrib"], width * length * 2.0 * np.pi)
