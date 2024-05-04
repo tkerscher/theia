@@ -75,11 +75,24 @@ void main() {
     [[unroll]] for (uint i = 1; i <= PATH_LENGTH; ++i, dim += SCENE_TRAVERSE_TRACE_RNG_STRIDE) {
         //trace ray
         bool last = i == PATH_LENGTH; //mark last trace
+        SurfaceHit hit;
         ResultCode result = trace(
-            ray, params.targetIdx,
+            ray, hit,
+            params.targetIdx,
             idx, dim,
             params.propagation,
-            allowResponse, last);
+            allowResponse
+        );
+        if (result >= 0) {
+            result = processInteraction(
+                ray, hit, params.targetIdx,
+                idx, dim + SCENE_TRAVERSE_TRACE_OFFSET,
+                params.propagation,
+                allowResponse,
+                true, //forward, i.e. trace photons
+                last
+            );
+        }
         onEvent(ray, result, idx, i);
         //stop codes are negative
         if (result < 0)

@@ -35,7 +35,11 @@ layout(local_size_x = BLOCK_SIZE) in;
 
 //disable MIS in tracer
 #define SCENE_TRAVERSE_DISABLE_MIS 1
+#ifdef POLARIZATION
+#define EXPORT_MUELLER 1
+#endif
 
+#include "math.glsl"
 #include "material.glsl"
 #include "ray.propagate.glsl"
 #include "ray.sample.glsl"
@@ -67,18 +71,26 @@ struct PathVertex {
     vec3 direction;
     uvec2 medium;
 
+    #ifdef POLARIZATION
+    vec4 stokes;
+    vec3 polRef;
+    #endif
+
     //TODO: MIS connection strategy
 
     float time;
     float contrib;
 };
 
-PathVertex createVertex(Ray ray, vec3 dir, bool connectable) {
+PathVertex createVertex(Ray ray, bool connectable) {
     return PathVertex(
         connectable,
         ray.position,
-        dir,
+        ray.direction,
         ray.medium,
+        #ifdef POLARIZATION
+        ray.stokes, ray.polRef,
+        #endif
         ray.time,
         ray.lin_contrib * exp(ray.log_contrib)
     );
@@ -99,6 +111,10 @@ PathVertex createVertex(Ray ray, vec3 dir, bool connectable) {
 PathVertex lightPath[LIGHT_PATH_LENGTH];
 uint nLight;
 void createLightSubPath(Ray ray, uint idx, uint dim) {
+    #ifdef POLARIZATION
+    mat4 mueller;
+    #endif
+
     bool allow = LIGHT_PATH_ALLOW_DIRECT;
     nLight = 0;
     [[unroll]] for (
@@ -106,23 +122,38 @@ void createLightSubPath(Ray ray, uint idx, uint dim) {
         i <= LIGHT_PATH_LENGTH;
         ++i, dim += SCENE_TRAVERSE_TRACE_RNG_STRIDE
     ) {
-        //remember ray's current direction; trace() will already sample a new one
-        vec3 dir = ray.direction;
+        bool allowResponse = LIGHT_PATH_ALLOW_RESPONSE && allow;
         //trace ray
+        SurfaceHit hit;
         ResultCode result = trace(
-            ray, params.targetId,
+            ray, hit,
+            params.targetId,
             idx, dim,
             params.propagation,
-            false/*LIGHT_PATH_ALLOW_RESPONSE && allow*/, false);
+            allowResponse
+        );
+        //create vertex if successfull (connectable if nothing was hit)
+        if (result < 0) break;
+        lightPath[nLight] = createVertex(ray, !hit.valid);
+        nLight++;
+        //process interaction & prepare next trace
+        if (result >= 0) {
+            result = processInteraction(
+                ray, hit, params.targetId,
+                idx, dim + SCENE_TRAVERSE_TRACE_OFFSET,
+                params.propagation,
+                #ifdef POLARIZATION
+                mueller,
+                #endif
+                allowResponse,
+                true,  //forward, i.e. photons
+                false  //last
+            );
+        }
         onEvent(ray, result, idx, i);
         //stop codes are negative
         if (result < 0)
             break;
-        
-        //store vertex
-        bool connectable = (result == RESULT_CODE_RAY_SCATTERED);
-        lightPath[nLight] = createVertex(ray, dir, connectable);
-        nLight++;
 
         //only needed for first iteration
         allow = true;
@@ -137,6 +168,10 @@ void createCameraRay(inout Ray ray, CameraRay camera, uint idx) {
     ray.position = camera.position;
     ray.direction = camera.direction;
     ray.medium = params.cameraMedium;
+    #ifdef POLARIZATION
+    ray.polRef = camera.polRef;
+    ray.stokes = vec4(1.0, 0.0, 0.0, 0.0); //not really needed
+    #endif
     //wavelength should still be valid
     ray.time = camera.timeDelta;
     ray.log_contrib = 1.0;
@@ -159,22 +194,33 @@ bool isVisible(vec3 obs, vec3 dir, float d) {
         gl_RayQueryCommittedIntersectionNoneEXT;
 }
 
-//calculates the extra factor we have to apply to account for the different
-//amount of paths we could sample for each path length
-float normalizeConnection(uint pathLength) {
-    //calculate number of connections for given path length
-    uint nLight = min(LIGHT_PATH_LENGTH, pathLength);
-    uint nCam = min(CAMERA_PATH_LENGTH, pathLength);
-    uint nCon = nLight + nCam - pathLength + 1;
+//calculates the number of possible light connections for a given path length
+//used for normalizing the specific path integral
+uint nConnections(uint pathLength) {
+    //calculate number of combinations between subpaths
+    uint firstLight = max(pathLength - CAMERA_PATH_LENGTH - 1, 1);
+    uint firstCam = max(min(CAMERA_PATH_LENGTH, pathLength - firstLight - 1), 0);
+    uint n = min(nLight - firstLight + 1, firstCam);
     //take contributions from light path into account
-#ifndef DISABLE_LIGHT_PATH_RESPONSE
-    nCon += 1;
-#endif
-    //norm factor is 1/nCon
-    return 1.0 / float(nCon);
+    #ifndef DISABLE_DIRECT_LIGHTING
+    //uint(bool) -> bool ? 1 : 0
+    n += uint(pathLength > 0 && pathLength <= LIGHT_PATH_LENGTH + 1);
+    #endif
+    return n;
 }
 
-void connectVertex(Ray ray, CameraRay camera, PathVertex vertex, uint pathLength) {
+void connectVertex(
+    Ray ray,
+    CameraRay camera,
+    PathVertex vertex,
+    #ifdef POLARIZATION
+    mat4 cameraMueller,
+    vec3 hitPolRef,
+    #endif
+    uint pathLength
+) {
+
+    Medium medium = Medium(ray.medium);
     //create connection segment
     vec3 con = vertex.position - ray.position;
     float d = length(con);
@@ -183,17 +229,32 @@ void connectVertex(Ray ray, CameraRay camera, PathVertex vertex, uint pathLength
     if (!isVisible(ray.position, con, d))
         return;
 
+    #ifdef POLARIZATION
+    //connect chains of mueller matrices:
+    vec3 polRef = vertex.polRef;
+    vec4 stokes = vertex.stokes;
+    //rotate light to first scatter plane
+    stokes = rotatePolRef(vertex.direction, polRef, -con, polRef) * stokes;
+    //apply phase matrix on first scatter
+    stokes = lookUpPhaseMatrix(medium, dot(vertex.direction, -con)) * stokes;
+    //rotate to second scatter plane
+    stokes = rotatePolRef(-con, polRef, -ray.direction, polRef) * stokes;
+    //apply phase matrix on second scatter
+    stokes = lookUpPhaseMatrix(medium, dot(con, -ray.direction)) * stokes;
+    //rotate to match reference plane on camera path
+    stokes = matchPolRef(-ray.direction, polRef, ray.polRef) * stokes;
+    //finally apply the accumulated mueller matrix from the camera path
+    stokes = cameraMueller * stokes;
+    #endif
+
     //evaluate scattering phase function
-    Medium medium = Medium(ray.medium);
-    float attenuation = scatterProb(medium, ray.direction, con);
-    attenuation *= scatterProb(medium, vertex.direction, -con);
+    float attenuation = scatterProb(medium, ray.direction, con) * ray.constants.mu_s;
+    attenuation *= scatterProb(medium, vertex.direction, -con) * ray.constants.mu_s;
     //apply normalization factor
-    attenuation *= normalizeConnection(pathLength);
+    attenuation /= float(nConnections(pathLength));
 
     //propagate connection segment to update samples
     //(ray is a local copy so we're fine to do whatever)
-    //note that the tracing algorithm of both sub paths already applied a factor
-    //mu_s to prepare the next tracing step, so we must not do that again here
     ray.direction = con;
     propagateRay(ray, d, params.propagation, false);
 
@@ -202,7 +263,12 @@ void connectVertex(Ray ray, CameraRay camera, PathVertex vertex, uint pathLength
     float time = ray.time + vertex.time;
     float contrib = ray.lin_contrib * exp(ray.log_contrib);
     contrib *= attenuation * vertex.contrib;
-    //again: the two factor mu_s were already applied by trace()
+
+    #ifdef POLARIZATION
+    //normalize stokes
+    contrib *= stokes.x;
+    stokes /= stokes.x;
+    #endif
     
     //create response
     if (time <= params.propagation.maxTime && contrib != 0.0) {
@@ -210,6 +276,9 @@ void connectVertex(Ray ray, CameraRay camera, PathVertex vertex, uint pathLength
             camera.hitPosition,
             camera.hitDirection,
             camera.hitNormal,
+            #ifdef POLARIZATION
+            stokes, hitPolRef,
+            #endif
             ray.wavelength,
             time, contrib
         ));
@@ -217,11 +286,34 @@ void connectVertex(Ray ray, CameraRay camera, PathVertex vertex, uint pathLength
 }
 
 //tries all connections with the light sub path and create response if successfull
-void connectCameraRay(const Ray ray, CameraRay camera, uint nCamera) {
+/**
+ * Connects the given camera ray to all recorded light vertices if possible
+ *
+ * ray: Ray containing propagation information
+ * camera: Additional information about camera ray
+ * camMueller: Mueller matrix describing the change in polarization along camera subpath
+ * nCamera: Zero index of camera subpath vertex (camera is -1)
+*/
+void connectCameraRay(
+    const Ray ray,
+    CameraRay camera,
+    #ifdef POLARIZATION
+    mat4 camMueller,
+    vec3 hitPolRef,
+    #endif
+    uint nCamera
+) {
     //iterate over all vertices
     for (uint i = 0; i < nLight; ++i) {
-        if (lightPath[i].connectable && lightPath[i].medium == ray.medium)
-           connectVertex(ray, camera, lightPath[i], nCamera + i + 2);
+        if (lightPath[i].connectable && lightPath[i].medium == ray.medium) {
+            //i and nCamera are zero index
+            //-> total path length is i + nCamera + 2(zero index) + 1(connection)
+            #ifdef POLARIZATION
+            connectVertex(ray, camera, lightPath[i], camMueller, hitPolRef, nCamera + i + 3);
+            #else
+            connectVertex(ray, camera, lightPath[i], nCamera + i + 3);
+            #endif
+        }
     }
 }
 
@@ -230,28 +322,70 @@ void simulateCamera(Ray ray, CameraRay camera, uint idx, uint dim) {
     //change light to camera, effectively passing the wavelengths
     createCameraRay(ray, camera, idx);
 
+    #ifdef POLARIZATION
+    mat4 mueller = mat4(1.0);       //last mueller matrix
+    mat4 cumMueller = mat4(1.0);    //accumulated mueller matrix
+
+    //create poleration reference in object space
+    //we know it's in the plane of incidence on the normal
+    //since stokes vector is the same after rotating 180deg, we can just use
+    //the cross product and either is fine (+/-hitPolRef have the same stokes vector)
+    vec3 hitPolRef = crosser(camera.hitDirection, camera.hitNormal);
+    //degenerate case: dir || normal
+    // -> just choose any perpendicular to objDir
+    float len = length(hitPolRef);
+    if (len > 1e-5) {
+        hitPolRef /= len;
+    }
+    else {
+        //first two columns of local cosy trafo are vectors perpendicular to hitDir
+        hitPolRef = createLocalCOSY(camera.hitDirection)[0];
+    }
+    #endif
+
     [[unroll]] for (uint i = 0; i < CAMERA_PATH_LENGTH; ++i) {
-        //remember ray's current direction; trace() will already sample a new one
-        vec3 oldDir = ray.direction;
         //trace ray
+        SurfaceHit hit;
         ResultCode result = trace(
-            ray, params.targetId,
+            ray, hit,
+            params.targetId,
             idx, dim,
             params.propagation,
-            false, false);
+            false               //allowResponse
+        );
+
+        //create connections if possible
+        if (result >= 0 && !hit.valid) {
+            #ifdef POLARIZATION
+            connectCameraRay(ray, camera, cumMueller, hitPolRef, i);
+            #else
+            connectCameraRay(ray, camera, i);
+            #endif
+        }
+
+        //process interaction
+        if (result >= 0) {
+            result = processInteraction(
+                ray, hit, params.targetId,
+                idx, dim + SCENE_TRAVERSE_TRACE_OFFSET,
+                params.propagation,
+                #ifdef POLARIZATION
+                mueller,
+                #endif
+                false,      //allowResponse
+                false,      //backward, i.e. trace importance particles
+                false       //not last
+            );
+        }
         onEvent(ray, result, idx, nLight + i + 1);
         //stop codes are negative
         if (result < 0)
             break;
-        
-        //temporarly restore old ray direction for connection algorithm
-        vec3 tmp = ray.direction;
-        ray.direction = oldDir;
-        //create connections if possible
-        if (result == RESULT_CODE_RAY_SCATTERED)
-            connectCameraRay(ray, camera, i);
-        //restore new ray direction for tracing
-        ray.direction = tmp;
+
+        #ifdef POLARIZATION
+        //cummulate mueller matrix
+        cumMueller = cumMueller * mueller;
+        #endif
     }
 }
 

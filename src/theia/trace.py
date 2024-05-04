@@ -11,7 +11,7 @@ from theia.estimator import HitResponse
 from theia.light import LightSource
 from theia.random import RNG
 from theia.scene import RectBBox, Scene, SphereBBox
-from theia.util import ShaderLoader, compileShader
+from theia.util import ShaderLoader, compileShader, createPreamble
 import theia.units as u
 
 import warnings
@@ -165,26 +165,33 @@ class TrackRecordCallback(TraceEventCallback):
         Number of rays that can be recorded
     length: int
         Max number of points per track
+    polarized: bool, default=False
+        Whether to save polarization state. Save unpolarized state and zero
+        vector as reference frame if ray contains no polarization state.
     retrieve: bool, default=True
-        Wether to retrieve the tracks from the device
-
-    Note
-    ----
-    Mind that the total length is 1 + `nScatter` since it includes the
-    start point.
+        Whether to retrieve the tracks from the device
     """
 
     name = "Track Recorder"
 
-    def __init__(self, capacity: int, length: int, *, retrieve: bool = True) -> None:
+    def __init__(
+        self,
+        capacity: int,
+        length: int,
+        *,
+        polarized: bool = False,
+        retrieve: bool = True,
+    ) -> None:
         super().__init__()
         # save params
         self._capacity = capacity
         self._length = length
         self._retrieve = retrieve
+        self._polarized = polarized
 
         # allocate memory
-        words = capacity * length * 4 + capacity * 2  # track + length + codes
+        self._cols = 11 if polarized else 4
+        words = capacity * length * self._cols + capacity * 2  # track + length + codes
         self._tensor = hp.ByteTensor(words * 4)
         self._buffer = [hp.RawBuffer(words * 4) for _ in range(2)]
 
@@ -199,6 +206,11 @@ class TrackRecordCallback(TraceEventCallback):
         return self._length
 
     @property
+    def polarized(self) -> bool:
+        """Whether polarization state is recorded"""
+        return self._polarized
+
+    @property
     def retrieve(self) -> bool:
         """Wether to retrieve the tracks from the device"""
         return self._retrieve
@@ -208,9 +220,11 @@ class TrackRecordCallback(TraceEventCallback):
 
     @property
     def sourceCode(self) -> str:
-        preamble = ""
-        preamble += f"#define TRACK_COUNT {self.capacity}\n"
-        preamble += f"#define TRACK_LENGTH {self.length}\n"
+        preamble = createPreamble(
+            TRACK_COUNT=self.capacity,
+            TRACK_LENGTH=self.length,
+            TRACK_POLARIZED=self.polarized,
+        )
         return preamble + self._sourceCode
 
     @property
@@ -238,12 +252,12 @@ class TrackRecordCallback(TraceEventCallback):
         adr = self._buffer[i].address
         pLengths = (c_uint32 * self.capacity).from_address(adr)
         pCodes = (c_int32 * self.capacity).from_address(adr + 4 * self.capacity)
-        n = self.length * self.capacity * 4
+        n = self.length * self.capacity * self._cols
         pTracks = (c_float * n).from_address(adr + 8 * self.capacity)
         # construct numpy array
         lengths = as_array(pLengths)
         codes = as_array(pCodes)
-        tracks = as_array(pTracks).reshape((4, self.length, self.capacity))
+        tracks = as_array(pTracks).reshape((self._cols, self.length, self.capacity))
         # change from (coords, ray, event) -> (ray, event, coords)
         tracks = tracks.transpose(2, 1, 0)
         return tracks, lengths, codes
@@ -310,6 +324,7 @@ class Tracer(PipelineStage):
         maxHits: int,
         normalization: float,
         nRNGSamples: int,
+        polarized: bool,
     ) -> None:
         super().__init__(params, extra)
         # save props
@@ -317,8 +332,9 @@ class Tracer(PipelineStage):
         self._maxHits = maxHits
         self._normalization = normalization
         self._nRNGSamples = nRNGSamples
+        self._polarized = polarized
         # prepare response
-        response.prepare(maxHits)
+        response.prepare(maxHits, polarized)
 
     @property
     def maxHits(self) -> int:
@@ -337,6 +353,11 @@ class Tracer(PipelineStage):
     def nRNGSamples(self) -> int:
         """Amount of random numbers drawn per ray"""
         return self._nRNGSamples
+
+    @property
+    def polarized(self) -> bool:
+        """Whether polarization effects are simulated"""
+        return self._polarized
 
     @property
     def response(self) -> HitResponse:
@@ -381,6 +402,8 @@ class VolumeTracer(Tracer):
     maxTime: float, default=1000.0 ns
         Max total time including delay from the source and travel time, after
         which a ray gets stopped
+    polarized: bool, default=False
+        Whether to simulate polarization effects.
     disableDirectLighting: bool, default=False
         Whether to ignore contributions from direct lighting, i.e. light paths
         with no scattering. If True, one can use a more performant direct
@@ -448,6 +471,7 @@ class VolumeTracer(Tracer):
         scatterCoefficient: float = 0.01 / u.m,
         traceBBox: RectBBox = RectBBox((-1.0 * u.km,) * 3, (1.0 * u.km,) * 3),
         maxTime: float = 1000.0 * u.ns,
+        polarized: bool = False,
         disableDirectLighting: bool = False,
         disableTargetSampling: bool = False,
         blockSize: int = 128,
@@ -470,6 +494,7 @@ class VolumeTracer(Tracer):
             maxHits=maxHits,
             normalization=1.0 / batchSize,
             nRNGSamples=source.nRNGSamples + rngStride * pathLength,
+            polarized=polarized,
         )
         # save params
         self._batchSize = batchSize
@@ -495,16 +520,16 @@ class VolumeTracer(Tracer):
 
         # compile code if needed
         if code is None:
+            preamble = createPreamble(
+                BATCH_SIZE=batchSize,
+                BLOCK_SIZE=blockSize,
+                DIM_OFFSET=source.nRNGSamples,
+                DISABLE_DIRECT_LIGHTING=disableDirectLighting,
+                DISABLE_MIS=disableTargetSampling,
+                PATH_LENGTH=pathLength,
+                POLARIZATION=polarized,
+            )
             # create preamble
-            preamble = ""
-            if disableDirectLighting:
-                preamble += "#define DISABLE_DIRECT_LIGHTING 1\n"
-            if disableTargetSampling:
-                preamble += "#define DISABLE_MIS 1\n"
-            preamble += f"#define BATCH_SIZE {batchSize}\n"
-            preamble += f"#define BLOCK_SIZE {blockSize}\n"
-            preamble += f"#define DIM_OFFSET {source.nRNGSamples}\n"
-            preamble += f"#define PATH_LENGTH {pathLength}\n\n"
             headers = {
                 "callback.glsl": callback.sourceCode,
                 "response.glsl": response.sourceCode,
@@ -632,6 +657,8 @@ class SceneTracer(Tracer):
     maxTime: float, default=1000.0 ns
         Max total time including delay from the source and travel time, after
         which a ray gets stopped
+    polarized: bool, default=False
+        Whether to simulate polarization effects.
     disableDirectLighting: bool, default=False
         Whether to ignore contributions from direct lighting, i.e. light paths
         with no scattering. If True, one can use a more performant direct
@@ -692,6 +719,7 @@ class SceneTracer(Tracer):
         targetIdx: int = 0,
         scatterCoefficient: float = 0.01 / u.m,
         maxTime: float = 1000.0 * u.ns,
+        polarized: bool = False,
         disableDirectLighting: bool = False,
         disableTargetSampling: bool = False,
         disableTransmission: bool = False,
@@ -724,6 +752,7 @@ class SceneTracer(Tracer):
             maxHits=maxHits,
             normalization=1.0 / batchSize,
             nRNGSamples=source.nRNGSamples + rngStride * maxPathLength,
+            polarized=polarized,
         )
 
         # save params
@@ -752,19 +781,17 @@ class SceneTracer(Tracer):
 
         # compile code if needed
         if code is None:
-            preamble = ""
-            if disableDirectLighting:
-                preamble += "#define DISABLE_DIRECT_LIGHTING 1\n"
-            if disableTargetSampling:
-                preamble += "#define DISABLE_MIS 1\n"
-            if disableTransmission:
-                preamble += "#define DISABLE_TRANSMISSION 1\n"
-            if disableVolumeBorder:
-                preamble += "#define DISABLE_VOLUME_BORDER 1\n"
-            preamble += f"#define BATCH_SIZE {batchSize}\n"
-            preamble += f"#define BLOCK_SIZE {blockSize}\n"
-            preamble += f"#define DIM_OFFSET {source.nRNGSamples}\n"
-            preamble += f"#define PATH_LENGTH {maxPathLength}\n\n"
+            preamble = createPreamble(
+                BATCH_SIZE=batchSize,
+                BLOCK_SIZE=blockSize,
+                DISABLE_DIRECT_LIGHTING=disableDirectLighting,
+                DISABLE_MIS=disableTargetSampling,
+                DISABLE_TRANSMISSION=disableTransmission,
+                DISABLE_VOLUME_BORDER=disableVolumeBorder,
+                DIM_OFFSET=source.nRNGSamples,
+                PATH_LENGTH=maxPathLength,
+                POLARIZATION=polarized,
+            )
             headers = {
                 "callback.glsl": callback.sourceCode,
                 "response.glsl": response.sourceCode,
@@ -889,6 +916,8 @@ class BidirectionalPathTracer(Tracer):
     maxTime: float, default=1000.0 ns
         Max total time including delay from each source and travel time, after
         which no responses are generated.
+    polarized: bool, default=False
+        Whether to simulate polarization effects.
     cameraMedium: Optional[int], default=None
         Medium the camera is submerged in. If `None`, same as `scene.medium`.
     disableDirectLighting: bool, default=False
@@ -952,6 +981,7 @@ class BidirectionalPathTracer(Tracer):
         targetIdx: int = 0,
         scatterCoefficient: float = 0.01 / u.m,
         maxTime: float = 1000.0 * u.ns,
+        polarized: bool = False,
         cameraMedium: Optional[int] = None,
         disableDirectLighting: bool = False,
         disableLightPathResponse: bool = False,
@@ -980,6 +1010,7 @@ class BidirectionalPathTracer(Tracer):
             maxHits=maxHits,
             normalization=(1.0 / batchSize),
             nRNGSamples=nRNG,
+            polarized=polarized,
         )
 
         # save params
@@ -1011,21 +1042,19 @@ class BidirectionalPathTracer(Tracer):
 
         # compile code if needed
         if code is None:
-            preamble = ""
-            if disableDirectLighting:
-                preamble += "#define DISABLE_DIRECT_LIGHTING 1\n"
-            if disableLightPathResponse:
-                preamble += "#define DISABLE_LIGHT_PATH_RESPONSE 1\n"
-            if disableTransmission:
-                preamble += "#define DISABLE_TRANSMISSION 1\n"
-            if disableVolumeBorder:
-                preamble += "#define DISABLE_VOLUME_BORDER 1\n"
-            preamble += f"#define BATCH_SIZE {batchSize}\n"
-            preamble += f"#define BLOCK_SIZE {blockSize}\n"
-            preamble += f"#define DIM_OFFSET_LIGHT {source.nRNGSamples}\n"
-            preamble += f"#define DIM_OFFSET_CAMERA {camera.nRNGSamples}\n"
-            preamble += f"#define LIGHT_PATH_LENGTH {lightPathLength}\n"
-            preamble += f"#define CAMERA_PATH_LENGTH {cameraPathLength}\n\n"
+            preamble = createPreamble(
+                BATCH_SIZE=batchSize,
+                BLOCK_SIZE=blockSize,
+                CAMERA_PATH_LENGTH=cameraPathLength,
+                DIM_OFFSET_CAMERA=camera.nRNGSamples,
+                DIM_OFFSET_LIGHT=source.nRNGSamples,
+                DISABLE_DIRECT_LIGHTING=disableDirectLighting,
+                DISABLE_LIGHT_PATH_RESPONSE=disableLightPathResponse,
+                DISABLE_TRANSMISSION=disableTransmission,
+                DISABLE_VOLUME_BORDER=disableVolumeBorder,
+                LIGHT_PATH_LENGTH=lightPathLength,
+                POLARIZATION=polarized,
+            )
             headers = {
                 "callback.glsl": callback.sourceCode,
                 "response.glsl": response.sourceCode,
