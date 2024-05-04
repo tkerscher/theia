@@ -1,7 +1,6 @@
 #ifndef _SCATTER_VOLUME_INCLUDE
 #define _SCATTER_VOLUME_INCLUDE
 
-#include "cosy.glsl"
 #include "math.glsl"
 #include "material.glsl"
 
@@ -26,22 +25,28 @@ vec3 scatterDir(vec3 prevDir, float cos_theta, float phi) {
     return normalize(trafo * localScattered);
 }
 
-vec3 scatter(const Medium medium, vec3 inDir, vec2 rng, out float p) {
+float sampleScatterDir(
+    const Medium medium, vec3 inDir, vec2 rng,
+    out float cos_theta, out float phi
+) {
     //importance sample scattering phase function
-    float phi = rng.x * TWO_PI;
-    float cos_theta;
+    phi = rng.x * TWO_PI;
     if (uint64_t(medium.phase_sampling) != 0) {
         cos_theta = lookUp(medium.phase_sampling, rng.y);
         cos_theta = clamp(cos_theta, -1.0, 1.0);
         //look up propability (assume that phase_sampling implies log_phase table)
-        p = exp(lookUp(medium.log_phase, 0.5 * (cos_theta + 1.0)));
+        return exp(lookUp(medium.log_phase, 0.5 * (cos_theta + 1.0)));
     }
     else {
         cos_theta = 2.0 * rng.y - 1.0;
         //constant probability
-        p = INV_4PI;
+        return INV_4PI;
     }
+}
 
+vec3 scatter(const Medium medium, vec3 inDir, vec2 rng, out float p) {
+    float cos_theta, phi;
+    p = sampleScatterDir(medium, inDir, rng, cos_theta, phi);
     //scatter
     return scatterDir(inDir, cos_theta, phi);
 }
