@@ -13,6 +13,10 @@ Ray createRay(const SourceRay source, const Medium medium) {
 #ifndef USE_GLOBAL_MEDIUM
         uvec2(medium),
 #endif
+#ifdef POLARIZATION
+        source.stokes,
+        source.polRef,
+#endif
         source.wavelength,
         source.startTime,
         source.contrib, //lin_contrib
