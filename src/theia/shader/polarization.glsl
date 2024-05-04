@@ -31,10 +31,29 @@ mat4 rotatePolRef(vec3 dir, vec3 ref, vec3 new, out vec3 new_ref) {
         new_ref /= len;
     }
     else {
+        //ref and new_ref equal -> do nothing
         new_ref = ref;
+        return mat4(1.0);
     }
     float cos_phi = dot(ref, new_ref);
     float sin_phi = dot(crosser(ref, new_ref), dir);
+
+    //create rotation matrix
+    float c = 2.0 * cos_phi * cos_phi - 1.0;    //cos(2phi)
+    float s = 2.0 * cos_phi * sin_phi;          //sin(2phi)
+    //assemble reference frame rotation matrix (column major!)
+    return mat4(
+        1.0, 0.0, 0.0, 0.0,
+        0.0,   c,   s, 0.0,
+        0.0,  -s,   c, 0.0,
+        0.0, 0.0, 0.0, 1.0
+    );
+}
+
+//creates rotation matrix transforming oldRef to newRef, both perpendicular to dir
+mat4 matchPolRef(vec3 dir, vec3 oldRef, vec3 newRef) {
+    float cos_phi = dot(oldRef, newRef);
+    float sin_phi = dot(crosser(oldRef, newRef), dir);
 
     //create rotation matrix
     float c = 2.0 * cos_phi * cos_phi - 1.0;    //cos(2phi)
@@ -70,9 +89,10 @@ mat4 lookUpPhaseMatrix(const Medium medium, float cos_theta) {
     );
 }
 
-mat4 polarizerMatrix(float attenuation, float p, float s) {
-    float m12 = (p*p - s*s) / attenuation;
-    float m33 = (2.0*p*s) / attenuation;
+mat4 polarizerMatrix(float p, float s) {
+    float att = p*p + s*s;
+    float m12 = (p*p - s*s) / att;
+    float m33 = (2.0*p*s) / att;
     //assemble matrix (column major!)
     return mat4(
         1.0, m12, 0.0, 0.0,
