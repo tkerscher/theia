@@ -31,7 +31,7 @@ float sampleScatterLength(const Ray ray, const PropagateParams params, float u) 
 //Updates samples in ray as if they traveled a given distance.
 //Includes sampling propabilities and check for maxTime
 //Set scatter=true, if mu_s should be applied to lin_contrib
-ResultCode updateSamples(
+ResultCode updateRay(
     inout Ray ray,
     const float dist,
     const PropagateParams params,
@@ -40,7 +40,7 @@ ResultCode updateSamples(
     ray.log_contrib -= ray.constants.mu_e * dist;
     ray.time += dist / ray.constants.vg;
     if (scatter) {
-        ray.lin_contrib += ray.constants.mu_s;
+        ray.lin_contrib *= ray.constants.mu_s;
     }
 
     //return result of boundary check
@@ -48,7 +48,7 @@ ResultCode updateSamples(
 }
 
 //Propagates the given ray in its direction for the given distance
-//Updates its samples accordingly (see updateSamples())
+//Updates its samples accordingly (see updateRay())
 //Set scatter=true, if mu_s should be applied to lin_contrib
 ResultCode propagateRay(
     inout Ray ray,
@@ -67,7 +67,7 @@ ResultCode propagateRay(
     }
 
     //update samples
-    return updateSamples(ray, dist, params, scatter);
+    return updateRay(ray, dist, params, scatter);
 }
 
 //updates ray with contribution from importance sampling
