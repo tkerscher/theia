@@ -11,6 +11,14 @@ struct Ray {
     uvec2 medium;
 #endif
 
+#ifdef POLARIZATION
+    //stokes vector
+    vec4 stokes;
+    //polarization reference frame orientation
+    //points to E_y
+    vec3 polRef;
+#endif
+
     float wavelength;
     float time;
     float lin_contrib;
