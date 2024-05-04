@@ -13,7 +13,7 @@ layout(local_size_x = BATCH_SIZE) in;
 //(would require two different version of CameraQueue)
 #ifdef CAMERA_QUEUE_POLARIZED
 #define SAMPLER_CAMERA_QUEUE_POLARIZED
-#undef LIGHT_QUEUE_POLARIZED
+#undef CAMERA_QUEUE_POLARIZED
 #endif
 //user provided code
 #include "rng.glsl"
