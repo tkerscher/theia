@@ -10,7 +10,7 @@ from ctypes import Structure, c_float, c_uint32
 from theia.util import ShaderLoader, compileShader, createPreamble
 
 from numpy.typing import NDArray
-from typing import Dict, List, Set, Type, Optional
+from typing import Dict, List, Set, Type, Union, Optional
 
 
 __all__ = [
@@ -23,8 +23,8 @@ __all__ = [
     "HitRecorder",
     "HitReplay",
     "HitResponse",
-    "LambertHitResponse",
     "PolarizedHitItem",
+    "UniformHitResponse",
     "ValueHitResponse",
     "ValueItem",
 ]
@@ -173,7 +173,7 @@ class HitRecorder(HitResponse):
         return preamble + self._sourceCode
 
     @property
-    def tensor(self) -> QueueTensor | None:
+    def tensor(self) -> Union[QueueTensor, None]:
         """Tensor holding the queue storing the hits"""
         return self._tensor
 
@@ -357,7 +357,7 @@ class ValueHitResponse(HitResponse):
 
     def __init__(
         self,
-        queue: QueueTensor | None,
+        queue: Union[QueueTensor, None],
         params: Dict[str, Type[Structure]] = {},
         extra: Set[str] = set(),
     ) -> None:
@@ -374,7 +374,7 @@ class ValueHitResponse(HitResponse):
             )
 
     @property
-    def queue(self) -> QueueTensor | None:
+    def queue(self) -> Union[QueueTensor, None]:
         """Tensor to be filled with `ValueItem` by this response function"""
         return self._queue
 
@@ -400,22 +400,22 @@ class ValueHitResponse(HitResponse):
         program.bindParams(ValueQueueOut=self.queue)
 
 
-class LambertHitResponse(ValueHitResponse):
+class UniformHitResponse(ValueHitResponse):
     """
-    Response function producing a value according to Lambert's cosine law.
+    Response function simulating a perfect isotropic and uniform response.
 
     Parameters
     ----------
-    queue: QueueTensor | None
-        Queue in which to the `ValueItem` will be stored.
-        If `None` creates one during preparation.
+    queue: QueueTensor | None, default=None
+        Queue in which the `ValueItem` will be stored.
+        If `None`, creates one during preparation.
     """
 
-    def __init__(self, queue: QueueTensor | None = None) -> None:
+    def __init__(self, queue: Union[QueueTensor, None] = None) -> None:
         super().__init__(queue)
 
     # property via descriptor
-    valueFunction = ShaderLoader("response.lambert.glsl")
+    valueFunction = ShaderLoader("response.uniform.glsl")
 
 
 class Estimator(PipelineStage):

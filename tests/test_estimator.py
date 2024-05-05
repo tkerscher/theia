@@ -84,12 +84,12 @@ def test_histogram(rng):
     assert np.allclose(result, expected * NORM)
 
 
-def test_lambertResponse(rng):
+def test_uniformResponse(rng):
     N = 32 * 1024
 
     queue = QueueTensor(theia.estimator.ValueItem, N)
-    lambert = theia.estimator.LambertHitResponse(queue)
-    replay = theia.estimator.HitReplay(N, lambert)
+    uniform = theia.estimator.UniformHitResponse(queue)
+    replay = theia.estimator.HitReplay(N, uniform)
     fetch = RetrieveTensorStage(queue)
 
     hits = replay.view(0)
@@ -113,5 +113,4 @@ def test_lambertResponse(rng):
     value = value[time.argsort()]
 
     # compare with expected results
-    expected = -np.multiply(hits["direction"], hits["normal"]).sum(-1) * hits["contrib"]
-    assert np.allclose(value, expected)
+    assert np.allclose(value, hits["contrib"])
