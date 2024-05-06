@@ -172,15 +172,15 @@ def test_uniformPhoton():
     N = 32 * 256
     lamRange, dLam = (350.0, 750.0) * u.nm, 400.0 * u.nm
     timeRange, dt = (20.0, 70.0) * u.ns, 50.0 * u.ns
-    intensity = 8.0
+    budget = 8.0
     # contrib = L/p(t,lam); p(t, lam) = 1.0 / (|dLam|*|dt|)
-    contrib = intensity * dLam * dt
+    contrib = budget * dLam * dt
 
     # create pipeline
     philox = theia.random.PhiloxRNG(key=0xC0110FFC0FFEE)
     rays = theia.light.PencilRaySource()
     photons = theia.light.UniformPhotonSource(
-        lambdaRange=lamRange, timeRange=timeRange, intensity=intensity
+        lambdaRange=lamRange, timeRange=timeRange, budget=budget
     )
     light = theia.light.ModularLightSource(rays, photons)
     sampler = theia.light.LightSampler(light, N, rng=philox)

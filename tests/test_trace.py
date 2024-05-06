@@ -26,7 +26,7 @@ def test_VolumeTracer(disableDirect: bool, disableTarget: bool, limitTime: bool,
     T0, T1 = 10.0 * u.ns, 20.0 * u.ns
     T_MAX = 1.0 * u.us if limitTime else 100.0 * u.us
     light_pos = (-1.0, -7.0, 0.0) * u.m
-    light_intensity = 1000.0
+    light_budget = 1000.0
     target_pos, target_radius = (5.0, 2.0, -8.0) * u.m, 4.0 * u.m
 
     # create water medium
@@ -44,7 +44,7 @@ def test_VolumeTracer(disableDirect: bool, disableTarget: bool, limitTime: bool,
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
     rays = theia.light.SphericalRaySource(position=light_pos)
     photons = theia.light.UniformPhotonSource(
-        intensity=light_intensity,
+        budget=light_budget,
         timeRange=(T0, T1),
     )
     source = theia.light.ModularLightSource(rays, photons)
@@ -142,7 +142,7 @@ def test_SceneTracer(
     T0, T1 = 10.0 * u.ns, 20.0 * u.ns
     T_MAX = 1.0 * u.us
     light_pos = (-1.0, -7.0, 0.0) * u.m
-    light_intensity = 1000.0
+    light_budget = 1000.0
 
     # create materials
     water = WaterModel().createMedium()
@@ -179,7 +179,7 @@ def test_SceneTracer(
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
     rays = theia.light.SphericalRaySource(position=light_pos)
     photons = theia.light.UniformPhotonSource(
-        intensity=light_intensity,
+        budget=light_budget,
         timeRange=(T0, T1),
     )
     source = theia.light.ModularLightSource(rays, photons)
@@ -570,7 +570,7 @@ def test_volumeBorder():
     photons = theia.light.UniformPhotonSource(
         lambdaRange=(LAMBDA, LAMBDA),  # const lambda
         timeRange=(0.0, 0.0),  # const time
-        intensity=1.0,
+        budget=1.0,
     )
     source = theia.light.ModularLightSource(rays, photons)
     estimator = theia.estimator.EmptyResponse()
@@ -663,7 +663,7 @@ def test_tracer_reflection(flag, reflectance, err):
     photons = theia.light.UniformPhotonSource(
         lambdaRange=(500.0, 500.0) * u.nm,  # const lambda
         timeRange=(0.0, 0.0),  # const time
-        intensity=1.0,
+        budget=1.0,
     )
     source = theia.light.ModularLightSource(rays, photons)
     recorder = theia.estimator.HitRecorder()

@@ -521,8 +521,9 @@ class UniformPhotonSource(PhotonSource):
         min and max wavelength the source emits
     timeRange: (float, float), default=(0.0, 100.0)
         start and stop time of the light source
-    intensity: float, default=1.0
-        intensity of the light source
+    budget: float, default=1.0
+        Total budget the photon source distributes uniformly in time and
+        wavelength, e.g. total energy or photon count.
 
     Stage Parameters
     ----------------
@@ -530,8 +531,8 @@ class UniformPhotonSource(PhotonSource):
         min and max wavelength the source emits
     timeRange: (float, float), default=(0.0, 100.0)
         start and stop time of the light source
-    intensity: float, default=1.0
-        intensity of the light source
+    budget: float, default=1.0
+        Total budget of the photon source
     """
 
     class SourceParams(Structure):
@@ -549,26 +550,26 @@ class UniformPhotonSource(PhotonSource):
         *,
         lambdaRange: Tuple[float, float] = (300.0, 700.0),
         timeRange: Tuple[float, float] = (0.0, 100.0),
-        intensity: float = 1.0,
+        budget: float = 1.0,
     ) -> None:
         super().__init__(
             nRNGSamples=2,
             params={"SourceParams": self.SourceParams},
-            extra={"intensity"},
+            extra={"budget"},
         )
         # save params
         self.setParams(
-            lambdaRange=lambdaRange, timeRange=timeRange, intensity=intensity
+            lambdaRange=lambdaRange, timeRange=timeRange, budget=budget
         )
 
     @property
-    def intensity(self) -> float:
-        """Intensity of the light source"""
-        return self._intensity
+    def budget(self) -> float:
+        """Budget of the light source"""
+        return self._budget
 
-    @intensity.setter
-    def intensity(self, value: float) -> None:
-        self._intensity = value
+    @budget.setter
+    def budget(self, value: float) -> None:
+        self._budget = value
 
     # sourceCode via descriptor
     sourceCode = ShaderLoader("photonsource.uniform.glsl")
@@ -579,7 +580,7 @@ class UniformPhotonSource(PhotonSource):
         # t   ~ U(t_0, t_1)
         # => p(t, lam) = 1.0 / (|dLam||dt|) // d(x) = 1.0 if d(x) == 0.0
         # => contrib = L/p = intensity * |dLam|*|dt|
-        c = self.intensity
+        c = self.budget
         lr = self.getParam("lambdaRange")
         lr = lr[1] - lr[0]
         if lr != 0.0:
