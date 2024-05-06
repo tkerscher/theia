@@ -17,19 +17,15 @@ from numpy.typing import NDArray
 
 __all__ = [
     "CherenkovTrackLightSource",
-    "DiskRaySource",
+    "ConeLightSource",
     "HostLightSource",
     "LightSampleItem",
     "LightSampler",
     "LightSource",
-    "ModularLightSource",
     "ParticleTrack",
     "PencilLightSource",
-    "PencilRaySource",
     "PhotonSource",
     "PolarizedLightSampleItem",
-    "RaySource",
-    "SphericalRaySource",
     "UniformPhotonSource",
 ]
 
@@ -130,12 +126,11 @@ class LightSampler(PipelineStage):
     >>> import hephaistos as hp
     >>> import theia.light as l
     >>> from theia.random import PhiloxRNG
-    >>> rays = l.SphericalRaySource()
     >>> photons = l.UniformPhotonSource()
-    >>> source = l.ModularLight(rays, photons, 4)
+    >>> source = l.SphericalLightSource(photons)
     >>> rng = PhiloxRNG()
     >>> sampler = l.LightSampler(source, 8192, rng=rng)
-    >>> hp.runPipeline([rng, rays, photons, source, sampler])
+    >>> hp.runPipeline([rng, photons, source, sampler])
     >>> sampler.view(0)
     """
 
@@ -343,150 +338,6 @@ class HostLightSource(LightSource):
         return [hp.updateTensor(self.buffer(i), self._tensor), *super().run(i)]
 
 
-class RaySource(SourceCodeMixin):
-    """
-    Base class for samplers producing blank rays, i.e. a combination of a
-    position and a direction.
-    """
-
-    name = "Ray Sampler"
-
-    def __init__(
-        self,
-        *,
-        nRNGSamples: int = 0,
-        params: Dict[str, type[Structure]] = {},
-        extra: Set[str] = set(),
-    ) -> None:
-        super().__init__(params, extra)
-        self._nRNGSamples = nRNGSamples
-
-    @property
-    def nRNGSamples(self) -> int:
-        """Amount of random numbers drawn per sample"""
-        return self._nRNGSamples
-
-
-class DiskRaySource(RaySource):
-    """
-    Samples point on a disk and creates rays perpendicular to it.
-
-    Parameters
-    ----------
-    center: (float, float, float), default=(0.0, 0.0, 0.0)
-        Center of the disk
-    direction: (float, float, float), default=(0.0, 0.0, 1.0)
-        Normal of the disk. Rays will travel in this direction.
-    radius: float, default=1.0
-        Radius of the disk
-
-    Stage Parameters
-    ----------------
-    center: (float, float, float), default=(0.0, 0.0, 0.0)
-        Center of the disk
-    direction: (float, float, float), default=(0.0, 0.0, 1.0)
-        Normal of the disk. Rays will travel in this direction.
-    radius: float, default=1.0
-        Radius of the disk
-    """
-
-    name = "Disk Ray Sampler"
-
-    class RayParams(Structure):
-        _fields_ = [("center", vec3), ("direction", vec3), ("radius", c_float)]
-
-    def __init__(
-        self,
-        *,
-        center: Tuple[float, float, float] = (0.0, 0.0, 0.0),
-        direction: Tuple[float, float, float] = (0.0, 0.0, 1.0),
-        radius: float = 1.0,
-    ) -> None:
-        super().__init__(nRNGSamples=2, params={"RayParams": DiskRaySource.RayParams})
-        self.setParams(
-            center=center,
-            direction=direction,
-            radius=radius,
-        )
-
-    # source code via descriptor
-    sourceCode = ShaderLoader("raysource.disk.glsl")
-
-
-class PencilRaySource(RaySource):
-    """
-    Sampler outputting a constant ray.
-
-    Parameters
-    ----------
-    position: (float, float, float), default=(0.0, 0.0, 0.0)
-        Start point of the ray
-    direction: (float, float, float), default=(0.0, 0.0, 1.0)
-        Direction of the ray
-
-    Stage Parameters
-    ----------
-    position: (float, float, float), default=(0.0, 0.0, 0.0)
-        Start point of the ray
-    direction: (float, float, float), default=(0.0, 0.0, 1.0)
-        Direction of the ray
-    """
-
-    name = "Pencil Beam"
-
-    class RayParams(Structure):
-        _fields_ = [
-            ("position", vec3),
-            ("direction", vec3),
-        ]
-
-    def __init__(
-        self,
-        *,
-        position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
-        direction: Tuple[float, float, float] = (0.0, 0.0, 1.0),
-    ) -> None:
-        super().__init__(params={"RayParams": PencilRaySource.RayParams})
-        self.setParams(position=position, direction=direction)
-
-    # sourceCode via descriptor
-    sourceCode = ShaderLoader("raysource.pencil.glsl")
-
-
-class SphericalRaySource(RaySource):
-    """
-    Sampler creating rays uniformly in all direction from a common center.
-
-    Parameters
-    ----------
-    position: (float, float, float), default=(0.0, 0.0, 0.0)
-        Center the rays are emerging from
-
-    Stage Parameters
-    ----------------
-    position: (float, float, float), default=(0.0, 0.0, 0.0)
-        Center the rays are emerging from
-    """
-
-    name = "Spherical Ray Sampler"
-
-    class RayParams(Structure):
-        _fields_ = [("position", vec3)]
-
-    def __init__(
-        self,
-        position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
-    ) -> None:
-        super().__init__(
-            nRNGSamples=2,
-            params={"RayParams": SphericalRaySource.RayParams},
-        )
-        self.setParams(position=position)
-
-    # sourceCode via descriptor
-    sourceCode = ShaderLoader("raysource.spherical.glsl")
-
-
 class PhotonSource(SourceCodeMixin):
     """
     Base class for samplers producing a single photon sample consisting of a
@@ -592,59 +443,108 @@ class UniformPhotonSource(PhotonSource):
         self.setParam("_contrib", c)
 
 
-class ModularLightSource(LightSource):
+class ConeLightSource(LightSource):
     """
-    Light source that combines a `RaySource` and a `PhotonSource`.
+    Point light source radiating light in a specified cone.
+    Can optionally be constant polarized.
 
     Parameters
     ----------
-    raySource: RaySource
-        Sampler producing rays.
     photonSource: PhotonSource
-        Sampler producing single photons
+        Photon source used to sample wavelengths
+    position: (float, float, float), default=(0.0, 0.0, 0.0)
+        Position of the light source.
+    direction: (float, float, float), default(1.0, 0.0, 0.0)
+        Direction of the opening cone.
+    cosOpeningAngle: float, default=0.5
+        Cosine of the cones opening angle
+    polarizationReference: (float, float, float), default=(0.0, 1.0, 0.0)
+        Polarization reference frame.
+    stokes: (float, float, float, float), default=(1.0, 0.0, 0.0, 0.0)
+        Specifies the polarization vector.
+
+    Stage Parameters
+    ----------------
+    position: (float, float, float), default=(0.0, 0.0, 0.0)
+        Position of the light source.
+    direction: (float, float, float), default(1.0, 0.0, 0.0)
+        Direction of the opening cone.
+    cosOpeningAngle: float, default=0.5
+        Cosine of the cones opening angle
+    polarizationReference: (float, float, float), default=(0.0, 1.0, 0.0)
+        Polarization reference frame.
+    stokes: (float, float, float, float), default=(1.0, 0.0, 0.0, 0.0)
+        Specifies the polarization vector.
+    
+    Note
+    ----
+    If the light is polarized, the opening angle must not exceed 90 degrees,
+    as the polarization reference frame cannot handle this.
     """
 
-    # lazily load template code
-    _templateCode = ShaderLoader("lightsource.modular.glsl")
+    name = "Cone Light Source"
+
+    class LightParams(Structure):
+        _fields_ = [
+            ("position", vec3),
+            ("direction", vec3),
+            ("cosOpeningAngle", c_float),
+            ("polarizationReference", vec3),
+            ("stokes", vec4)
+        ]
+    
+    # lazily load source code
+    _sourceCode = ShaderLoader("lightsource.cone.glsl")
 
     def __init__(
         self,
-        raySource: RaySource,
         photonSource: PhotonSource,
+        *,
+        position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        direction: Tuple[float, float, float] = (1.0, 0.0, 0.0),
+        cosOpeningAngle: float = 0.5,
+        polarizationReference: Tuple[float, float, float] = (0.0, 1.0, 0.0),
+        stokes: Tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0),
     ) -> None:
-        nRNG = raySource.nRNGSamples + photonSource.nRNGSamples
-        super().__init__(nRNGSamples=nRNG)
-        self._raySource = raySource
+        super().__init__(
+            nRNGSamples=2 + photonSource.nRNGSamples,
+            params={"LightParams": ConeLightSource.LightParams}
+        )
+        # save params
         self._photonSource = photonSource
+        self.setParams(
+            position=position,
+            direction=direction,
+            cosOpeningAngle=cosOpeningAngle,
+            polarizationReference=polarizationReference,
+            stokes=stokes
+        )
 
-    @property
-    def raySource(self) -> RaySource:
-        """Source producing rays"""
-        return self._raySource
-
+        # sanity check polarization reference frame
+        dir = direction
+        polRef = polarizationReference
+        if abs(sum(dir[i] * polRef[i] for i in range(3))) > 1.0 - 1e-5:
+            raise ValueError("direction and polarizationReference cannot be parallel!")
+        self._polarized = stokes != (1.0, 0.0, 0.0, 0.0)
+        if self._polarized and cosOpeningAngle <= 0.0:
+            raise ValueError(
+                "Opening angles for polarized cone lights must be smaller 90 degrees!"
+            )
+    
     @property
     def photonSource(self) -> PhotonSource:
-        """Source producing single photons"""
+        """Photon source used to sample wavelengths"""
         return self._photonSource
 
     @property
     def sourceCode(self) -> str:
-        # build preamble
-        nRNGSource = self.photonSource.nRNGSamples
-        preamble = f"#define RNG_RAY_SAMPLE_OFFSET {nRNGSource}\n"
-        # assemble full code
-        return "\n".join(
-            [
-                preamble,
-                self.raySource.sourceCode,
-                self.photonSource.sourceCode,
-                self._templateCode,
-            ]
-        )
+        code = self.photonSource.sourceCode + "\n"
+        if self._polarized:
+            code += "#define LIGHTSOURCE_POLARIZED\n"
+        return code + self._sourceCode
 
     def bindParams(self, program: Program, i: int) -> None:
         super().bindParams(program, i)
-        self.raySource.bindParams(program, i)
         self.photonSource.bindParams(program, i)
 
 
@@ -717,6 +617,57 @@ class PencilLightSource(LightSource):
         """Photon source used to sample wavelengths"""
         return self._photonSource
 
+    @property
+    def sourceCode(self) -> str:
+        return self.photonSource.sourceCode + "\n" + self._sourceCode
+
+    def bindParams(self, program: Program, i: int) -> None:
+        super().bindParams(program, i)
+        self.photonSource.bindParams(program, i)
+
+
+class SphericalLightSource(LightSource):
+    """
+    Isotropic unpolarized point light source, radiating light from a point in
+    all direction uniformly.
+
+    Parameters
+    ----------
+    position: (float, float, float), default=(0.0, 0.0, 0.0)
+        Position the light rays are radiated from.
+    
+    Stage Parameters
+    ----------------
+    position: (float, float, float), default=(0.0, 0.0, 0.0)
+        Position the light rays are radiated from.
+    """
+
+    name = "Spherical Light Source"
+
+    class LightParams(Structure):
+        _fields_ = [("position", vec3)]
+    
+    def __init__(
+        self,
+        photonSource: PhotonSource,
+        *,
+        position: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    )-> None:
+        super().__init__(
+            nRNGSamples=2 + photonSource.nRNGSamples,
+            params={"LightParams": SphericalLightSource.LightParams}
+        )
+        self._photonSource = photonSource
+        self.setParams(position=position)
+    
+    # lazily load source code via descriptor
+    _sourceCode = ShaderLoader("lightsource.spherical.glsl")
+
+    @property
+    def photonSource(self) -> PhotonSource:
+        """Photon source used to sample wavelengths"""
+        return self._photonSource
+    
     @property
     def sourceCode(self) -> str:
         return self.photonSource.sourceCode + "\n" + self._sourceCode

@@ -6,11 +6,11 @@
 #include "math.glsl"
 #endif
 
-struct RaySample {
-    vec3 position;
-    vec3 direction;
-    float contrib;
-};
+// struct RaySample {
+//     vec3 position;
+//     vec3 direction;
+//     float contrib;
+// };
 
 struct SourceSample {
     float wavelength;

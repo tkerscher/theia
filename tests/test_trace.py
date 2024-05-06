@@ -42,12 +42,11 @@ def test_VolumeTracer(disableDirect: bool, disableTarget: bool, limitTime: bool,
 
     # create pipeline
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
-    rays = theia.light.SphericalRaySource(position=light_pos)
     photons = theia.light.UniformPhotonSource(
         budget=light_budget,
         timeRange=(T0, T1),
     )
-    source = theia.light.ModularLightSource(rays, photons)
+    source = theia.light.SphericalLightSource(photons, position=light_pos)
     recorder = theia.estimator.HitRecorder(polarized=polarized)
     stats = theia.trace.EventStatisticCallback()
     tracer = theia.trace.VolumeTracer(
@@ -65,7 +64,7 @@ def test_VolumeTracer(disableDirect: bool, disableTarget: bool, limitTime: bool,
         disableTargetSampling=disableTarget,
     )
     # run pipeline
-    pl.runPipeline([rng, rays, photons, source, tracer, recorder])
+    pl.runPipeline([rng, photons, source, tracer, recorder])
 
     # check hits
     hits = recorder.view(0)
@@ -177,12 +176,11 @@ def test_SceneTracer(
 
     # create pipeline stages
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
-    rays = theia.light.SphericalRaySource(position=light_pos)
     photons = theia.light.UniformPhotonSource(
         budget=light_budget,
         timeRange=(T0, T1),
     )
-    source = theia.light.ModularLightSource(rays, photons)
+    source = theia.light.SphericalLightSource(photons, position=light_pos)
     recorder = theia.estimator.HitRecorder(polarized=polarized)
     # stats = theia.trace.EventStatisticCallback()
     track = theia.trace.TrackRecordCallback(N, MAX_PATH + 1, polarized=polarized)
@@ -204,8 +202,8 @@ def test_SceneTracer(
         disableVolumeBorder=disableVolumeBorder,
     )
     # run pipeline
-    # pl.runPipeline([rng, rays, photons, source, tracer, recorder])
-    pl.runPipeline([rng, rays, photons, source, tracer, recorder, track])
+    # pl.runPipeline([rng, photons, source, tracer, recorder])
+    pl.runPipeline([rng, photons, source, tracer, recorder, track])
     tracks, lengths, codes = track.result(0)
 
     # check hits
@@ -308,9 +306,8 @@ def test_BidirectionalPathTracer(
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
     # cam = theia.camera.PencilCameraRaySource(rayPosition=det_pos)
     cam = theia.camera.FlatCameraRaySource(transform=det_trafo)
-    ray = theia.light.PencilRaySource(position=src_pos)
     ph = theia.light.UniformPhotonSource(timeRange=(T0, T1))
-    src = theia.light.ModularLightSource(ray, ph)
+    src = theia.light.PencilLightSource(ph, position=src_pos)
     rec = theia.estimator.HitRecorder(polarized=polarized)
     stats = theia.trace.EventStatisticCallback()
     # track = theia.trace.TrackRecordCallback(N, L_CAMERA + L_LIGHT + 2, polarized=polarized)
@@ -333,8 +330,8 @@ def test_BidirectionalPathTracer(
         disableVolumeBorder=disableVolumeBorder,
     )
     # run pipeline
-    pl.runPipeline([rng, cam, ray, ph, src, trace, rec])
-    # pl.runPipeline([rng, cam, ray, ph, src, trace, rec, track])
+    pl.runPipeline([rng, cam, ph, src, trace, rec])
+    # pl.runPipeline([rng, cam, ph, src, trace, rec, track])
 
     # check hits
     hits = rec.view(0)
@@ -403,9 +400,8 @@ def test_EventStatisticCallback():
 
     # create pipeline
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
-    rays = theia.light.SphericalRaySource()
     photons = theia.light.UniformPhotonSource(timeRange=(T0, T1))
-    source = theia.light.ModularLightSource(rays, photons)
+    source = theia.light.SphericalLightSource(photons)
     response = theia.estimator.EmptyResponse()
     stats = theia.trace.EventStatisticCallback()
     tracer = theia.trace.SceneTracer(
@@ -432,7 +428,7 @@ def test_EventStatisticCallback():
     assert stats.volume == 0
     assert stats.error == 0
     # run pipeline
-    pl.runPipeline([rng, rays, photons, source, tracer])
+    pl.runPipeline([rng, photons, source, tracer])
 
     # check stats again
     assert stats.created == N
@@ -562,17 +558,17 @@ def test_volumeBorder():
 
     # create scene
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
-    rays = theia.light.PencilRaySource(  # TODO: would cone source work better?
-        position=(0.0, 0.0, 0.0),
-        # important: hit cube not straight on but in angle to test for no refraction
-        direction=(0.8, 0.36, 0.48),
-    )
     photons = theia.light.UniformPhotonSource(
         lambdaRange=(LAMBDA, LAMBDA),  # const lambda
         timeRange=(0.0, 0.0),  # const time
         budget=1.0,
     )
-    source = theia.light.ModularLightSource(rays, photons)
+    source = theia.light.PencilLightSource(
+        photons,
+        position=(0.0, 0.0, 0.0),
+        # important: hit cube not straight on but in angle to test for no refraction
+        direction=(0.8, 0.36, 0.48),
+    )
     estimator = theia.estimator.EmptyResponse()
     tracker = theia.trace.TrackRecordCallback(N, 4)
     tracer = theia.trace.SceneTracer(
@@ -587,7 +583,7 @@ def test_volumeBorder():
         disableTargetSampling=True,  # there's no scattering anyway
     )
     # run pipeline
-    pl.runPipeline([rng, rays, photons, source, tracer, tracker])
+    pl.runPipeline([rng, photons, source, tracer, tracker])
 
     # retrieve result
     track, lengths, codes = tracker.result(0)
@@ -657,15 +653,14 @@ def test_tracer_reflection(flag, reflectance, err):
 
     # create pipeline
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
-    rays = theia.light.PencilRaySource(
-        position=(-20.0, 0.0, 0.0) * u.m, direction=(1.0, 0.0, 0.0)
-    )
     photons = theia.light.UniformPhotonSource(
         lambdaRange=(500.0, 500.0) * u.nm,  # const lambda
         timeRange=(0.0, 0.0),  # const time
         budget=1.0,
     )
-    source = theia.light.ModularLightSource(rays, photons)
+    source = theia.light.PencilLightSource(
+        photons, position=(-20.0, 0.0, 0.0) * u.m, direction=(1.0, 0.0, 0.0)
+    )
     recorder = theia.estimator.HitRecorder()
     stats = theia.trace.EventStatisticCallback()
     tracer = theia.trace.SceneTracer(
@@ -679,7 +674,7 @@ def test_tracer_reflection(flag, reflectance, err):
         callback=stats,
         disableTargetSampling=True,  # there's no scattering anyway
     )
-    pipeline = pl.Pipeline([rng, rays, photons, source, tracer, recorder])
+    pipeline = pl.Pipeline([rng, photons, source, tracer, recorder])
     # run pipeline
     pipeline.run(0)
     hits_ref = recorder.view(0)
