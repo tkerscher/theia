@@ -139,7 +139,7 @@ def test_coneLightSource(rng, polarized: bool):
         # the stokes vec wrong
         # no rotation happened if the parallelogram has zero volume
         vol = (np.cross(result["direction"], polRefIn) * polRef).sum(-1)
-        assert np.abs(vol).max() < 1e-5 
+        assert np.abs(vol).max() < 1e-5
 
 
 @pytest.mark.parametrize("polarized", [True, False])
@@ -210,6 +210,7 @@ def test_sphericalLightSource(rng, polarized: bool):
         polRef = result["polarizationRef"]
         assert np.abs((polRef * result["direction"]).sum(-1)).max() < 1e-5
         assert (np.square(polRef).sum(-1) - 1.0).max() < 1e-5
+
 
 @pytest.mark.parametrize("usePhotons", [False, True])
 @pytest.mark.parametrize("polarized", [True, False])

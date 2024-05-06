@@ -168,10 +168,10 @@ def test_reflectance(rng, shaderUtil):
     rs, rp = reflectance(cos_i, n_i, n_t)
 
     # check result
-    results = result_buffer.numpy().reshape((-1,3))
-    assert np.abs(rs - results[:,0]).max() < 1e-4
-    assert np.abs(rp - results[:,1]).max() < 1e-4
-    assert np.abs(n_t - results[:,2]).max() < 1e-6
+    results = result_buffer.numpy().reshape((-1, 3))
+    assert np.abs(rs - results[:, 0]).max() < 1e-4
+    assert np.abs(rp - results[:, 1]).max() < 1e-4
+    assert np.abs(n_t - results[:, 2]).max() < 1e-6
 
 
 def test_volumeScatter(rng, shaderUtil):

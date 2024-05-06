@@ -409,9 +409,7 @@ class UniformPhotonSource(PhotonSource):
             extra={"budget"},
         )
         # save params
-        self.setParams(
-            lambdaRange=lambdaRange, timeRange=timeRange, budget=budget
-        )
+        self.setParams(lambdaRange=lambdaRange, timeRange=timeRange, budget=budget)
 
     @property
     def budget(self) -> float:
@@ -475,7 +473,7 @@ class ConeLightSource(LightSource):
         Polarization reference frame.
     stokes: (float, float, float, float), default=(1.0, 0.0, 0.0, 0.0)
         Specifies the polarization vector.
-    
+
     Note
     ----
     If the light is polarized, the opening angle must not exceed 90 degrees,
@@ -490,9 +488,9 @@ class ConeLightSource(LightSource):
             ("direction", vec3),
             ("cosOpeningAngle", c_float),
             ("polarizationReference", vec3),
-            ("stokes", vec4)
+            ("stokes", vec4),
         ]
-    
+
     # lazily load source code
     _sourceCode = ShaderLoader("lightsource.cone.glsl")
 
@@ -508,7 +506,7 @@ class ConeLightSource(LightSource):
     ) -> None:
         super().__init__(
             nRNGSamples=2 + photonSource.nRNGSamples,
-            params={"LightParams": ConeLightSource.LightParams}
+            params={"LightParams": ConeLightSource.LightParams},
         )
         # save params
         self._photonSource = photonSource
@@ -517,7 +515,7 @@ class ConeLightSource(LightSource):
             direction=direction,
             cosOpeningAngle=cosOpeningAngle,
             polarizationReference=polarizationReference,
-            stokes=stokes
+            stokes=stokes,
         )
 
         # sanity check polarization reference frame
@@ -530,7 +528,7 @@ class ConeLightSource(LightSource):
             raise ValueError(
                 "Opening angles for polarized cone lights must be smaller 90 degrees!"
             )
-    
+
     @property
     def photonSource(self) -> PhotonSource:
         """Photon source used to sample wavelengths"""
@@ -635,7 +633,7 @@ class SphericalLightSource(LightSource):
     ----------
     position: (float, float, float), default=(0.0, 0.0, 0.0)
         Position the light rays are radiated from.
-    
+
     Stage Parameters
     ----------------
     position: (float, float, float), default=(0.0, 0.0, 0.0)
@@ -646,20 +644,20 @@ class SphericalLightSource(LightSource):
 
     class LightParams(Structure):
         _fields_ = [("position", vec3)]
-    
+
     def __init__(
         self,
         photonSource: PhotonSource,
         *,
-        position: Tuple[float, float, float] = (0.0, 0.0, 0.0)
-    )-> None:
+        position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+    ) -> None:
         super().__init__(
             nRNGSamples=2 + photonSource.nRNGSamples,
-            params={"LightParams": SphericalLightSource.LightParams}
+            params={"LightParams": SphericalLightSource.LightParams},
         )
         self._photonSource = photonSource
         self.setParams(position=position)
-    
+
     # lazily load source code via descriptor
     _sourceCode = ShaderLoader("lightsource.spherical.glsl")
 
@@ -667,7 +665,7 @@ class SphericalLightSource(LightSource):
     def photonSource(self) -> PhotonSource:
         """Photon source used to sample wavelengths"""
         return self._photonSource
-    
+
     @property
     def sourceCode(self) -> str:
         return self.photonSource.sourceCode + "\n" + self._sourceCode

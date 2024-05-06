@@ -20,7 +20,9 @@ from common.models import WaterModel
 @pytest.mark.parametrize("disableTarget", [True, False])
 @pytest.mark.parametrize("limitTime", [True, False])
 @pytest.mark.parametrize("polarized", [True, False])
-def test_VolumeTracer(disableDirect: bool, disableTarget: bool, limitTime: bool, polarized: bool):
+def test_VolumeTracer(
+    disableDirect: bool, disableTarget: bool, limitTime: bool, polarized: bool
+):
     N = 32 * 256
     N_SCATTER = 6
     T0, T1 = 10.0 * u.ns, 20.0 * u.ns
@@ -80,17 +82,17 @@ def test_VolumeTracer(disableDirect: bool, disableTarget: bool, limitTime: bool,
     # sanity check polarization
     if polarized:
         # check stokes is normalized
-        assert np.abs(hits["stokes"][:,0] - 1.0).max() < 1e-6
-        assert np.square(hits["stokes"][:,1:]).sum(-1).max() <= 1.0
-        assert hits["stokes"][:,1:].max() <= 1.0
-        assert hits["stokes"][:,1:].min() >= -1.0
+        assert np.abs(hits["stokes"][:, 0] - 1.0).max() < 1e-6
+        assert np.square(hits["stokes"][:, 1:]).sum(-1).max() <= 1.0
+        assert hits["stokes"][:, 1:].max() <= 1.0
+        assert hits["stokes"][:, 1:].min() >= -1.0
         # check polarization ref is perpendicular to plane of incidence and normalized
         polRef = hits["polarizationRef"]
         assert np.abs(np.square(polRef).sum(-1) - 1.0).max() < 1e-6
         polRef_exp = np.cross(hits["direction"], hits["normal"])
         d = np.square(polRef_exp).sum(-1)
         mask = d > 1e-7
-        polRef_exp /= np.sqrt(d)[:,None]
+        polRef_exp /= np.sqrt(d)[:, None]
         # for very small angle we reuse the old polRef to minimize error
         assert np.abs(np.abs((polRef_exp * polRef).sum(-1))[mask] - 1.0).max() < 1e-6
 
@@ -221,10 +223,10 @@ def test_SceneTracer(
     # sanity check polarization
     if polarized:
         # check stokes is normalized
-        assert np.abs(hits["stokes"][:,0] - 1.0).max() < 1e-6
-        assert np.sqrt(np.square(hits["stokes"][:,1:]).sum(-1).max()) - 1.0 <= 1e-6
-        assert hits["stokes"][:,1:].max() <= 1.0
-        assert hits["stokes"][:,1:].min() >= -1.0
+        assert np.abs(hits["stokes"][:, 0] - 1.0).max() < 1e-6
+        assert np.sqrt(np.square(hits["stokes"][:, 1:]).sum(-1).max()) - 1.0 <= 1e-6
+        assert hits["stokes"][:, 1:].max() <= 1.0
+        assert hits["stokes"][:, 1:].min() >= -1.0
         # check polarization ref is perpendicular to plane of incidence and normalized
         # note: this only works because we use spheres and only scale and translate them
         polRef = hits["polarizationRef"]
@@ -232,7 +234,7 @@ def test_SceneTracer(
         polRef_exp = np.cross(hits["direction"], hits["normal"])
         d = np.square(polRef_exp).sum(-1)
         mask = d > 1e-7
-        polRef_exp /= np.sqrt(d)[:,None]
+        polRef_exp /= np.sqrt(d)[:, None]
         # for very small angle we reuse the old polRef to minimize error
         assert np.abs(np.abs((polRef_exp * polRef).sum(-1))[mask] - 1.0).max() < 1e-6
 
@@ -339,7 +341,7 @@ def test_BidirectionalPathTracer(
     # if there's no transmission allowed, there won't be any light paths
     if disableTransmission:
         assert hits.count == 0
-        return # nothing to test
+        return  # nothing to test
     # check all other cases
     assert hits.count > 0
     assert hits.count <= trace.maxHits
@@ -351,10 +353,10 @@ def test_BidirectionalPathTracer(
     # sanity check polarization
     if polarized:
         # check stokes is normalized
-        assert np.abs(hits["stokes"][:,0] - 1.0).max() < 1e-6
-        assert np.square(hits["stokes"][:,1:]).sum(-1).max() <= 1.0
-        assert hits["stokes"][:,1:].max() <= 1.0
-        assert hits["stokes"][:,1:].min() >= -1.0
+        assert np.abs(hits["stokes"][:, 0] - 1.0).max() < 1e-6
+        assert np.square(hits["stokes"][:, 1:]).sum(-1).max() <= 1.0
+        assert hits["stokes"][:, 1:].max() <= 1.0
+        assert hits["stokes"][:, 1:].min() >= -1.0
         # check polarization ref is perpendicular to plane of incidence and normalized
         # note: this only works because we use spheres and only scale and translate them
         polRef = hits["polarizationRef"]
@@ -363,7 +365,7 @@ def test_BidirectionalPathTracer(
         polRef_exp = np.cross(hits["direction"], hits["normal"])
         d = np.square(polRef_exp).sum(-1)
         mask = d > 1e-7
-        polRef_exp /= np.sqrt(d)[:,None]
+        polRef_exp /= np.sqrt(d)[:, None]
         # for very small angle we reuse the old polRef to minimize error
         assert np.abs(np.abs((polRef_exp * polRef).sum(-1))[mask] - 1.0).max() < 1e-6
 
@@ -475,7 +477,7 @@ def test_TrackRecordCallback(polarizedTrack: bool, polarized: bool):
     light_pos = (100.0, -50.0, 20.0) * u.m
     light_dir = (1.0, 0.0, 0.0)
     stokes = (1.0, 0.5, 0.1, 0.4)
-    polRef = (0.0,1.0,0.0)
+    polRef = (0.0, 1.0, 0.0)
 
     # create water medium
     water = WaterModel().createMedium()
@@ -484,7 +486,13 @@ def test_TrackRecordCallback(polarizedTrack: bool, polarized: bool):
     # create pipeline
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
     photons = theia.light.UniformPhotonSource(timeRange=(T0, T1))
-    source = theia.light.PencilLightSource(photons, position=light_pos, direction=light_dir, stokes=stokes, polarizationRef=polRef)
+    source = theia.light.PencilLightSource(
+        photons,
+        position=light_pos,
+        direction=light_dir,
+        stokes=stokes,
+        polarizationRef=polRef,
+    )
     response = theia.estimator.EmptyResponse()
     track = theia.trace.TrackRecordCallback(N, LENGTH, polarized=polarizedTrack)
     tracer = theia.trace.VolumeTracer(
@@ -499,7 +507,7 @@ def test_TrackRecordCallback(polarizedTrack: bool, polarized: bool):
         maxTime=T_MAX,
         traceBBox=theia.scene.RectBBox((-200.0 * u.m,) * 3, (200.0 * u.m,) * 3),
         target=theia.scene.SphereBBox(target_pos, target_radius),
-        polarized=polarized
+        polarized=polarized,
     )
     # run pipeline
     pl.runPipeline([rng, photons, source, tracer, track])
@@ -523,11 +531,11 @@ def test_TrackRecordCallback(polarizedTrack: bool, polarized: bool):
     # check polarization
     if polarizedTrack and polarized:
         # only check first one. For later steps we don't know the expected state
-        assert np.isclose(tracks[:,0,4:8], stokes).all()
-        assert np.isclose(tracks[:,0,8:], polRef).all()
+        assert np.isclose(tracks[:, 0, 4:8], stokes).all()
+        assert np.isclose(tracks[:, 0, 8:], polRef).all()
     elif polarizedTrack:
         # all states should have been saved as unpolarized with zero reference
-        assert np.isclose(tracks[:, 0, 4:], (1.0,*(0.0,)*6)).all()
+        assert np.isclose(tracks[:, 0, 4:], (1.0, *(0.0,) * 6)).all()
 
 
 def test_volumeBorder():
