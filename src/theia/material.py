@@ -1194,6 +1194,85 @@ class FournierForandPhaseFunction:
         return self._sample_spline(eta)
 
 
+class DispersionFreeMedium:
+    """
+    Idealized medium showing constant optical properties regardless of
+    wavelength. Primarily intended for debugging purposes.
+
+    Parameters
+    ----------
+    n: float, default=1.0
+        Refractive index.
+    ng: float, default=1.0
+        Group index (group velocity = c/ng)
+    mu_a: float, default=0.0
+        Absorption coefficient.
+    mu_s: float, default=0.0
+        Scattering coefficient.
+    """
+
+    def __init__(
+        self,
+        *,
+        n: float = 1.0,
+        ng: float = 1.0,
+        mu_a: float = 0.0,
+        mu_s: float = 0.0,
+    ) -> None:
+        self.n = n
+        self.ng = ng
+        self.mu_a = mu_a
+        self.mu_s = mu_s
+
+    @property
+    def n(self) -> float:
+        """Refractive index"""
+        return self._n
+
+    @n.setter
+    def n(self, value: float) -> None:
+        self._n = value
+
+    @property
+    def ng(self) -> float:
+        """Group index (group velocity = c/ng)"""
+        return self._ng
+
+    @ng.setter
+    def ng(self, value: float) -> None:
+        self._ng = value
+
+    @property
+    def mu_a(self) -> float:
+        """Absorption coefficient"""
+        return self._mu_a
+
+    @mu_a.setter
+    def mu_a(self, value: float) -> None:
+        self._mu_a = value
+
+    @property
+    def mu_s(self) -> float:
+        """Scattering coefficient"""
+        return self._mu_s
+
+    @mu_s.setter
+    def mu_s(self, value: float) -> None:
+        self._mu_s = value
+
+    def refractive_index(self, wavelength: npt.ArrayLike) -> Union[npt.NDArray, None]:
+        return np.ones_like(wavelength) * self.n
+
+    def group_velocity(self, wavelength: npt.ArrayLike) -> Union[npt.NDArray, None]:
+        return np.ones_like(wavelength) / self.ng * u.c
+
+    def absorption_coef(self, wavelength: npt.ArrayLike) -> Union[npt.NDArray, None]:
+        return np.ones_like(wavelength) * self.mu_a
+
+    def scattering_coef(self, wavelength: npt.ArrayLike) -> Union[npt.NDArray, None]:
+        return np.ones_like(wavelength) * self.mu_s
+
+
 class WaterBaseModel:
     """
     Base model for calculating the optical properties of (sea) water laking the
