@@ -47,7 +47,7 @@ void sampleTargetMIS(
 
     //calculate MIS weights (power heuristic)
     wTarget = pSS * pPS / (pSS*pSS + pPS*pPS);
-    wPhase  = pPP * pPP / (pPP*pPP + pPS*pPS);
+    wPhase  = pPP * pPP / (pPP*pPP + pSP*pSP);
 }
 
 #endif

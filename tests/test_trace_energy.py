@@ -50,9 +50,20 @@ class MediumModel(
         (0.05, 0.01, -0.9, True),
     ],
 )
-def test_SceneTracer_EnergyConserved(
+def test_SceneTracer_GroundTruth(
     mu_a: float, mu_s: float, g: float, polarized: bool
 ) -> None:
+    """
+    Ground Truth Test:
+
+    This test we can check against an analytic solution to verify this algorithm.
+    After that, we can use this config to test other simulations.
+
+    Scenario:
+    Sphere detector filled with scattering medium, in center spherical light
+    source.
+    """
+
     # Scene settings
     position = (12.0, 15.0, 0.2) * u.m
     radius = 100.0 * u.m
@@ -153,3 +164,162 @@ def test_SceneTracer_EnergyConserved(
         assert stokes[:, 1:].max() <= 1.0
         assert stokes[:, 1:].min() >= -1.0
         assert np.all(np.square(stokes[:, 1:]).sum(-1) <= 1.0)
+
+
+@pytest.mark.parametrize(
+    "mu_a,mu_s,g,sampleTarget,polarized",
+    [
+        (0.0, 0.01, 0.0, False, False),
+        (0.05, 0.005, 0.0, False, False),
+        (0.0, 0.01, 0.0, False, True),
+        (0.05, 0.005, 0.0, False, True),
+        (0.0, 0.01, 0.0, True, False),
+        (0.05, 0.005, 0.0, True, False),
+        (0.0, 0.01, 0.0, True, True),
+        (0.05, 0.005, 0.0, True, True),
+    ],
+)
+def test_VolumeTracer_Crosscheck(
+    mu_a: float, mu_s: float, g: float, sampleTarget: bool, polarized: bool
+) -> None:
+    """
+    Spherical light source with spherical target.
+    Use GroundTruth to check against.
+    """
+    # Scene settings
+    position = (0.0, 0.0, 0.0) * u.m
+    radius = 5.0 * u.m
+    # Light settings
+    light_pos = (-6.0, 0.0, 0.0) * u.m
+    budget = 1e9
+    t0 = 30.0 * u.ns
+    lam = 400.0 * u.nm  # doesn't really matter
+    # tracer settings
+    max_length = 8
+    scatter_coef = 0.05
+    maxTime = float("inf")
+    polarized = False
+    # simulation settings
+    batch_size = 1 * 1024 * 1024
+    n_batches = 100
+    # binning config
+    bin_t0 = 0.0
+    bin_size = 20.0
+    n_bins = 100
+
+    # create materials
+    model = MediumModel(mu_a, mu_s, g)
+    medium = model.createMedium()
+    material = theia.material.Material("det", None, medium, flags="DB")
+    matStore = theia.material.MaterialStore([material])
+    # load meshes
+    meshStore = theia.scene.MeshStore({"sphere": "assets/sphere.stl"})
+
+    # create scene
+    targets = [theia.scene.SphereBBox(position, radius)]
+    trafo = theia.scene.Transform.Scale(radius, radius, radius).translate(*position)
+    target = meshStore.createInstance("sphere", "det", transform=trafo, detectorId=0)
+    scene = theia.scene.Scene(
+        [target],
+        matStore.material,
+        medium=matStore.media["homogenous"],
+        targets=targets,
+    )
+    # create light (delta pulse)
+    photons = theia.light.UniformPhotonSource(
+        lambdaRange=(lam, lam), timeRange=(t0, t0), budget=budget
+    )
+    light = theia.light.SphericalLightSource(photons, position=light_pos)
+
+    # Calculate ground truth
+
+    # create tracer
+    rng = theia.random.SobolQRNG(seed=0xC0FFEE)
+    response = theia.estimator.UniformHitResponse()
+    tracer = theia.trace.SceneTracer(
+        batch_size,
+        light,
+        response,
+        rng,
+        scene=scene,
+        maxPathLength=max_length,
+        disableTargetSampling=True,
+        scatterCoefficient=scatter_coef,
+        maxTime=maxTime,
+        polarized=polarized,
+    )
+    estimator = theia.estimator.HistogramEstimator(
+        response.queue,
+        nBins=n_bins,
+        binSize=bin_size,
+        t0=bin_t0,
+        normalization=1 / batch_size,
+    )
+    rng.autoAdvance = tracer.nRNGSamples
+    # create pipeline + scheduler
+    hists = []
+
+    def process(config: int, task: int) -> None:
+        hists.append(estimator.result(config).copy())
+
+    pipeline = pl.Pipeline([rng, photons, light, tracer, estimator])
+    scheduler = pl.PipelineScheduler(pipeline, processFn=process)
+    # create batches
+    tasks = [
+        {},
+    ] * n_batches  # rng advances on its own, so we dont have any updates
+    scheduler.schedule(tasks)
+    scheduler.wait()
+    # combine histograms
+    truth_hist = np.mean(hists, 0)
+    truth = truth_hist.sum()
+
+    # create estimate
+
+    # create tracer
+    response = theia.estimator.UniformHitResponse()
+    tracer = theia.trace.VolumeTracer(
+        batch_size,
+        light,
+        response,
+        rng,
+        target=targets[0],
+        nScattering=max_length,
+        disableTargetSampling=not sampleTarget,
+        scatterCoefficient=scatter_coef,
+        maxTime=maxTime,
+        polarized=polarized,
+        medium=matStore.media["homogenous"],
+    )
+    estimator = theia.estimator.HistogramEstimator(
+        response.queue,
+        nBins=n_bins,
+        binSize=bin_size,
+        t0=bin_t0,
+        normalization=1 / batch_size,
+    )
+    rng.autoAdvance = tracer.nRNGSamples
+    # create pipeline + scheduler
+    hists = []
+
+    def process(config: int, task: int) -> None:
+        hists.append(estimator.result(config).copy())
+
+    pipeline = pl.Pipeline([rng, photons, light, tracer, estimator])
+    scheduler = pl.PipelineScheduler(pipeline, processFn=process)
+    # create batches
+    tasks = [
+        {},
+    ] * n_batches  # rng advances on its own, so no updates
+    scheduler.schedule(tasks)
+    scheduler.wait()
+    # combine histograms
+    hist = np.mean(hists, 0)
+    estimate = hist.sum()
+
+    # check estimate
+    assert abs(estimate / truth - 1.0) < 0.05
+
+    # We could also compare light curves for a better test
+    # However, our ground truth has rather large variance.
+    # Since the advanced algorithms show smaller one, we'd also larger errors.

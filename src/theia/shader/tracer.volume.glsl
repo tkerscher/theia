@@ -81,7 +81,7 @@ void createHit(Ray ray, vec3 dir, float weight, bool scattered) {
 
     //update ray (local copy)
     ray.direction = dir;
-    ResultCode code = propagateRay(ray, dist, params.propagation, true);
+    ResultCode code = propagateRay(ray, dist, params.propagation, scattered);
     if (code < 0)
         return; //lost ray or time ran out -> create no response
 
@@ -90,30 +90,33 @@ void createHit(Ray ray, vec3 dir, float weight, bool scattered) {
     vec3 hitPos = normal * params.target.radius;
     //create hit
     if (ray.time <= params.propagation.maxTime) {
-            #ifdef POLARIZATION
-            //rotate polRef to plane of incidence
-            vec3 polRef;
-            vec4 stokes = rotatePolRef(dir, ray.polRef, normal, polRef) * ray.stokes;
-            //normalize stokes
-            float contrib = ray.lin_contrib * exp(ray.log_contrib);
-            contrib *= stokes.x;
-            stokes /= ray.stokes.x;
-            response(HitItem(
-                hitPos, dir, normal,
-                //since we only translated the target, polRef are same in world and object space
-                stokes, polRef,
-                ray.wavelength,
-                ray.time,
-                contrib
-            ));
-            #else
-            response(HitItem(
-                hitPos, dir, normal,
-                ray.wavelength,
-                ray.time,
-                ray.lin_contrib * exp(ray.log_contrib)
-            ));
-            #endif
+        //calculate contribution
+        float contrib = ray.lin_contrib * exp(ray.log_contrib);
+        contrib *= weight;
+
+        #ifdef POLARIZATION
+        //rotate polRef to plane of incidence
+        vec3 polRef;
+        vec4 stokes = rotatePolRef(dir, ray.polRef, normal, polRef) * ray.stokes;
+        //normalize stokes
+        contrib *= stokes.x;
+        stokes /= ray.stokes.x;
+        response(HitItem(
+            hitPos, dir, normal,
+            //since we only translated the target, polRef are same in world and object space
+            stokes, polRef,
+            ray.wavelength,
+            ray.time,
+            contrib
+        ));
+        #else
+        response(HitItem(
+            hitPos, dir, normal,
+            ray.wavelength,
+            ray.time,
+            contrib
+        ));
+        #endif
     }
 }
 
@@ -177,9 +180,6 @@ ResultCode trace(inout Ray ray, uint idx, uint dim, bool first, bool allowRespon
     if (hit) {
         return RESULT_CODE_RAY_ABSORBED;
     }
-
-    //apply scattering coefficient
-    ray.lin_contrib *= ray.constants.mu_s;
 
     #ifndef DISABLE_MIS
     //MIS detector:
