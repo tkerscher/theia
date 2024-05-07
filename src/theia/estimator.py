@@ -734,3 +734,35 @@ class HistogramEstimator(Estimator):
             hp.flushMemory(),
             *self._reducer.run(i),
         ]
+
+
+class HostEstimator(Estimator):
+    """
+    Copies `HitItems` back to host without processing them.
+
+    Parameters
+    ----------
+    queue: QueueTensor
+        Queue from which to consume the `ValueItem`
+    clearQueue: bool, default=True
+        Wether the input queue should be cleared after processing it
+    """
+
+    def __init__(self, queue: QueueTensor, *, clearQueue: bool = True) -> None:
+        super().__init__(queue, clearQueue)
+        # create local copy
+        self._buffers = [QueueBuffer(ValueItem, queue.capacity) for _ in range(2)]
+
+    def buffer(self, i: int) -> QueueBuffer:
+        """Returns the i-th queue buffer."""
+        return self._buffers[i]
+
+    def view(self, i: int) -> QueueView:
+        """Returns a view of the i-th queue buffer"""
+        return self.buffer(i).view
+
+    def run(self, i: int) -> List[hp.Command]:
+        return [
+            hp.retrieveTensor(self.queue, self.buffer(i)),
+            *([clearQueue(self.queue)] if self.clearQueue else []),
+        ]
