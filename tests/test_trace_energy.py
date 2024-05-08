@@ -167,6 +167,167 @@ def test_SceneTracer_GroundTruth(
 
 
 @pytest.mark.parametrize(
+    "mu_a,mu_s,g,polarized",
+    [
+        (0.0, 0.01, 0.0, False),
+        (0.05, 0.005, 0.5, False),
+        (0.0, 0.01, 0.0, True),
+        (0.05, 0.005, -0.5, True),
+    ],
+)
+def test_SceneTracer_Crosscheck(
+    mu_a: float, mu_s: float, g: float, polarized: bool
+) -> None:
+    """
+    Spherical light source with spherical target.
+    Use GroundTruth to check against.
+    """
+    # Scene settings
+    position = (0.0, 0.0, 0.0) * u.m
+    radius = 5.0 * u.m
+    # Light settings
+    light_pos = (-6.0, 0.0, 0.0) * u.m
+    budget = 1e9
+    t0 = 30.0 * u.ns
+    lam = 400.0 * u.nm  # doesn't really matter
+    # tracer settings
+    max_length = 8
+    scatter_coef = 0.05
+    maxTime = 600.0  # limit as ground truth suffers from high variance at late times
+    polarized = False
+    # simulation settings
+    batch_size = 1 * 1024 * 1024
+    n_batches = 100
+    # binning config
+    bin_t0 = 0.0
+    bin_size = 10.0
+    n_bins = 60
+
+    # create materials
+    model = MediumModel(mu_a, mu_s, g)
+    medium = model.createMedium()
+    material = theia.material.Material("det", None, medium, flags="DB")
+    matStore = theia.material.MaterialStore([material])
+    # load meshes
+    meshStore = theia.scene.MeshStore({"sphere": "assets/sphere.stl"})
+
+    # create scene
+    targets = [theia.scene.SphereBBox(position, radius)]
+    trafo = theia.scene.Transform.Scale(radius, radius, radius).translate(*position)
+    target = meshStore.createInstance("sphere", "det", transform=trafo, detectorId=0)
+    scene = theia.scene.Scene(
+        [target],
+        matStore.material,
+        medium=matStore.media["homogenous"],
+        targets=targets,
+    )
+    # create light (delta pulse)
+    photons = theia.light.UniformPhotonSource(
+        lambdaRange=(lam, lam), timeRange=(t0, t0), budget=budget
+    )
+    light = theia.light.SphericalLightSource(photons, position=light_pos)
+
+    # Calculate ground truth
+
+    # create tracer
+    rng = theia.random.SobolQRNG(seed=0xC0FFEE)
+    response = theia.estimator.UniformHitResponse()
+    tracer = theia.trace.SceneTracer(
+        batch_size,
+        light,
+        response,
+        rng,
+        scene=scene,
+        maxPathLength=2 * max_length,  # higher variance -> more samples
+        disableTargetSampling=True,
+        scatterCoefficient=scatter_coef,
+        maxTime=maxTime,
+        polarized=polarized,
+    )
+    estimator = theia.estimator.HistogramEstimator(
+        response.queue,
+        nBins=n_bins,
+        binSize=bin_size,
+        t0=bin_t0,
+        normalization=1 / batch_size,
+    )
+    rng.autoAdvance = tracer.nRNGSamples
+    # create pipeline + scheduler
+    hists = []
+
+    def process(config: int, task: int) -> None:
+        hists.append(estimator.result(config).copy())
+
+    pipeline = pl.Pipeline([rng, photons, light, tracer, estimator])
+    scheduler = pl.PipelineScheduler(pipeline, processFn=process)
+    # create batches
+    tasks = [
+        {},
+    ] * n_batches  # rng advances on its own, so no updates
+    scheduler.schedule(tasks)
+    scheduler.wait()
+    # combine histograms
+    truth_hist = np.mean(hists, 0)
+    truth = truth_hist.sum()
+
+    # create estimate
+
+    # create tracer
+    response = theia.estimator.UniformHitResponse()
+    tracer = theia.trace.SceneTracer(
+        batch_size,
+        light,
+        response,
+        rng,
+        scene=scene,
+        maxPathLength=max_length,
+        disableTargetSampling=False,
+        scatterCoefficient=scatter_coef,
+        maxTime=maxTime,
+        polarized=polarized,
+    )
+    estimator = theia.estimator.HistogramEstimator(
+        response.queue,
+        nBins=n_bins,
+        binSize=bin_size,
+        t0=bin_t0,
+        normalization=1 / batch_size,
+    )
+    rng.autoAdvance = tracer.nRNGSamples
+    # create pipeline + scheduler
+    hists = []
+
+    def process(config: int, task: int) -> None:
+        hists.append(estimator.result(config).copy())
+
+    pipeline = pl.Pipeline([rng, photons, light, tracer, estimator])
+    scheduler = pl.PipelineScheduler(pipeline, processFn=process)
+    # create batches
+    tasks = [
+        {},
+    ] * n_batches  # rng advances on its own, so no updates
+    scheduler.schedule(tasks)
+    scheduler.wait()
+    # combine histograms
+    hist = np.mean(hists, 0)
+    estimate = hist.sum()
+
+    # check estimate
+    assert abs(estimate / truth - 1.0) < 0.07  # slightly higher error !?
+    # Compare early part of light curves
+    # The ground truth algorithm suffers from high variance especially at later
+    # times making a test there pointless.
+    # Use log10 to compare curves.
+    log_err = None
+    with np.errstate(divide="ignore", invalid="ignore"):
+        log_err = (np.log10(hist[:25]) - np.log10(truth_hist[:25])) / np.log10(
+            hist[:25]
+        )
+    log_err = np.nan_to_num(log_err, nan=0.0)
+    assert np.abs(log_err).mean() < 0.05
+
+
+@pytest.mark.parametrize(
     "mu_a,mu_s,g,sampleTarget,polarized",
     [
         (0.0, 0.01, 0.0, False, False),
@@ -267,7 +428,7 @@ def test_VolumeTracer_Crosscheck(
     # create batches
     tasks = [
         {},
-    ] * n_batches  # rng advances on its own, so we dont have any updates
+    ] * n_batches  # rng advances on its own, so no updates
     scheduler.schedule(tasks)
     scheduler.wait()
     # combine histograms
