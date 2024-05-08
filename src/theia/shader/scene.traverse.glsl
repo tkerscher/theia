@@ -329,7 +329,8 @@ void processShadowRay(
     float weight
 ) {
     //check if we hit the target
-    if (hit.customId != targetId || (hit.flags & MATERIAL_DETECTOR_BIT) == 0)
+    bool isDet = (hit.flags & MATERIAL_DETECTOR_BIT) != 0;
+    if (!hit.valid || hit.customId != targetId || !isDet)
         return;
     
     //update ray; dont use propagate, as ray.direction is wrong
@@ -381,8 +382,11 @@ void traceShadowRay(
 
     //process hit
     SurfaceHit hit;
+    vec3 tmp = ray.direction;
+    ray.direction = dir;    // temporarly set actual direction for ray query process
     ResultCode result = processRayQuery(ray, rayQuery, hit);
     if (result < 0) return; //successfull? (any hits?)
+    ray.direction = tmp;    //Restore old state for correct shadow ray processing
 
     //process shadow ray
     processShadowRay(ray, dir, hit, targetId, params, weight);
