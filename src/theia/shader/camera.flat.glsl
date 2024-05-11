@@ -14,7 +14,7 @@ layout(scalar) uniform CameraRayParams {
 CameraRay sampleCameraRay(uint idx, uint dim) {
     //sample direction
     vec2 u = random2D(idx, dim);
-    float cos_theta = u.x; //limit to upper hemisphere
+    float cos_theta = 1.0 - u.x; //limit to upper hemisphere (exclude 0.0)
     float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
     float phi = TWO_PI * u.y;
     vec3 localDir = vec3(
@@ -49,10 +49,13 @@ CameraRay sampleCameraRay(uint idx, uint dim) {
     //transform to sceen coord space
     vec3 rayPos = cameraRayParams.trafo * localPos + cameraRayParams.offset;
 
+    //calculate contribution
+    //(need an extra cosine factor)
+    float contrib = cos_theta * cameraRayParams.contrib;
     //assemble camera ray
     return CameraRay(
         rayPos, rayDir,                 // ray pos / dir
-        cameraRayParams.contrib, 0.0,   // contrib / time delta
+        contrib, 0.0,   // contrib / time delta
 #ifdef POLARIZATION
         polRef,
 #endif
