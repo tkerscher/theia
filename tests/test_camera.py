@@ -246,6 +246,9 @@ def test_sphericalCamera(polarized: bool):
     assert np.allclose(np.square(rays["hitDirection"]).sum(-1), 1.0)
     assert np.allclose(np.square(rays["hitNormal"]).sum(-1), 1.0)
     assert np.allclose(rays["timeDelta"], t0)
+    cos_normal = np.abs((rays["hitDirection"] * rays["hitNormal"]).sum(-1))
+    contrib =  4*np.pi*radius**2*2*np.pi*cos_normal
+    assert np.abs(rays["contrib"] - contrib).max() < 1e-3
     if polarized:
         # polarization ref was automatically generated, so just test its properties
         assert (rays["direction"] * rays["polarizationRef"]).sum(-1).max() < 1e-6
