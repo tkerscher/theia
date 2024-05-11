@@ -671,3 +671,59 @@ class LenseCameraRaySource(CameraRaySource):
         area_lense = np.pi * self.getParam("lenseRadius") ** 2
         contrib = area_det * area_lense / self.getParam("focalLength")
         self.setParam("_contrib", contrib)
+
+
+class SphereCameraRaySource(CameraRaySource):
+    """
+    Camera ray source simulating an isotropic spherical detector of given
+    radius. Always uses a unit sphere in object space regardless of size.
+
+    Parameters
+    ----------
+    position: (float, float, float), default=(0.0, 0.0, 0.0)
+        Center position of the detector sphere
+    radius: float, default=1.0
+        Radius of the detector sphere
+    timeDelta: float, default=0.0
+        Time offset applied to camera rays and this light paths.
+
+    Stage Parameters
+    ----------------
+    position: (float, float, float), default=(0.0, 0.0, 0.0)
+        Center position of the detector sphere
+    radius: float, default=1.0
+        Radius of the detector sphere
+    timeDelta: float, default=0.0
+        Time offset applied to camera rays and this light paths.
+    """
+
+    name = "Spherical Camera Ray Source"
+
+    class CameraRayParams(Structure):
+        _fields_ = [
+            ("position", vec3),
+            ("radius", c_float),
+            ("timeDelta", c_float),
+            ("_contrib", c_float),
+        ]
+
+    def __init__(
+        self,
+        *,
+        position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        radius: float = 1.0,
+        timeDelta: float = 0.0,
+    ) -> None:
+        super().__init__(
+            nRNGSamples=4,
+            params={"CameraRayParams": self.CameraRayParams},
+        )
+        self.setParams(position=position, radius=radius, timeDelta=timeDelta)
+
+    # source code via descriptor
+    sourceCode = ShaderLoader("camera.sphere.glsl")
+
+    def _finishParams(self, i: int) -> None:
+        r = self.getParam("radius")
+        contrib = 4 * np.pi * r**2 * 2 * np.pi
+        self.setParam("_contrib", contrib)

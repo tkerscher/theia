@@ -108,7 +108,8 @@ def test_flatCamera(polarized: bool):
     assert np.abs(localRayPos.mean(0)).max() < 5e-3
     assert np.allclose(trafo.apply(rays["hitPosition"]), rays["position"])
     assert np.abs(trafo.applyVec(rays["hitDirection"]) + rays["direction"]).max() < 5e-7
-    assert np.allclose(rays["contrib"], width * length * 2.0 * np.pi)
+    cos_normal = np.abs((rays["hitDirection"] * rays["hitNormal"]).sum(-1))
+    assert np.allclose(rays["contrib"], width * length * 2.0 * np.pi * cos_normal)
     assert np.allclose(rays["timeDelta"], 0.0)
     assert np.all(np.abs(rays["hitPosition"].mean(0)) <= (5e-3, 5e-3, 0.0))
     assert np.all(rays["hitPosition"].min(0) >= (-width / 2, -length / 2, 0.0))
@@ -211,6 +212,46 @@ def test_lenseCamera(polarized: bool):
         assert np.abs(np.square(rays["polarizationRef"]).sum(-1) - 1.0).max() < 1e-6
         # check if polRef is perpendicular to plane of scattering
         hitRef = trafo.inverse().applyVec(rays["polarizationRef"])
+        inc = np.cross(rays["hitNormal"], rays["hitDirection"])
+        inc /= np.sqrt(np.square(inc).sum(-1))[:, None]
+        assert np.abs(np.abs((hitRef * inc).sum(-1)) - 1.0).max() < 1e-6
+
+
+@pytest.mark.parametrize("polarized", [True, False])
+def test_sphericalCamera(polarized: bool):
+    N = 32 * 256
+    # params
+    position = (12.0, 5.0, -7.0)
+    radius = 4.0
+    t0 = 12.5
+
+    # create camera and sampler
+    camera = theia.camera.SphereCameraRaySource(
+        position=position, radius=radius, timeDelta=t0
+    )
+    philox = PhiloxRNG(key=0xC0FFEE)
+    sampler = theia.camera.CameraRaySampler(camera, N, rng=philox, polarized=polarized)
+    # run
+    runPipeline([philox, camera, sampler])
+
+    # check result
+    rays = sampler.view(0)
+    p = np.array(position)
+    d = np.sqrt(np.square(rays["position"] - p).sum(-1))
+    assert np.allclose(d, radius)
+    assert np.abs(rays["hitPosition"].mean(0)).max() < 0.01
+    assert np.abs(rays["hitPosition"].var(0) - 1 / 3).max() < 0.01
+    assert np.allclose(rays["position"], rays["hitPosition"] * radius + position)
+    assert np.allclose(np.square(rays["direction"]).sum(-1), 1.0)
+    assert np.allclose(np.square(rays["hitDirection"]).sum(-1), 1.0)
+    assert np.allclose(np.square(rays["hitNormal"]).sum(-1), 1.0)
+    assert np.allclose(rays["timeDelta"], t0)
+    if polarized:
+        # polarization ref was automatically generated, so just test its properties
+        assert (rays["direction"] * rays["polarizationRef"]).sum(-1).max() < 1e-6
+        assert np.abs(np.square(rays["polarizationRef"]).sum(-1) - 1.0).max() < 1e-6
+        # check if polRef is perpendicular to plane of scattering
+        hitRef = rays["polarizationRef"]
         inc = np.cross(rays["hitNormal"], rays["hitDirection"])
         inc /= np.sqrt(np.square(inc).sum(-1))[:, None]
         assert np.abs(np.abs((hitRef * inc).sum(-1)) - 1.0).max() < 1e-6
