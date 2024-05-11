@@ -738,7 +738,7 @@ class HistogramEstimator(Estimator):
 
 class HostEstimator(Estimator):
     """
-    Copies `HitItems` back to host without processing them.
+    Copies `ValueItems` back to host without processing them.
 
     Parameters
     ----------
