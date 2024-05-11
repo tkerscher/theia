@@ -346,7 +346,7 @@ class SobolQRNG(RNG):
     @property
     def sourceCode(self) -> str:
         # add preamble if needed
-        if self.scrambled:
+        if not self.scrambled:
             # add define to disable scrambling if needed
             # multiple #define are allowed so dont sweat about putting it before
             # the include guard
