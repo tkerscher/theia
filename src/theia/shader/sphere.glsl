@@ -8,6 +8,12 @@ struct Sphere{
     float radius;
 };
 
+//For very small sampling cones we run out of numerical precision. To circumvent
+//this we have two options: Collapse to a Dirac delta and always return the
+//direction to the center (feels bad) or enforce a lower limit on the opening
+//angle of the viewing cone (sampled direction might miss). We choose the latter
+#define SPHERE_SAMPLE_MAX_COS_MAX 1.0-5e-6
+
 //we only sample the visible half of the sphere visible from the observer
 //furthermore, we want to be uniform in direction (not area!)
 
@@ -19,10 +25,11 @@ vec3 sampleSphere(
 ) {
     //calculate visible cone
     vec3 delta = sphere.position - observer;
-    float d2 = dot(delta, delta);
-    float d = sqrt(d2);                                 //dist to sphere center
-    float t = sqrt(d2 + sphere.radius*sphere.radius);   //dist to sphere edge
-    float cos_max = d / t;
+    float d = distance(sphere.position, observer);
+    float sin_max = sphere.radius / d;
+    float cos_max = sqrt(max(1.0 - sin_max*sin_max, 0.0));
+    //Limiting the viewing angle prevents from creatint inf prob (div by zero)
+    cos_max = min(cos_max, SPHERE_SAMPLE_MAX_COS_MAX);
 
     //sample cone
     float phi = TWO_PI * rng.x;
@@ -35,14 +42,14 @@ vec3 sampleSphere(
         cos_theta
     );
 
-    //calculate sample probability
+    //Calculate probability
     p = 1.0 / (TWO_PI * (1.0 - cos_max));
 
     //create trafo for local -> observer
     mat3 trafo = createLocalCOSY(delta / d);
-    //transform p to observer space, than world space
+    //transform p from object space to world space
     return normalize(trafo * pos);
-}  
+}
 
 float sampleSphereProb(
     const Sphere sphere,
@@ -60,13 +67,13 @@ float sampleSphereProb(
     }
 
     //calculate visible cone
-    vec3 delta = sphere.position - observer;
-    float d2 = dot(delta, delta);
-    float d = sqrt(d2);                                 //dist to sphere center
-    float t = sqrt(d2 + sphere.radius*sphere.radius);   //dist to sphere edge
-    float cos_max = d / t;
+    float d = distance(sphere.position, observer);
+    float sin_max = sphere.radius / d;
+    float cos_max = sqrt(max(1.0 - sin_max*sin_max, 0.0));
+    //Limiting the viewing angle prevents from creatint inf prob (div by zero)
+    cos_max = min(cos_max, SPHERE_SAMPLE_MAX_COS_MAX);
 
-    //return constant probability
+    //Calculate probability
     return 1.0 / (TWO_PI * (1.0 - cos_max));
 }
 
