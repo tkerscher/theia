@@ -191,17 +191,16 @@ def test_SceneTracer_Crosscheck(
     t0 = 30.0 * u.ns
     lam = 400.0 * u.nm  # doesn't really matter
     # tracer settings
-    max_length = 8
-    scatter_coef = 0.05
+    max_length = 10
+    scatter_coef = 0.01
     maxTime = 600.0  # limit as ground truth suffers from high variance at late times
-    polarized = False
     # simulation settings
     batch_size = 1 * 1024 * 1024
     n_batches = 100
     # binning config
     bin_t0 = 0.0
-    bin_size = 10.0
-    n_bins = 60
+    bin_size = 20.0
+    n_bins = 30
 
     # create materials
     model = MediumModel(mu_a, mu_s, g)
@@ -320,9 +319,7 @@ def test_SceneTracer_Crosscheck(
     # Use log10 to compare curves.
     log_err = None
     with np.errstate(divide="ignore", invalid="ignore"):
-        log_err = (np.log10(hist[:25]) - np.log10(truth_hist[:25])) / np.log10(
-            hist[:25]
-        )
+        log_err = (np.log10(hist) - np.log10(truth_hist)) / np.log10(hist)
     log_err = np.nan_to_num(log_err, nan=0.0)
     assert np.abs(log_err).mean() < 0.05
 
@@ -334,10 +331,10 @@ def test_SceneTracer_Crosscheck(
         (0.05, 0.005, 0.0, False, False),
         (0.0, 0.01, 0.0, False, True),
         (0.05, 0.005, 0.0, False, True),
-        (0.0, 0.01, 0.0, True, False),
-        (0.05, 0.005, 0.0, True, False),
-        (0.0, 0.01, 0.0, True, True),
-        (0.05, 0.005, 0.0, True, True),
+        (0.0, 0.01, 0.5, True, False),
+        (0.05, 0.005, 0.5, True, False),
+        (0.0, 0.01, -0.9, True, True),
+        (0.05, 0.005, -0.9, True, True),
     ],
 )
 def test_VolumeTracer_Crosscheck(
@@ -356,17 +353,16 @@ def test_VolumeTracer_Crosscheck(
     t0 = 30.0 * u.ns
     lam = 400.0 * u.nm  # doesn't really matter
     # tracer settings
-    max_length = 8
-    scatter_coef = 0.05
-    maxTime = float("inf")
-    polarized = False
+    max_length = 15
+    scatter_coef = 2.0 * mu_s # 0.02
+    maxTime = 500.0  # limit as ground truth suffers from high variance at late times
     # simulation settings
     batch_size = 1 * 1024 * 1024
     n_batches = 100
     # binning config
     bin_t0 = 0.0
     bin_size = 20.0
-    n_bins = 100
+    n_bins = 25
 
     # create materials
     model = MediumModel(mu_a, mu_s, g)
@@ -479,8 +475,15 @@ def test_VolumeTracer_Crosscheck(
     estimate = hist.sum()
 
     # check estimate
-    assert abs(estimate / truth - 1.0) < 0.05
-
-    # We could also compare light curves for a better test
-    # However, our ground truth has rather large variance.
-    # Since the advanced algorithms show smaller one, we'd also larger errors.
+    thres = 0.02 if sampleTarget else 0.08 # give more slack if not target sampling
+    assert abs(estimate / truth - 1.0) < thres
+    # Compare early part of light curves
+    # The ground truth algorithm suffers from high variance especially at later
+    # times making a test there pointless.
+    # Use log10 to compare curves.
+    log_err = None
+    with np.errstate(divide="ignore", invalid="ignore"):
+        log_err = (np.log10(hist) - np.log10(truth_hist)) / np.log10(hist)
+    log_err = np.nan_to_num(log_err, nan=0.0)
+    thres = 0.05 if sampleTarget else 0.12
+    assert np.abs(log_err).mean() < thres
