@@ -15,6 +15,7 @@ from typing import Dict, List, Set, Type, Union, Optional
 
 __all__ = [
     "createValueQueue",
+    "CustomHitResponse",
     "EmptyResponse",
     "Estimator",
     "HistogramEstimator",
@@ -416,6 +417,35 @@ class UniformHitResponse(ValueHitResponse):
 
     # property via descriptor
     valueFunction = ShaderLoader("response.uniform.glsl")
+
+
+class CustomHitResponse(ValueHitResponse):
+    """
+    Response function based on user provided code. Code must define the response
+    value function:
+
+    ```
+    float responseValue(HitItem item)
+    ```
+
+    Parameters:
+    -----------
+    code: str
+        User provided source code (GLSL).
+    """
+
+    def __init__(self, code: str, *, queue: Union[QueueTensor, None] = None) -> None:
+        super().__init__(queue)
+        # add include guards before
+        _code = "#ifndef _INCLUDE_RESPONSE_CUSTOM\n"
+        _code += "#define _INCLUDE_RESPONSE_CUSTOM\n"
+        _code += code
+        _code += "#endif\n"
+        self._code = _code
+
+    @property
+    def valueFunction(self) -> str:
+        return self._code
 
 
 class Estimator(PipelineStage):
