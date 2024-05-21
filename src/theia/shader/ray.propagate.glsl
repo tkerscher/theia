@@ -73,6 +73,12 @@ ResultCode propagateRay(
 //updates ray with contribution from importance sampling
 //Set hit=true, if the was stopped by a hit (affects probability calculations)
 void updateRayIS(inout Ray ray, float dist, const PropagateParams params, bool hit) {
+    //We only used IS, if scattering is possible
+    //(otherwise we used a constant maxDistance)
+    bool canScatter = ray.constants.mu_s > 0.0;
+    if (!canScatter)
+        return;
+
     ray.log_contrib += params.scatterCoefficient * dist;
     if (!hit) {
         //if we hit anything, the actual prob is to travel at least dist
