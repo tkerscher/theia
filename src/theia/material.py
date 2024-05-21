@@ -1181,31 +1181,10 @@ class FournierForandPhaseFunction:
     """
 
     def __init__(self, n: float, mu: float) -> None:
-        self.n = n
-        self.mu = mu
+        self._n = n
+        self._mu = mu
 
-        # Unfortunately this phase function is rather complex
-        # While there exist a analytic integral, it's hard to invert so we'll
-        # just evaluate the integral and interpolate the inverse
-
-        # sample phase function integral
-        # note that the phase function diverges for cos(theta) = 1
-        # that's not that big of a problem, since rng never produces exactly 1
-        cos_theta = np.linspace(1.0 - 1e-7, -1.0, 2048)  # TODO: tune number of eval
-        # some constants
-        nu = 0.5 * (3.0 - self.mu)
-        d = 2.0 * (1.0 - cos_theta) / (3.0 * (self.n - 1.0) ** 2)
-        d_nu = np.float_power(d, nu)
-        d_180 = 4.0 / (3.0 * (self.n - 1.0) ** 2)
-        d_180_nu = np.float_power(d_180, nu)
-        # split up formula to be more readable
-        A = ((1 - d_nu * d) - 0.5 * (1 - d_nu) * (1 - cos_theta)) / ((1 - d) * d_nu)
-        B = ((1 - d_180_nu) * (1 - cos_theta) * cos_theta) / (
-            16 * (d_180 - 1) * d_180_nu
-        )
-        cdf = A + B
-        # fill interpolator
-        self._sample_spline = CubicSpline(cdf, cos_theta)
+        self._update()
 
     @property
     def n(self) -> float:
@@ -1215,6 +1194,7 @@ class FournierForandPhaseFunction:
     @n.setter
     def n(self, value: float) -> None:
         self._n = value
+        self._update()
 
     @property
     def mu(self) -> float:
@@ -1224,6 +1204,7 @@ class FournierForandPhaseFunction:
     @mu.setter
     def mu(self, value: float) -> None:
         self._mu = value
+        self._update()
 
     def log_phase_function(self, cos_theta: npt.ArrayLike) -> npt.NDArray:
         """Evaluates the log phase function for the given angles mu = cos(theta)"""
@@ -1256,6 +1237,31 @@ class FournierForandPhaseFunction:
         # Also note that thanks to extrapolation, the divergence at
         # cos(theta)=1.0 is no longer a problem
         return self._sample_spline(eta)
+
+    def _update(self) -> None:
+        """Updates internal state after changing properties"""
+        # Unfortunately this phase function is rather complex
+        # While there exist a analytic integral, it's hard to invert so we'll
+        # just evaluate the integral and interpolate the inverse
+
+        # sample phase function integral
+        # note that the phase function diverges for cos(theta) = 1
+        # that's not that big of a problem, since rng never produces exactly 1
+        cos_theta = np.linspace(1.0 - 1e-7, -1.0, 2048)  # TODO: tune number of eval
+        # some constants
+        nu = 0.5 * (3.0 - self.mu)
+        d = 2.0 * (1.0 - cos_theta) / (3.0 * (self.n - 1.0) ** 2)
+        d_nu = np.float_power(d, nu)
+        d_180 = 4.0 / (3.0 * (self.n - 1.0) ** 2)
+        d_180_nu = np.float_power(d_180, nu)
+        # split up formula to be more readable
+        A = ((1 - d_nu * d) - 0.5 * (1 - d_nu) * (1 - cos_theta)) / ((1 - d) * d_nu)
+        B = ((1 - d_180_nu) * (1 - cos_theta) * cos_theta) / (
+            16 * (d_180 - 1) * d_180_nu
+        )
+        cdf = A + B
+        # fill interpolator
+        self._sample_spline = CubicSpline(cdf, cos_theta)
 
 
 class DispersionFreeMedium:
