@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import importlib.resources
 import warnings
 
@@ -359,6 +361,65 @@ class Medium:
     @phase_m34.deleter
     def phase_m34(self) -> None:
         self._phase_m34 = None
+
+    # list containing names of arrays/properties used by serialization
+    _PROPS = [
+        "refractive_index",
+        "group_velocity",
+        "absorption_coef",
+        "scattering_coef",
+        "log_phase_function",
+        "phase_sampling",
+        "phase_m12",
+        "phase_m22",
+        "phase_m33",
+        "phase_m34",
+    ]
+
+    def save(self, file) -> None:
+        """
+        Serializes the medium and saves it at the given location.
+        Produces a file in numpy's `.npz` format.
+
+        Parameters
+        ----------
+        file: str or file
+            Path or open file where the data will be saved.
+        """
+        # collect all non empty arrays
+        arrays = {
+            p: getattr(self, p) for p in self._PROPS if getattr(self, p) is not None
+        }
+        # add lambda range
+        arrays["lambda_range"] = np.array([self.lambda_min, self.lambda_max])
+
+        np.savez(file, **arrays)
+
+    def load(file, *, name: str = "unnamed") -> Medium:
+        """
+        Loads the serialized medium from the given file or path.
+
+        Parameters
+        ----------
+        file: str or file
+            Path or open file where the data is stored.
+        name: str, default="unnamed"
+            Name of the loaded medium.
+
+        Returns
+        -------
+        Deserialized medium loaded from the given file or path.
+        """
+        data = np.load(file)
+        lam = data.get("lambda_range")
+        if lam is None or lam.shape != (2,):
+            raise ValueError("File does not contain valid lambda range!")
+
+        medium = Medium(name, lam[0], lam[1])
+        for prop in Medium._PROPS:
+            setattr(medium, prop, data.get(prop))
+
+        return medium
 
 
 class MaterialFlags(IntFlag):
@@ -1166,6 +1227,9 @@ class FournierForandPhaseFunction:
 
     def log_phase_function(self, cos_theta: npt.ArrayLike) -> npt.NDArray:
         """Evaluates the log phase function for the given angles mu = cos(theta)"""
+        # phase functions becomes singular at cos_theta = 1.0
+        # clip close before (1 float ulp)
+        cos_theta = np.clip(cos_theta, -1.0, 1.0 - 1e-7)
         # constants
         nu = 0.5 * (3.0 - self.mu)
         d = 2.0 * (1.0 - cos_theta) / (3.0 * (self.n - 1.0) ** 2)
