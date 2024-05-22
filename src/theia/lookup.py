@@ -5,7 +5,12 @@ from scipy.interpolate import (
     CubicSpline,
     LinearNDInterpolator,
 )
-from typing import Final, Literal, Union
+
+import hephaistos as hp
+from ctypes import memmove
+from hephaistos import ByteTensor
+
+from typing import Final, List, Literal, Union
 
 __all__ = [
     "createTable",
@@ -13,6 +18,7 @@ __all__ = [
     "getTableSize",
     "sampleTable1D",
     "sampleTable2D",
+    "uploadTables",
     "TABLE_ALIGNMENT",
 ]
 
@@ -61,6 +67,44 @@ def createTable(data):
     header = np.array(data.shape) - 1.0
     data = np.concatenate([header, data.flatten()])
     return np.ascontiguousarray(data, np.float32)
+
+
+def uploadTables(data: List) -> Union[ByteTensor, List[int]]:
+    """
+    Creates a table for each data entry in the given list and uploads them to
+    the GPU. Returns the tensor storing them and a the corresponding list of
+    device addresses pointing to the uploaded tables.
+
+    Parameters
+    ----------
+    data: List
+        List of data used to populate tables.
+
+    Returns
+    -------
+    tensor: ByteTensor
+        Tensor containing the table data
+    addresses: List[int]
+        Device addresses pointing to the individual tables on the device.
+    """
+    tables = [createTable(d) for d in data]
+    size = sum([table.nbytes for table in tables])
+
+    buffer = hp.RawBuffer(size)
+    tensor = ByteTensor(size)
+
+    adr_list = []
+    adr = tensor.address
+    ptr = buffer.address
+    for table in tables:
+        adr_list.append(adr)
+        memmove(ptr, table.ctypes.data, table.nbytes)
+        adr += table.nbytes
+        ptr += table.nbytes
+
+    hp.execute(hp.updateTensor(buffer, tensor))
+
+    return tensor, adr_list
 
 
 def _parseBoundary(data, boundary, n):

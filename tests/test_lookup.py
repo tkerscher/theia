@@ -179,3 +179,30 @@ def test_getTableSize(sampleData1D, sampleData2D):
         theia.lookup.getTableSize(sampleData2D[:, 2])
         == theia.lookup.createTable(sampleData2D[:, 2]).nbytes
     )
+
+
+def test_uploadTables(rng):
+    t1 = rng.random((64,))
+    t2 = rng.random((16,))
+    t3 = rng.random((32,))
+
+    tensor, ptr = theia.lookup.uploadTables([t1, t2, t3])
+
+    tables = [
+        theia.lookup.createTable(t1),
+        theia.lookup.createTable(t2),
+        theia.lookup.createTable(t3),
+    ]
+
+    ptr_exp = tensor.address
+    assert ptr_exp == ptr[0]
+    ptr_exp += tables[0].nbytes
+    assert ptr_exp == ptr[1]
+    ptr_exp += tables[1].nbytes
+    assert ptr_exp == ptr[2]
+
+    buffer = hp.FloatBuffer(3 + 64 + 16 + 32)
+    hp.execute(hp.retrieveTensor(tensor, buffer))
+
+    expected = np.hstack(tables)
+    assert np.equal(buffer.numpy(), expected).all()
