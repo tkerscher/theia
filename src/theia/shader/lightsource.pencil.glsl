@@ -4,6 +4,7 @@
 layout(scalar) uniform LightParams {
     vec3 position;
     vec3 direction;
+    float budget;
     //always keep polarization params
     //makes it easier on the python side
     vec4 stokes;
@@ -13,6 +14,8 @@ layout(scalar) uniform LightParams {
 SourceRay sampleLight(uint idx) {
     //sample photon
     SourceSample photon = sampleSource(idx, 0);
+    //apply budget
+    photon.contrib *= lightParams.budget;
     //assemble source and return
     return createSourceRay(
         lightParams.position,

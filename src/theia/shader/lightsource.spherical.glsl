@@ -5,6 +5,7 @@
 
 layout(scalar) uniform LightParams {
     vec3 position;
+    float budget;
 } lightParams;
 
 SourceRay sampleLight(uint idx) {
@@ -20,6 +21,8 @@ SourceRay sampleLight(uint idx) {
     );
     //sample photon
     SourceSample photon = sampleSource(idx, 2);
+    //apply budget
+    photon.contrib *= lightParams.budget;
 
     //assemble source ray
     return createSourceRay(

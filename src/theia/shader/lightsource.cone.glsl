@@ -7,6 +7,7 @@ layout(scalar) uniform LightParams {
     vec3 position;
     vec3 direction;
     float cosOpeningAngle;
+    float budget;
 
     //always keep polarization info to make things easier on the python side
     vec3 polRef;
@@ -31,6 +32,8 @@ SourceRay sampleLight(uint idx) {
 
     //sample photon
     SourceSample photon = sampleSource(idx, 2);
+    //apply budget
+    photon.contrib *= lightParams.budget;
 
     #ifdef LIGHTSOURCE_POLARIZED
     //make polRef orthogonal to light ray direction

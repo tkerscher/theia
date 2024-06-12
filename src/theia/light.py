@@ -372,9 +372,6 @@ class UniformPhotonSource(PhotonSource):
         min and max wavelength the source emits
     timeRange: (float, float), default=(0.0, 100.0)
         start and stop time of the light source
-    budget: float, default=1.0
-        Total budget the photon source distributes uniformly in time and
-        wavelength, e.g. total energy or photon count.
 
     Stage Parameters
     ----------------
@@ -382,8 +379,6 @@ class UniformPhotonSource(PhotonSource):
         min and max wavelength the source emits
     timeRange: (float, float), default=(0.0, 100.0)
         start and stop time of the light source
-    budget: float, default=1.0
-        Total budget of the photon source
     """
 
     class SourceParams(Structure):
@@ -401,24 +396,13 @@ class UniformPhotonSource(PhotonSource):
         *,
         lambdaRange: Tuple[float, float] = (300.0, 700.0),
         timeRange: Tuple[float, float] = (0.0, 100.0),
-        budget: float = 1.0,
     ) -> None:
         super().__init__(
             nRNGSamples=2,
             params={"SourceParams": self.SourceParams},
-            extra={"budget"},
         )
         # save params
-        self.setParams(lambdaRange=lambdaRange, timeRange=timeRange, budget=budget)
-
-    @property
-    def budget(self) -> float:
-        """Budget of the light source"""
-        return self._budget
-
-    @budget.setter
-    def budget(self, value: float) -> None:
-        self._budget = value
+        self.setParams(lambdaRange=lambdaRange, timeRange=timeRange)
 
     # sourceCode via descriptor
     sourceCode = ShaderLoader("photonsource.uniform.glsl")
@@ -429,7 +413,7 @@ class UniformPhotonSource(PhotonSource):
         # t   ~ U(t_0, t_1)
         # => p(t, lam) = 1.0 / (|dLam||dt|) // d(x) = 1.0 if d(x) == 0.0
         # => contrib = L/p = intensity * |dLam|*|dt|
-        c = self.budget
+        c = 1.0
         lr = self.getParam("lambdaRange")
         lr = lr[1] - lr[0]
         if lr != 0.0:
@@ -456,6 +440,9 @@ class ConeLightSource(LightSource):
         Direction of the opening cone.
     cosOpeningAngle: float, default=0.5
         Cosine of the cones opening angle
+    budget: float, default=1.0
+        Total amount of energy or photons the light source distributes among the
+        sampled photons.
     polarizationReference: (float, float, float), default=(0.0, 1.0, 0.0)
         Polarization reference frame.
     stokes: (float, float, float, float), default=(1.0, 0.0, 0.0, 0.0)
@@ -469,6 +456,9 @@ class ConeLightSource(LightSource):
         Direction of the opening cone.
     cosOpeningAngle: float, default=0.5
         Cosine of the cones opening angle
+    budget: float, default=1.0
+        Total amount of energy or photons the light source distributes among the
+        sampled photons.
     polarizationReference: (float, float, float), default=(0.0, 1.0, 0.0)
         Polarization reference frame.
     stokes: (float, float, float, float), default=(1.0, 0.0, 0.0, 0.0)
@@ -487,6 +477,7 @@ class ConeLightSource(LightSource):
             ("position", vec3),
             ("direction", vec3),
             ("cosOpeningAngle", c_float),
+            ("budget", c_float),
             ("polarizationReference", vec3),
             ("stokes", vec4),
         ]
@@ -501,6 +492,7 @@ class ConeLightSource(LightSource):
         position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
         direction: Tuple[float, float, float] = (1.0, 0.0, 0.0),
         cosOpeningAngle: float = 0.5,
+        budget: float = 1.0,
         polarizationReference: Tuple[float, float, float] = (0.0, 1.0, 0.0),
         stokes: Tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0),
     ) -> None:
@@ -514,6 +506,7 @@ class ConeLightSource(LightSource):
             position=position,
             direction=direction,
             cosOpeningAngle=cosOpeningAngle,
+            budget=budget,
             polarizationReference=polarizationReference,
             stokes=stokes,
         )
@@ -558,6 +551,9 @@ class PencilLightSource(LightSource):
         Start point of the ray
     direction: (float, float, float), default=(0.0, 0.0, 1.0)
         Direction of the ray
+    budget: float, default=1.0
+        Total amount of energy or photons the light source distributes among the
+        sampled photons.
     stokes: (float, float, float, float), default=(1.0, 0.0, 0.0, 0.0)
         Stokes vector describing polarization. Defaults to unpolarized.
     polarizationRef: (float, float, float), default=(0.0, 1.0, 0.0)
@@ -570,6 +566,9 @@ class PencilLightSource(LightSource):
         Start point of the ray
     direction: (float, float, float), default=(0.0, 0.0, 1.0)
         Direction of the ray
+    budget: float, default=1.0
+        Total amount of energy or photons the light source distributes among the
+        sampled photons.
     stokes: (float, float, float, float), default=(1.0, 0.0, 0.0, 0.0)
         Stokes vector describing polarization. Defaults to unpolarized.
     polarizationRef: (float, float, float), default=(0.0, 1.0, 0.0)
@@ -581,6 +580,7 @@ class PencilLightSource(LightSource):
         _fields_ = [
             ("position", vec3),
             ("direction", vec3),
+            ("budget", c_float),
             ("stokes", vec4),
             ("polarizationRef", vec3),
         ]
@@ -594,6 +594,7 @@ class PencilLightSource(LightSource):
         *,
         position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
         direction: Tuple[float, float, float] = (0.0, 0.0, 1.0),
+        budget: float = 1.0,
         stokes: Tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0),
         polarizationRef: Tuple[float, float, float] = (0.0, 1.0, 0.0),
     ) -> None:
@@ -606,6 +607,7 @@ class PencilLightSource(LightSource):
         self.setParams(
             position=position,
             direction=direction,
+            budget=budget,
             stokes=stokes,
             polarizationRef=polarizationRef,
         )
@@ -633,30 +635,37 @@ class SphericalLightSource(LightSource):
     ----------
     position: (float, float, float), default=(0.0, 0.0, 0.0)
         Position the light rays are radiated from.
+    budget: float, default=1.0
+        Total amount of energy or photons the light source distributes among the
+        sampled photons.
 
     Stage Parameters
     ----------------
     position: (float, float, float), default=(0.0, 0.0, 0.0)
-        Position the light rays are radiated from.
+        Position the light rays are radiated from.#
+    budget: float, default=1.0
+        Total amount of energy or photons the light source distributes among the
+        sampled photons.
     """
 
     name = "Spherical Light Source"
 
     class LightParams(Structure):
-        _fields_ = [("position", vec3)]
+        _fields_ = [("position", vec3), ("budget", c_float)]
 
     def __init__(
         self,
         photonSource: PhotonSource,
         *,
         position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        budget: float = 1.0,
     ) -> None:
         super().__init__(
             nRNGSamples=2 + photonSource.nRNGSamples,
             params={"LightParams": SphericalLightSource.LightParams},
         )
         self._photonSource = photonSource
-        self.setParams(position=position)
+        self.setParams(position=position, budget=budget)
 
     # lazily load source code via descriptor
     _sourceCode = ShaderLoader("lightsource.spherical.glsl")
@@ -815,9 +824,10 @@ class CherenkovTrackLightSource(LightSource):
     @property
     def sourceCode(self) -> str:
         # build preamble
-        preamble = f"#define RNG_RAY_SAMPLE_OFFSET {self.photonSource.nRNGSamples}\n"
-        if self.usePhotonCount:
-            preamble += f"#define FRANK_TAMM_USE_PHOTON_COUNT 1\n"
+        preamble = createPreamble(
+            RNG_RAY_SAMPLE_OFFSET=self.photonSource.nRNGSamples,
+            FRANK_TAMM_USE_PHOTON_COUNT=self.usePhotonCount,
+        )
         # assemble full code
         return "\n".join([preamble, self.photonSource.sourceCode, self._sourceCode])
 

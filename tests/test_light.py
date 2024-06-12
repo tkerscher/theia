@@ -73,15 +73,12 @@ def test_uniformPhoton():
     N = 32 * 256
     lamRange, dLam = (350.0, 750.0) * u.nm, 400.0 * u.nm
     timeRange, dt = (20.0, 70.0) * u.ns, 50.0 * u.ns
-    budget = 8.0
     # contrib = L/p(t,lam); p(t, lam) = 1.0 / (|dLam|*|dt|)
-    contrib = budget * dLam * dt
+    contrib = dLam * dt
 
     # create pipeline
     philox = theia.random.PhiloxRNG(key=0xC0110FFC0FFEE)
-    photons = theia.light.UniformPhotonSource(
-        lambdaRange=lamRange, timeRange=timeRange, budget=budget
-    )
+    photons = theia.light.UniformPhotonSource(lambdaRange=lamRange, timeRange=timeRange)
     light = theia.light.PencilLightSource(photons)
     sampler = theia.light.LightSampler(light, N, rng=philox)
     # run
@@ -109,13 +106,15 @@ def test_coneLightSource(rng, polarized: bool):
     # create pipeline
     philox = theia.random.PhiloxRNG(key=0xC0110FFC0FFEE)
     photons = theia.light.UniformPhotonSource(
-        lambdaRange=(100.0, 100.0) * u.nm, timeRange=(10.0, 10.0) * u.ns, budget=budget
+        lambdaRange=(100.0, 100.0) * u.nm,
+        timeRange=(10.0, 10.0) * u.ns,
     )
     light = theia.light.ConeLightSource(
         photons,
         position=position,
         direction=direction,
         cosOpeningAngle=opening,
+        budget=budget,
         stokes=stokes,
         polarizationReference=polRefIn,
     )
@@ -149,7 +148,7 @@ def test_pencilLightSource(rng, polarized: bool):
     direction = (0.8, 0.36, 0.48)  # unit
     stokes = (1.0, 0.9, 0.1, -0.5)
     polRef = (0.0, 0.48, -0.36)
-
+    budget = 12.0
     # create pipeline
     philox = theia.random.PhiloxRNG(key=0xC0110FFC0FFEE)
     photons = theia.light.UniformPhotonSource(
@@ -159,6 +158,7 @@ def test_pencilLightSource(rng, polarized: bool):
         photons,
         position=position,
         direction=direction,
+        budget=budget,
         stokes=stokes,
         polarizationRef=polRef,
     )
@@ -171,7 +171,7 @@ def test_pencilLightSource(rng, polarized: bool):
     assert result.count == N
     assert np.allclose(result["position"], position)
     assert np.allclose(result["direction"], direction)
-    assert np.all(result["contrib"] == 1.0)
+    assert np.all(result["contrib"] == budget)
     if polarized:
         assert np.allclose(result["stokes"], stokes)
         assert np.allclose(result["polarizationRef"], polRef)
@@ -186,9 +186,9 @@ def test_sphericalLightSource(rng, polarized: bool):
     # create pipeline
     philox = theia.random.PhiloxRNG(key=0xC0110FFC0FFEE)
     photons = theia.light.UniformPhotonSource(
-        lambdaRange=(100.0, 100.0) * u.nm, timeRange=(10.0, 10.0) * u.ns, budget=budget
+        lambdaRange=(100.0, 100.0) * u.nm, timeRange=(10.0, 10.0) * u.ns
     )
-    light = theia.light.SphericalLightSource(photons, position=position)
+    light = theia.light.SphericalLightSource(photons, position=position, budget=budget)
     sampler = theia.light.LightSampler(light, N, rng=philox, polarized=polarized)
     # run
     runPipeline([philox, photons, light, sampler])
