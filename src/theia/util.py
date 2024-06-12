@@ -78,7 +78,9 @@ def compileShader(file: str, preamble: str = "", headers: Dict[str, str] = {}) -
         return getCompiler().compile(code, headers)
     except RuntimeError as err:
         # Add preamble size to make line numbers useful
-        newTxt = f"(Preamble size: {preamble.count("\n") + 1})\n" + str(err)
+        size = preamble.count("\n") + 1
+        newTxt = f"(Preamble size: {size})"
+        newTxt += "\n" + str(err)
         raise RuntimeError(newTxt) from err
 
 
