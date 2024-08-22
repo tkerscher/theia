@@ -23,6 +23,7 @@ __all__ = [
     "HostCameraRaySource",
     "LenseCameraRaySource",
     "PencilCameraRaySource",
+    "PointCameraRaySource",
     "PolarizedCameraRayItem",
 ]
 
