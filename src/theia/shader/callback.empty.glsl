@@ -3,6 +3,6 @@
 
 #include "ray.glsl"
 
-void onEvent(const Ray ray, ResultCode code, uint idx, uint i) {}
+void onEvent(const RayState ray, ResultCode code, uint idx, uint i) {}
 
 #endif

@@ -15,7 +15,7 @@ layout(scalar) writeonly buffer Statistics {
     uint error;
 } stats;
 
-void onEvent(const Ray ray, ResultCode code, uint idx, uint i) {
+void onEvent(const RayState ray, ResultCode code, uint idx, uint i) {
     uint n;
     switch(code) {
     case RESULT_CODE_RAY_CREATED:

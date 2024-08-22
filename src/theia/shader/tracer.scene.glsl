@@ -32,9 +32,8 @@
 layout(local_size_x = BLOCK_SIZE) in;
 
 #include "ray.propagate.glsl"
-#include "ray.sample.glsl"
 #include "scene.intersect.glsl"
-#include "scene.traverse.glsl"
+#include "scene.traverse.forward.glsl"
 
 #include "lightsource.common.glsl"
 #include "response.common.glsl"
@@ -43,6 +42,8 @@ layout(local_size_x = BLOCK_SIZE) in;
 #include "callback.glsl"
 #include "source.glsl"
 #include "response.glsl"
+
+#include "callback.util.glsl"
 
 layout(scalar) uniform TraceParams {
     uint targetIdx;
@@ -65,7 +66,7 @@ void main() {
     
     //sample ray
     Medium medium = Medium(params.sceneMedium);
-    Ray ray = createRay(sampleLight(idx), medium);
+    ForwardRay ray = createRay(sampleLight(idx), medium);
     onEvent(ray, RESULT_CODE_RAY_CREATED, idx, 0);
     //advange rng by amount used by sampleLight()
     uint dim = DIM_OFFSET;
@@ -89,7 +90,6 @@ void main() {
                 idx, dim + SCENE_TRAVERSE_TRACE_OFFSET,
                 params.propagation,
                 allowResponse,
-                true, //forward, i.e. trace photons
                 last
             );
         }

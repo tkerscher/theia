@@ -29,22 +29,30 @@
 #else
 #define DIM_STRIDE 3
 #endif
-//alter ray layout
-#define USE_GLOBAL_MEDIUM
 
 layout(local_size_x = BLOCK_SIZE) in;
 
-#include "material.glsl"
-#include "sphere.intersect.glsl"
 #include "ray.propagate.glsl"
-#include "ray.sample.glsl"
+#include "sphere.intersect.glsl"
+
+layout(scalar) uniform TraceParams {
+    Sphere target;
+    uvec2 medium;
+
+    PropagateParams propagation;
+} params;
+
+//define global medium
+#define USE_GLOBAL_MEDIUM
+Medium getMedium() {
+    return Medium(params.medium);
+}
+#include "ray.medium.glsl"
+
+#include "ray.response.glsl"
+#include "ray.scatter.glsl"
 #include "result.glsl"
 #include "tracer.mis.glsl"
-#include "util.branch.glsl"
-
-#ifdef POLARIZATION
-#include "polarization.glsl"
-#endif
 
 #include "lightsource.common.glsl"
 #include "response.common.glsl"
@@ -54,86 +62,45 @@ layout(local_size_x = BLOCK_SIZE) in;
 #include "source.glsl"
 #include "response.glsl"
 
-layout(scalar) uniform TraceParams {
-    Sphere target;
-    uvec2 medium;
+#include "callback.util.glsl"
 
-    PropagateParams propagation;
-} params;
-
-void createHit(Ray ray, vec3 dir, float weight, bool scattered) {
-    //try to hit target: dist == inf if no hit
-    float dist = intersectSphere(params.target, ray.position, dir);
+void createResponse(ForwardRay ray, vec3 dir, float weight, bool scattered) {
+    //try to hit target: dist == inf -> no hit
+    float dist = intersectSphere(params.target, ray.state.position, dir);
     if (isinf(dist))
         return; // missed target -> no response
-
-    #ifdef POLARIZATION
-    //update polarization if needed
+    
+    //scatter ray if needed
     if (scattered) {
-        vec3 polRef;
-        float cos_theta = dot(ray.direction, dir);
-        Medium medium = Medium(params.medium);
-        ray.stokes = lookUpPhaseMatrix(medium, cos_theta)
-            * rotatePolRef(ray.direction, ray.polRef, dir, polRef) * ray.stokes;
-        ray.polRef = polRef;
+        scatterRayIS(ray, dir);
     }
-    #endif
-
-    //update ray (local copy)
-    ray.direction = dir;
-    ResultCode code = propagateRay(ray, dist, params.propagation, scattered);
-    if (code < 0)
-        return; //lost ray or time ran out -> create no response
-
+    
     //calculate hit coordinates
-    vec3 normal = normalize(ray.position - params.target.position);
-    vec3 hitPos = normal * params.target.radius;
-    //create hit
-    if (ray.time <= params.propagation.maxTime) {
-        //calculate contribution
-        float contrib = ray.lin_contrib * exp(ray.log_contrib);
-        contrib *= weight;
+    vec3 hitPos = ray.state.position + dir * dist;
+    vec3 hitNormal = normalize(hitPos - params.target.position);
+    vec3 objPos = hitNormal * params.target.radius;
+    //propagate ray to hit
+    ResultCode code = propagateRayToHit(ray, hitPos, hitNormal, params.propagation);
+    if (code < 0) return; //out-of-bounds
 
-        #ifdef POLARIZATION
-        //rotate polRef to plane of incidence
-        vec3 polRef;
-        vec4 stokes = rotatePolRef(dir, ray.polRef, normal, polRef) * ray.stokes;
-        //normalize stokes
-        contrib *= stokes.x;
-        stokes /= ray.stokes.x;
-        response(HitItem(
-            hitPos, dir, normal,
-            //since we only translated the target, polRef are same in world and object space
-            stokes, polRef,
-            ray.wavelength,
-            ray.time,
-            contrib
-        ));
-        #else
-        response(HitItem(
-            hitPos, dir, normal,
-            ray.wavelength,
-            ray.time,
-            contrib
-        ));
-        #endif
-    }
+    //create (weighted) response
+    ray.state.lin_contrib *= weight;
+    response(createHit(ray, objPos, hitNormal));
 }
 
-ResultCode trace(inout Ray ray, uint idx, uint dim, bool first, bool allowResponse) {
+ResultCode trace(inout ForwardRay ray, uint idx, uint dim, bool first, bool allowResponse) {
     //sample distance
     float u = random(idx, dim); dim++;
     float dist = sampleScatterLength(ray, params.propagation, u);
 
     //trace sphere
-    float t = intersectSphere(params.target, ray.position, ray.direction);
+    float t = intersectSphere(params.target, ray.state.position, ray.state.direction);
     //check if we hit
     bool hit = t <= dist;
 
-    //update ray (ray, dist, params, scatter)
-    //only on the first trace the ray has not scattered
+    //update ray
     dist = min(t, dist);
-    ResultCode result = propagateRay(ray, dist, params.propagation, !first);
+    ResultCode result = propagateRay(ray, dist, params.propagation);
     updateRayIS(ray, dist, params.propagation, hit);
     //check if ray is still in bounds
     if (result < 0)
@@ -147,57 +114,37 @@ ResultCode trace(inout Ray ray, uint idx, uint dim, bool first, bool allowRespon
     // (partition of the path space)
     if (hit && allowResponse) {
         //calculate local coordinates (dir is the same)
-        vec3 hitNormal = normalize(ray.position - params.target.position);
-        vec3 hitPos = hitNormal * params.target.radius;
-        //create response
-        if (ray.time <= params.propagation.maxTime) {
-            #ifdef POLARIZATION
-            //rotate polRef to plane of incidence
-            vec3 polRef;
-            vec4 stokes = rotatePolRef(ray.direction, ray.polRef, hitNormal, polRef) * ray.stokes;
-            //normalize stokes
-            float contrib = ray.lin_contrib * exp(ray.log_contrib);
-            contrib *= stokes.x;
-            stokes /= ray.stokes.x;
-            response(HitItem(
-                hitPos, ray.direction, hitNormal,
-                stokes, polRef,
-                ray.wavelength,
-                ray.time,
-                contrib
-            ));
-            #else
-            response(HitItem(
-                hitPos, ray.direction, hitNormal,
-                ray.wavelength,
-                ray.time,
-                ray.lin_contrib * exp(ray.log_contrib)
-            ));
-            #endif
-        }
+        vec3 hitNormal = normalize(ray.state.position - params.target.position);
+        vec3 hitObjPos = hitNormal * params.target.radius;
+        //Align hit, i.e. rotate polRef to plane of incidence
+        alignRayToHit(ray, hitNormal);
+        response(createHit(ray, hitObjPos, hitNormal));
+
         return RESULT_CODE_RAY_DETECTED;
     }
-    if (hit) {
+    else if (hit) {
+        //hit target, but response for this length was already sampled
+        //-> abort without creating a response
         return RESULT_CODE_RAY_ABSORBED;
     }
 
     #ifndef DISABLE_MIS
     //MIS detector:
-    //we both sample the scattering phase function as well as the detector
+    //We both sample the scattering phase function as well as the detector
     //sphere for a possible hit direction
     float wTarget, wPhase;
     vec3 dirTarget, dirPhase;
     vec2 uTarget = random2D(idx, dim), uPhase = random2D(idx, dim + 2); dim += 4;
     sampleTargetMIS(
         Medium(params.medium),
-        ray.position, ray.direction, params.target,
+        ray.state.position, ray.state.direction, params.target,
         uTarget, uPhase,
         wTarget, dirTarget,
         wPhase, dirPhase
     );
     //create hits
-    createHit(ray, dirTarget, wTarget, true);
-    createHit(ray, dirPhase, wPhase, true);
+    createResponse(ray, dirTarget, wTarget, true);
+    createResponse(ray, dirPhase, wPhase, true);
     #endif
 
     //no hit -> scatter
@@ -224,20 +171,18 @@ void main() {
 
     //sample ray
     Medium medium = Medium(params.medium);
-    Ray ray = createRay(sampleLight(idx), medium);
+    ForwardRay ray = createRay(sampleLight(idx), medium);
+    uint dim = DIM_OFFSET; //advance rng by amount light consumed
     onEvent(ray, RESULT_CODE_RAY_CREATED, idx, 0);
     //discard ray if inside target
-    if (distance(ray.position, params.target.position) <= params.target.radius) {
+    if (distance(ray.state.position, params.target.position) <= params.target.radius) {
         onEvent(ray, ERROR_CODE_TRACE_ABORT, idx, 0);
         return;
     }
 
-    //advance rng by amount used by the source
-    uint dim = DIM_OFFSET;
-
     //try to extend first ray to sphere if direct lighting and MIS is enabled
     #if !defined(DISABLE_DIRECT_LIGHTING) && !defined(DISABLE_MIS)
-    createHit(ray, ray.direction, 1.0, false);
+    createResponse(ray, ray.state.direction, 1.0, false);
     #endif
 
     //trace loop: first iteration
@@ -249,26 +194,15 @@ void main() {
     
     //trace loop: rest
     [[unroll]] for (uint i = 0; i < PATH_LENGTH; ++i, dim += DIM_STRIDE) {
-        //scatter ray: Importance sample phase function -> no change in contrib
+        //scatter ray
         vec2 u = random2D(idx, dim);
         float cos_theta, phi;
-        sampleScatterDir(medium, ray.direction, u, cos_theta, phi);
-        vec3 newDir = scatterDir(ray.direction, cos_theta, phi);
-        #ifdef POLARIZATION
-        //update polarization
-        vec3 polRef;
-        ray.stokes = lookUpPhaseMatrix(medium, cos_theta)
-            * rotatePolRef(ray.direction, ray.polRef, newDir, polRef)
-            * ray.stokes;
-        ray.polRef = polRef;
-        // ray.stokes = lookUpPhaseMatrix(medium, cos_theta) * rotatePolRef(cos(phi)) * ray.stokes;
-        #endif
-        ray.direction = newDir;
+        scatterRay(ray, u);
 
         //trace ray
         ResultCode result = trace(ray, idx, dim + 2, false, ALLOW_RESPONSE);
         onEvent(ray, result, idx, i + 2);
-        
+
         //stop codes are negative
         if (result < 0)
             return;

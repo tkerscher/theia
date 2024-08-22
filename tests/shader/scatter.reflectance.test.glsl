@@ -31,11 +31,9 @@ void main() {
     //look up refractive index
     MediumConstants consts = lookUpMedium(med, q[i].wavelength);
     //calculate reflectance
-    float r_s, r_p, n_t;
-    fresnelReflect(
+    SurfaceReflectance s = fresnelReflect(
         mat, q[i].wavelength, consts.n,
-        q[i].direction, q[i].normal,
-        r_s, r_p, n_t
+        q[i].direction, q[i].normal
     );
-    r[i] = vec3(r_s, r_p, n_t);
+    r[i] = vec3(s.r_s, s.r_p, s.n_tr);
 }

@@ -44,11 +44,10 @@ def test_VolumeTracer(
 
     # create pipeline
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
-    photons = theia.light.UniformPhotonSource(
-        budget=light_budget,
-        timeRange=(T0, T1),
+    photons = theia.light.UniformPhotonSource(timeRange=(T0, T1))
+    source = theia.light.SphericalLightSource(
+        photons, position=light_pos, budget=light_budget
     )
-    source = theia.light.SphericalLightSource(photons, position=light_pos)
     recorder = theia.estimator.HitRecorder(polarized=polarized)
     stats = theia.trace.EventStatisticCallback()
     tracer = theia.trace.VolumeTracer(
@@ -178,11 +177,10 @@ def test_SceneTracer(
 
     # create pipeline stages
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
-    photons = theia.light.UniformPhotonSource(
-        budget=light_budget,
-        timeRange=(T0, T1),
+    photons = theia.light.UniformPhotonSource(timeRange=(T0, T1))
+    source = theia.light.SphericalLightSource(
+        photons, position=light_pos, budget=light_budget
     )
-    source = theia.light.SphericalLightSource(photons, position=light_pos)
     recorder = theia.estimator.HitRecorder(polarized=polarized)
     # stats = theia.trace.EventStatisticCallback()
     track = theia.trace.TrackRecordCallback(N, MAX_PATH + 1, polarized=polarized)
@@ -569,13 +567,13 @@ def test_volumeBorder():
     photons = theia.light.UniformPhotonSource(
         lambdaRange=(LAMBDA, LAMBDA),  # const lambda
         timeRange=(0.0, 0.0),  # const time
-        budget=1.0,
     )
     source = theia.light.PencilLightSource(
         photons,
         position=(0.0, 0.0, 0.0),
         # important: hit cube not straight on but in angle to test for no refraction
         direction=(0.8, 0.36, 0.48),
+        budget=1.0,
     )
     estimator = theia.estimator.EmptyResponse()
     tracker = theia.trace.TrackRecordCallback(N, 4)
@@ -617,7 +615,7 @@ def test_volumeBorder():
     "flag,reflectance,err", [("T", 0.0, 0.0), ("R", 1.0, 0.0), ("TR", 0.0516, 0.005)]
 )
 def test_tracer_reflection(flag, reflectance, err):
-    """
+    r"""
     We simulate a very simply laser setup to check if the transmission/reflection
     code is working properly:
 
@@ -664,13 +662,14 @@ def test_tracer_reflection(flag, reflectance, err):
     photons = theia.light.UniformPhotonSource(
         lambdaRange=(500.0, 500.0) * u.nm,  # const lambda
         timeRange=(0.0, 0.0),  # const time
-        budget=1.0,
     )
     source = theia.light.PencilLightSource(
-        photons, position=(-20.0, 0.0, 0.0) * u.m, direction=(1.0, 0.0, 0.0)
+        photons,
+        position=(-20.0, 0.0, 0.0) * u.m,
+        direction=(1.0, 0.0, 0.0),
+        budget=1.0,
     )
     recorder = theia.estimator.HitRecorder()
-    stats = theia.trace.EventStatisticCallback()
     tracer = theia.trace.SceneTracer(
         N,
         source,
@@ -679,7 +678,6 @@ def test_tracer_reflection(flag, reflectance, err):
         scene=scene,
         targetIdx=1,
         maxPathLength=4,
-        callback=stats,
         disableTargetSampling=True,  # there's no scattering anyway
     )
     pipeline = pl.Pipeline([rng, photons, source, tracer, recorder])

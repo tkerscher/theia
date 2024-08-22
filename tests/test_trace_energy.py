@@ -99,11 +99,12 @@ def test_SceneTracer_GroundTruth(
     )
     # create light (delta pulse)
     photons = theia.light.UniformPhotonSource(
-        lambdaRange=(lam, lam), timeRange=(t0, t0), budget=budget
+        lambdaRange=(lam, lam), timeRange=(t0, t0)
     )
-    light = theia.light.SphericalLightSource(photons, position=position)
+    light = theia.light.SphericalLightSource(photons, position=position, budget=budget)
     # create tracer
-    rng = theia.random.SobolQRNG(seed=0xC0FFEE)
+    # rng = theia.random.SobolQRNG(seed=0xC0FFEE)
+    rng = theia.random.PhiloxRNG(key=0xC0FFEE)
     recorder = theia.estimator.HitRecorder(polarized=polarized)
     tracer = theia.trace.SceneTracer(
         batch_size,
@@ -147,9 +148,7 @@ def test_SceneTracer_GroundTruth(
 
     # check for energy conservation
     estimate = value0.sum() / (batch_size * n_batches)
-    assert (
-        estimate < budget
-    )  # we are biased by ignoring longer paths, i.e. loose a bit of energy
+    assert estimate < budget  # biased by ignoring longer paths, i.e. missing energy
     assert np.abs(estimate / budget - 1.0) < 0.05
 
     # additional check since we have the data: uniform hits on sphere
@@ -222,14 +221,15 @@ def test_SceneTracer_Crosscheck(
     )
     # create light (delta pulse)
     photons = theia.light.UniformPhotonSource(
-        lambdaRange=(lam, lam), timeRange=(t0, t0), budget=budget
+        lambdaRange=(lam, lam), timeRange=(t0, t0)
     )
-    light = theia.light.SphericalLightSource(photons, position=light_pos)
+    light = theia.light.SphericalLightSource(photons, position=light_pos, budget=budget)
 
     # Calculate ground truth
 
     # create tracer
-    rng = theia.random.SobolQRNG(seed=0xC0FFEE)
+    # rng = theia.random.SobolQRNG(seed=0xC0FFEE)
+    rng = theia.random.PhiloxRNG(key=0xC0FFEE)
     response = theia.estimator.UniformHitResponse()
     tracer = theia.trace.SceneTracer(
         batch_size,
@@ -312,7 +312,7 @@ def test_SceneTracer_Crosscheck(
     estimate = hist.sum()
 
     # check estimate
-    assert abs(estimate / truth - 1.0) < 0.07  # slightly higher error !?
+    assert abs(estimate / truth - 1.0) < 0.02
     # Compare early part of light curves
     # The ground truth algorithm suffers from high variance especially at later
     # times making a test there pointless.
@@ -321,7 +321,7 @@ def test_SceneTracer_Crosscheck(
     with np.errstate(divide="ignore", invalid="ignore"):
         log_err = (np.log10(hist) - np.log10(truth_hist)) / np.log10(hist)
     log_err = np.nan_to_num(log_err, nan=0.0)
-    assert np.abs(log_err).mean() < 0.05
+    assert np.abs(log_err).mean() < 0.01
 
 
 @pytest.mark.parametrize(
@@ -354,7 +354,7 @@ def test_VolumeTracer_Crosscheck(
     lam = 400.0 * u.nm  # doesn't really matter
     # tracer settings
     max_length = 15
-    scatter_coef = 2.0 * mu_s # 0.02
+    scatter_coef = 2.0 * mu_s  # 0.02
     maxTime = 500.0  # limit as ground truth suffers from high variance at late times
     # simulation settings
     batch_size = 1 * 1024 * 1024
@@ -384,9 +384,9 @@ def test_VolumeTracer_Crosscheck(
     )
     # create light (delta pulse)
     photons = theia.light.UniformPhotonSource(
-        lambdaRange=(lam, lam), timeRange=(t0, t0), budget=budget
+        lambdaRange=(lam, lam), timeRange=(t0, t0)
     )
-    light = theia.light.SphericalLightSource(photons, position=light_pos)
+    light = theia.light.SphericalLightSource(photons, position=light_pos, budget=budget)
 
     # Calculate ground truth
 
@@ -475,7 +475,7 @@ def test_VolumeTracer_Crosscheck(
     estimate = hist.sum()
 
     # check estimate
-    thres = 0.02 if sampleTarget else 0.08 # give more slack if not target sampling
+    thres = 0.02 if sampleTarget else 0.08  # give more slack if not target sampling
     assert abs(estimate / truth - 1.0) < thres
     # Compare early part of light curves
     # The ground truth algorithm suffers from high variance especially at later
