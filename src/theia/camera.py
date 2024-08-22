@@ -727,3 +727,46 @@ class SphereCameraRaySource(CameraRaySource):
         r = self.getParam("radius")
         contrib = 4 * np.pi * r**2 * 2 * np.pi
         self.setParam("_contrib", contrib)
+
+
+class PointCameraRaySource(CameraRaySource):
+    """
+    Camera ray source producing rays isotropic in all directions from a single
+    point.
+
+    Parameters
+    ----------
+    position: (float, float, float), default=(0.0, 0.0, 0.0)
+        Origin of camera rays.
+    timeDelta: float, default=0.0
+        Time offset applied to camera rays.
+
+    Stage Parameters
+    ----------------
+    position: (float, float, float), default=(0.0, 0.0, 0.0)
+        Origin of camera rays.
+    timeDelta: float, default=0.0
+        Time offset applied to camera rays.
+    """
+
+    name = "Point Camera Ray Source"
+
+    class CameraRayParams(Structure):
+        _fields_ = [
+            ("position", vec3),
+            ("timeDelta", c_float),
+        ]
+
+    def __init__(
+        self,
+        *,
+        position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        timeDelta: float = 0.0,
+    ) -> None:
+        super().__init__(
+            nRNGSamples=2, params={"CameraRayParams": self.CameraRayParams}
+        )
+        self.setParams(position=position, timeDelta=timeDelta)
+
+    # source code via descriptor
+    sourceCode = ShaderLoader("camera.point.glsl")

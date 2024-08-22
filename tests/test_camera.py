@@ -247,7 +247,7 @@ def test_sphericalCamera(polarized: bool):
     assert np.allclose(np.square(rays["hitNormal"]).sum(-1), 1.0)
     assert np.allclose(rays["timeDelta"], t0)
     cos_normal = np.abs((rays["hitDirection"] * rays["hitNormal"]).sum(-1))
-    contrib =  4*np.pi*radius**2*2*np.pi*cos_normal
+    contrib = 4 * np.pi * radius**2 * 2 * np.pi * cos_normal
     assert np.abs(rays["contrib"] - contrib).max() < 1e-3
     if polarized:
         # polarization ref was automatically generated, so just test its properties
@@ -258,3 +258,32 @@ def test_sphericalCamera(polarized: bool):
         inc = np.cross(rays["hitNormal"], rays["hitDirection"])
         inc /= np.sqrt(np.square(inc).sum(-1))[:, None]
         assert np.abs(np.abs((hitRef * inc).sum(-1)) - 1.0).max() < 1e-6
+
+
+@pytest.mark.parametrize("polarized", [True, False])
+def test_pointCamera(polarized: bool):
+    N = 32 * 256
+    # params
+    position = (12.0, 5.0, -7.0)
+    t0 = 12.5
+
+    # create camera and sampler
+    camera = theia.camera.PointCameraRaySource(position=position, timeDelta=t0)
+    philox = PhiloxRNG(key=0xC0FFEE)
+    sampler = theia.camera.CameraRaySampler(camera, N, rng=philox, polarized=polarized)
+    # run
+    runPipeline([philox, camera, sampler])
+
+    # check result
+    rays = sampler.view(0)
+    assert np.allclose(rays["position"], position)
+    assert np.allclose(rays["hitPosition"], 0.0)
+    assert np.allclose(np.square(rays["direction"]).sum(-1), 1.0)
+    assert np.allclose(rays["direction"], -rays["hitDirection"])
+    assert np.allclose(rays["direction"], rays["hitNormal"])
+    assert np.allclose(rays["contrib"], 4.0 * np.pi)
+    assert np.allclose(rays["timeDelta"], t0)
+    if polarized:
+        # polarization ref was automatically generated, so just test its properties
+        assert (rays["direction"] * rays["polarizationRef"]).sum(-1).max() < 1e-6
+        assert np.abs(np.square(rays["polarizationRef"]).sum(-1) - 1.0).max() < 1e-6
