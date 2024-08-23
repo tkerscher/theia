@@ -6,6 +6,7 @@ from ctypes import *
 from hephaistos.glsl import vec3, vec4, stackVector
 
 import theia.material
+import theia.random
 
 from numpy.lib.recfunctions import structured_to_unstructured
 
@@ -58,6 +59,35 @@ def test_polarizationRotate_phi(rng, shaderUtil):
     expected[:, 2] = sin_phi * stokes[:, 1] + cos_phi * stokes[:, 2]
     # check result
     assert np.abs(results - expected).max() < 5e-6
+
+
+def test_alignPolRef(shaderUtil):
+    N = 32 * 1024
+
+    # allocate memory
+    result_buffer = hp.FloatBuffer(N * 16)
+    result_tensor = hp.FloatTensor(N * 16)
+    # create and prepare test program
+    rng = theia.random.PhiloxRNG(key=0xC0FFEE)
+    program = shaderUtil.createTestProgram(
+        "polarization.alignPolRef.test.glsl",
+        headers={"random.glsl": rng.sourceCode},
+    )
+    program.bindParams(ResultBuffer=result_tensor)
+    rng.bindParams(program, 0)
+    rng.update(0)
+    # run test program
+    (
+        hp.beginSequence()
+        .And(program.dispatch(N // 32))
+        .Then(hp.retrieveTensor(result_tensor, result_buffer))
+        .Submit()
+        .wait()
+    )
+
+    # check result
+    result = result_buffer.numpy().reshape((N, 4, 4))
+    assert np.allclose(result, np.identity(4)[None, ...], atol=5e-6)
 
 
 def test_polarizationRotate_dir(rng, shaderUtil):
@@ -199,12 +229,27 @@ def test_phaseMatrix(rng, shaderUtil):
     m22 = zero if (m := water_model.phase_m22(cos_theta)) is None else m
     m33 = zero if (m := water_model.phase_m33(cos_theta)) is None else m
     m34 = zero if (m := water_model.phase_m34(cos_theta)) is None else m
-    phase_matrices = np.stack([
-        ones, m12, zero, zero,
-        m12, m22, zero, zero,
-        zero, zero, m33, m34,
-        zero, zero, -m34, m33,
-    ], axis=-1).reshape((N, 4, 4))
+    phase_matrices = np.stack(
+        [
+            ones,
+            m12,
+            zero,
+            zero,
+            m12,
+            m22,
+            zero,
+            zero,
+            zero,
+            zero,
+            m33,
+            m34,
+            zero,
+            zero,
+            -m34,
+            m33,
+        ],
+        axis=-1,
+    ).reshape((N, 4, 4))
     expected = np.einsum("ijk,ik->ij", phase_matrices, stokes)
     # check result
     assert np.abs(results - expected).max() < 1e-3  # TODO: maybe a bit large?

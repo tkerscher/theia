@@ -16,6 +16,23 @@ mat4 rotatePolRef(float phi) {
     );
 }
 
+//creates rotation matrix to rotate the reference frame from old to new as seen
+//by a ray travelling in rayDir. Assumes rayDir is normal to both references.
+mat4 alignPolRef(vec3 rayDir, vec3 oldRef, vec3 newRef) {
+    //calculate angles
+    float cos_phi = dot(oldRef, newRef);
+    float sin_phi = dot(crosser(oldRef, newRef), rayDir);
+    //assemble rotation matrix (column major!)
+    float c = 2.0 * cos_phi * cos_phi - 1.0;
+    float s = 2.0 * cos_phi * sin_phi;
+    return mat4(
+        1.0, 0.0, 0.0, 0.0,
+        0.0,   c,   s, 0.0,
+        0.0,  -s,   c, 0.0,
+        0.0, 0.0, 0.0, 1.0
+    );
+}
+
 //creates rotation matrix to rotate the ref vector to be ortogonal to the plane
 //of scattering from old to new. Assumes all vectors to be normalized
 mat4 rotatePolRef(vec3 dir, vec3 ref, vec3 new, out vec3 new_ref) {
