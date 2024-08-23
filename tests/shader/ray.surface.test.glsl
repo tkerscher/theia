@@ -71,7 +71,7 @@ layout(scalar, push_constant) uniform Push {
 #define Ray ForwardRay
 
 Ray sampleRay(uint idx) {
-    SourceRay source = sampleLight(idx);
+    SourceRay source = sampleLight(idx, 0);
     bool inward = dot(source.direction, push.normal) < 0.0;
     Medium med = inward ? push.mat.outside : push.mat.inside; //medium of ray
     return createRay(source, med);

@@ -171,7 +171,7 @@ void main() {
 
     //sample ray
     Medium medium = Medium(params.medium);
-    ForwardRay ray = createRay(sampleLight(idx), medium);
+    ForwardRay ray = createRay(sampleLight(idx, 0), medium);
     uint dim = DIM_OFFSET; //advance rng by amount light consumed
     onEvent(ray, RESULT_CODE_RAY_CREATED, idx, 0);
     //discard ray if inside target

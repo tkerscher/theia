@@ -44,9 +44,9 @@ def test_VolumeTracer(
 
     # create pipeline
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
-    photons = theia.light.UniformPhotonSource(timeRange=(T0, T1))
+    photons = theia.light.UniformWavelengthSource()
     source = theia.light.SphericalLightSource(
-        photons, position=light_pos, budget=light_budget
+        photons, position=light_pos, budget=light_budget, timeRange=(T0, T1)
     )
     recorder = theia.estimator.HitRecorder(polarized=polarized)
     stats = theia.trace.EventStatisticCallback()
@@ -177,9 +177,9 @@ def test_SceneTracer(
 
     # create pipeline stages
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
-    photons = theia.light.UniformPhotonSource(timeRange=(T0, T1))
+    photons = theia.light.UniformWavelengthSource()
     source = theia.light.SphericalLightSource(
-        photons, position=light_pos, budget=light_budget
+        photons, position=light_pos, timeRange=(T0, T1), budget=light_budget
     )
     recorder = theia.estimator.HitRecorder(polarized=polarized)
     # stats = theia.trace.EventStatisticCallback()
@@ -400,8 +400,8 @@ def test_EventStatisticCallback():
 
     # create pipeline
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
-    photons = theia.light.UniformPhotonSource(timeRange=(T0, T1))
-    source = theia.light.SphericalLightSource(photons)
+    photons = theia.light.UniformWavelengthSource()
+    source = theia.light.SphericalLightSource(photons, timeRange=(T0, T1))
     response = theia.estimator.EmptyResponse()
     stats = theia.trace.EventStatisticCallback()
     tracer = theia.trace.SceneTracer(
@@ -483,11 +483,12 @@ def test_TrackRecordCallback(polarizedTrack: bool, polarized: bool):
 
     # create pipeline
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
-    photons = theia.light.UniformPhotonSource(timeRange=(T0, T1))
+    photons = theia.light.UniformWavelengthSource()
     source = theia.light.PencilLightSource(
         photons,
         position=light_pos,
         direction=light_dir,
+        timeRange=(T0, T1),
         stokes=stokes,
         polarizationRef=polRef,
     )
@@ -564,15 +565,15 @@ def test_volumeBorder():
 
     # create scene
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
-    photons = theia.light.UniformPhotonSource(
+    photons = theia.light.UniformWavelengthSource(
         lambdaRange=(LAMBDA, LAMBDA),  # const lambda
-        timeRange=(0.0, 0.0),  # const time
     )
     source = theia.light.PencilLightSource(
         photons,
         position=(0.0, 0.0, 0.0),
         # important: hit cube not straight on but in angle to test for no refraction
         direction=(0.8, 0.36, 0.48),
+        timeRange=(0.0, 0.0),  # const time
         budget=1.0,
     )
     estimator = theia.estimator.EmptyResponse()
@@ -659,14 +660,14 @@ def test_tracer_reflection(flag, reflectance, err):
 
     # create pipeline
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
-    photons = theia.light.UniformPhotonSource(
+    photons = theia.light.UniformWavelengthSource(
         lambdaRange=(500.0, 500.0) * u.nm,  # const lambda
-        timeRange=(0.0, 0.0),  # const time
     )
     source = theia.light.PencilLightSource(
         photons,
         position=(-20.0, 0.0, 0.0) * u.m,
         direction=(1.0, 0.0, 0.0),
+        timeRange=(0.0, 0.0),  # const time
         budget=1.0,
     )
     recorder = theia.estimator.HitRecorder()

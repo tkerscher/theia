@@ -11,6 +11,7 @@ from numpy.ctypeslib import as_array
 
 from theia.random import RNG
 from theia.util import ShaderLoader, compileShader, createPreamble
+import theia.units as u
 
 from typing import Callable, Dict, List, Set, Tuple, Type, Optional
 from numpy.typing import NDArray
@@ -24,9 +25,9 @@ __all__ = [
     "LightSource",
     "ParticleTrack",
     "PencilLightSource",
-    "PhotonSource",
     "PolarizedLightSampleItem",
-    "UniformPhotonSource",
+    "UniformWavelengthSource",
+    "WavelengthSource",
 ]
 
 
@@ -338,13 +339,12 @@ class HostLightSource(LightSource):
         return [hp.updateTensor(self.buffer(i), self._tensor), *super().run(i)]
 
 
-class PhotonSource(SourceCodeMixin):
+class WavelengthSource(SourceCodeMixin):
     """
-    Base class for samplers producing a single photon sample consisting of a
-    wavelength and time point.
+    Base class for samplers producing wavelengths.
     """
 
-    name = "Photon Sampler"
+    name = "Wavelength Sampler"
 
     def __init__(
         self,
@@ -362,7 +362,7 @@ class PhotonSource(SourceCodeMixin):
         return self._nRNGSamples
 
 
-class UniformPhotonSource(PhotonSource):
+class UniformWavelengthSource(WavelengthSource):
     """
     Sampler generating photons uniform in wavelength and time.
 
@@ -370,21 +370,16 @@ class UniformPhotonSource(PhotonSource):
     ----------
     lambdaRange: (float, float), default=(300.0, 700.0)
         min and max wavelength the source emits
-    timeRange: (float, float), default=(0.0, 100.0)
-        start and stop time of the light source
 
     Stage Parameters
     ----------------
     lambdaRange: (float, float), default=(300.0, 700.0)
         min and max wavelength the source emits
-    timeRange: (float, float), default=(0.0, 100.0)
-        start and stop time of the light source
     """
 
     class SourceParams(Structure):
         _fields_ = [
             ("lambdaRange", vec2),
-            ("timeRange", vec2),
             ("_contrib", c_float),
         ]
 
@@ -395,33 +390,23 @@ class UniformPhotonSource(PhotonSource):
         self,
         *,
         lambdaRange: Tuple[float, float] = (300.0, 700.0),
-        timeRange: Tuple[float, float] = (0.0, 100.0),
     ) -> None:
         super().__init__(
-            nRNGSamples=2,
-            params={"SourceParams": self.SourceParams},
+            nRNGSamples=1,
+            params={"WavelengthParams": self.SourceParams},
         )
         # save params
-        self.setParams(lambdaRange=lambdaRange, timeRange=timeRange)
+        self.setParams(lambdaRange=lambdaRange)
 
     # sourceCode via descriptor
-    sourceCode = ShaderLoader("photonsource.uniform.glsl")
+    sourceCode = ShaderLoader("wavelengthsource.uniform.glsl")
 
     def _finishParams(self, i: int) -> None:
-        # calculate const contribution
-        # lam ~ U(lam_0, lam_1)
-        # t   ~ U(t_0, t_1)
-        # => p(t, lam) = 1.0 / (|dLam||dt|) // d(x) = 1.0 if d(x) == 0.0
-        # => contrib = L/p = intensity * |dLam|*|dt|
         c = 1.0
         lr = self.getParam("lambdaRange")
         lr = lr[1] - lr[0]
         if lr != 0.0:
             c *= abs(lr)
-        tr = self.getParam("timeRange")
-        tr = tr[1] - tr[0]
-        if tr != 0.0:
-            c *= abs(tr)
         self.setParam("_contrib", c)
 
 
@@ -432,12 +417,14 @@ class ConeLightSource(LightSource):
 
     Parameters
     ----------
-    photonSource: PhotonSource
-        Photon source used to sample wavelengths
+    wavelengthSource: WavelengthSource
+        Source used to sample wavelengths
     position: (float, float, float), default=(0.0, 0.0, 0.0)
         Position of the light source.
     direction: (float, float, float), default(1.0, 0.0, 0.0)
         Direction of the opening cone.
+    timeRange: (float, float), default=(0.0, 100.0)
+        start and stop time of the light source
     cosOpeningAngle: float, default=0.5
         Cosine of the cones opening angle
     budget: float, default=1.0
@@ -447,6 +434,9 @@ class ConeLightSource(LightSource):
         Polarization reference frame.
     stokes: (float, float, float, float), default=(1.0, 0.0, 0.0, 0.0)
         Specifies the polarization vector.
+    polarized: bool, default=True
+        Whether the light source should be treated as polarized. If False,
+        ignores polarization reference and stoke parameters.
 
     Stage Parameters
     ----------------
@@ -454,6 +444,8 @@ class ConeLightSource(LightSource):
         Position of the light source.
     direction: (float, float, float), default(1.0, 0.0, 0.0)
         Direction of the opening cone.
+    timeRange: (float, float), default=(0.0, 100.0)
+        start and stop time of the light source
     cosOpeningAngle: float, default=0.5
         Cosine of the cones opening angle
     budget: float, default=1.0
@@ -477,7 +469,8 @@ class ConeLightSource(LightSource):
             ("position", vec3),
             ("direction", vec3),
             ("cosOpeningAngle", c_float),
-            ("budget", c_float),
+            ("_contrib", c_float),
+            ("timeRange", vec2),
             ("polarizationReference", vec3),
             ("stokes", vec4),
         ]
@@ -487,26 +480,31 @@ class ConeLightSource(LightSource):
 
     def __init__(
         self,
-        photonSource: PhotonSource,
+        wavelengthSource: WavelengthSource,
         *,
         position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
         direction: Tuple[float, float, float] = (1.0, 0.0, 0.0),
+        timeRange: Tuple[float, float] = (0.0, 100.0) * u.ns,
         cosOpeningAngle: float = 0.5,
         budget: float = 1.0,
         polarizationReference: Tuple[float, float, float] = (0.0, 1.0, 0.0),
         stokes: Tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0),
+        polarized: bool = True,
     ) -> None:
         super().__init__(
-            nRNGSamples=2 + photonSource.nRNGSamples,
+            nRNGSamples=3 + wavelengthSource.nRNGSamples,
             params={"LightParams": ConeLightSource.LightParams},
+            extra={"budget"},
         )
         # save params
-        self._photonSource = photonSource
+        self._polarized = polarized
+        self._wavelengthSource = wavelengthSource
+        self.budget = budget
         self.setParams(
             position=position,
             direction=direction,
+            timeRange=timeRange,
             cosOpeningAngle=cosOpeningAngle,
-            budget=budget,
             polarizationReference=polarizationReference,
             stokes=stokes,
         )
@@ -516,27 +514,51 @@ class ConeLightSource(LightSource):
         polRef = polarizationReference
         if abs(sum(dir[i] * polRef[i] for i in range(3))) > 1.0 - 1e-5:
             raise ValueError("direction and polarizationReference cannot be parallel!")
-        self._polarized = stokes != (1.0, 0.0, 0.0, 0.0)
         if self._polarized and cosOpeningAngle <= 0.0:
             raise ValueError(
                 "Opening angles for polarized cone lights must be smaller 90 degrees!"
             )
 
     @property
-    def photonSource(self) -> PhotonSource:
-        """Photon source used to sample wavelengths"""
-        return self._photonSource
+    def budget(self) -> float:
+        """Total amount of energy or photons the light source distributes among
+        the sampled photons."""
+        return self._budget
+
+    @budget.setter
+    def budget(self, value: float) -> None:
+        self._budget = value
+
+    @property
+    def polarized(self) -> bool:
+        """Whether the light source should be treated as polarized. If False,
+        ignores polarization reference and stoke parameters."""
+        return self._polarized
 
     @property
     def sourceCode(self) -> str:
-        code = self.photonSource.sourceCode + "\n"
+        code = self.wavelengthSource.sourceCode + "\n"
         if self._polarized:
             code += "#define LIGHTSOURCE_POLARIZED\n"
         return code + self._sourceCode
 
+    @property
+    def wavelengthSource(self) -> WavelengthSource:
+        """Source used to sample wavelengths"""
+        return self._wavelengthSource
+
+    def _finishParams(self, i: int) -> None:
+        super()._finishParams(i)
+        c = self.budget
+        tr = self.getParam("timeRange")
+        tr = tr[1] - tr[0]
+        if tr > 0:
+            c *= abs(tr)
+        self.setParam("_contrib", c)
+
     def bindParams(self, program: Program, i: int) -> None:
         super().bindParams(program, i)
-        self.photonSource.bindParams(program, i)
+        self.wavelengthSource.bindParams(program, i)
 
 
 class PencilLightSource(LightSource):
@@ -545,12 +567,14 @@ class PencilLightSource(LightSource):
 
     Parameters
     ----------
-    photonSource: PhotonSource
-        Photon source used to sample wavelengths
+    wavelengthSource: WavelengthSource
+        Source used to sample wavelengths
     position: (float, float, float), default=(0.0, 0.0, 0.0)
         Start point of the ray
     direction: (float, float, float), default=(0.0, 0.0, 1.0)
         Direction of the ray
+    timeRange: (float, float), default=(0.0, 100.0)
+        start and stop time of the light source
     budget: float, default=1.0
         Total amount of energy or photons the light source distributes among the
         sampled photons.
@@ -566,6 +590,8 @@ class PencilLightSource(LightSource):
         Start point of the ray
     direction: (float, float, float), default=(0.0, 0.0, 1.0)
         Direction of the ray
+    timeRange: (float, float), default=(0.0, 100.0)
+        start and stop time of the light source
     budget: float, default=1.0
         Total amount of energy or photons the light source distributes among the
         sampled photons.
@@ -576,11 +602,14 @@ class PencilLightSource(LightSource):
         light. Must be perpendicular to direction and normalized.
     """
 
+    name = "Pencil Light Source"
+
     class LightParams(Structure):
         _fields_ = [
             ("position", vec3),
             ("direction", vec3),
-            ("budget", c_float),
+            ("_contrib", c_float),
+            ("timeRange", vec2),
             ("stokes", vec4),
             ("polarizationRef", vec3),
         ]
@@ -590,40 +619,62 @@ class PencilLightSource(LightSource):
 
     def __init__(
         self,
-        photonSource: PhotonSource,
+        wavelengthSource: WavelengthSource,
         *,
         position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
         direction: Tuple[float, float, float] = (0.0, 0.0, 1.0),
+        timeRange: Tuple[float, float] = (0.0, 100.0) * u.ns,
         budget: float = 1.0,
         stokes: Tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0),
         polarizationRef: Tuple[float, float, float] = (0.0, 1.0, 0.0),
     ) -> None:
         super().__init__(
-            nRNGSamples=photonSource.nRNGSamples,
+            nRNGSamples=1 + wavelengthSource.nRNGSamples,
             params={"LightParams": self.LightParams},
+            extra={"budget"},
         )
         # save params
-        self._photonSource = photonSource
+        self._wavelengthSource = wavelengthSource
+        self.budget = budget
         self.setParams(
             position=position,
             direction=direction,
-            budget=budget,
+            timeRange=timeRange,
             stokes=stokes,
             polarizationRef=polarizationRef,
         )
 
     @property
-    def photonSource(self) -> PhotonSource:
-        """Photon source used to sample wavelengths"""
-        return self._photonSource
+    def budget(self) -> float:
+        """Total amount of energy or photons the light source distributes among
+        the sampled photons"""
+        return self._budget
+
+    @budget.setter
+    def budget(self, value: float) -> None:
+        self._budget = value
+
+    @property
+    def wavelengthSource(self) -> WavelengthSource:
+        """Source used to sample wavelengths"""
+        return self._wavelengthSource
 
     @property
     def sourceCode(self) -> str:
-        return self.photonSource.sourceCode + "\n" + self._sourceCode
+        return self.wavelengthSource.sourceCode + "\n" + self._sourceCode
+
+    def _finishParams(self, i: int) -> None:
+        super()._finishParams(i)
+        c = self.budget
+        tr = self.getParam("timeRange")
+        tr = tr[1] - tr[0]
+        if tr > 0:
+            c *= abs(tr)
+        self.setParam("_contrib", c)
 
     def bindParams(self, program: Program, i: int) -> None:
         super().bindParams(program, i)
-        self.photonSource.bindParams(program, i)
+        self.wavelengthSource.bindParams(program, i)
 
 
 class SphericalLightSource(LightSource):
@@ -633,8 +684,12 @@ class SphericalLightSource(LightSource):
 
     Parameters
     ----------
+    wavelengthSource: WavelengthSource
+        Source used to sample wavelengths
     position: (float, float, float), default=(0.0, 0.0, 0.0)
         Position the light rays are radiated from.
+    timeRange: (float, float), default=(0.0, 100.0)
+        start and stop time of the light source
     budget: float, default=1.0
         Total amount of energy or photons the light source distributes among the
         sampled photons.
@@ -642,7 +697,9 @@ class SphericalLightSource(LightSource):
     Stage Parameters
     ----------------
     position: (float, float, float), default=(0.0, 0.0, 0.0)
-        Position the light rays are radiated from.#
+        Position the light rays are radiated from.
+    timeRange: (float, float), default=(0.0, 100.0)
+        start and stop time of the light source
     budget: float, default=1.0
         Total amount of energy or photons the light source distributes among the
         sampled photons.
@@ -651,37 +708,59 @@ class SphericalLightSource(LightSource):
     name = "Spherical Light Source"
 
     class LightParams(Structure):
-        _fields_ = [("position", vec3), ("budget", c_float)]
+        _fields_ = [("position", vec3), ("_contrib", c_float), ("timeRange", vec2)]
 
     def __init__(
         self,
-        photonSource: PhotonSource,
+        wavelengthSource: WavelengthSource,
         *,
         position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        timeRange: Tuple[float, float] = (0.0, 100.0) * u.ns,
         budget: float = 1.0,
     ) -> None:
         super().__init__(
-            nRNGSamples=2 + photonSource.nRNGSamples,
+            nRNGSamples=3 + wavelengthSource.nRNGSamples,
             params={"LightParams": SphericalLightSource.LightParams},
+            extra={"budget"},
         )
-        self._photonSource = photonSource
-        self.setParams(position=position, budget=budget)
+        self._wavelengthSource = wavelengthSource
+        self.budget = budget
+        self.setParams(position=position, timeRange=timeRange)
 
     # lazily load source code via descriptor
     _sourceCode = ShaderLoader("lightsource.spherical.glsl")
 
     @property
-    def photonSource(self) -> PhotonSource:
-        """Photon source used to sample wavelengths"""
-        return self._photonSource
+    def budget(self) -> float:
+        """Total amount of energy or photons the light source distributes among
+        the sampled photons"""
+        return self._budget
+
+    @budget.setter
+    def budget(self, value: float) -> None:
+        self._budget = value
+
+    @property
+    def wavelengthSource(self) -> WavelengthSource:
+        """Source used to sample wavelengths"""
+        return self._wavelengthSource
 
     @property
     def sourceCode(self) -> str:
-        return self.photonSource.sourceCode + "\n" + self._sourceCode
+        return self.wavelengthSource.sourceCode + "\n" + self._sourceCode
+
+    def _finishParams(self, i: int) -> None:
+        super()._finishParams(i)
+        c = self.budget
+        tr = self.getParam("timeRange")
+        tr = tr[1] - tr[0]
+        if tr > 0:
+            c *= abs(tr)
+        self.setParam("_contrib", c)
 
     def bindParams(self, program: Program, i: int) -> None:
         super().bindParams(program, i)
-        self.photonSource.bindParams(program, i)
+        self.wavelengthSource.bindParams(program, i)
 
 
 class ParticleTrack(hp.ByteTensor):
@@ -772,8 +851,8 @@ class CherenkovTrackLightSource(LightSource):
 
     Parameters
     ----------
-    photonSource: PhotonSource
-        Photon source used to sample wavelengths
+    wavelengthSource: WavelengthSource
+        Source used to sample wavelengths
     track: ParticleTrack | None
         Track from which Cherenkov light is sampled. Can be set to `None`
         temporarily, but must be set to a valid particle track before sampling
@@ -789,6 +868,8 @@ class CherenkovTrackLightSource(LightSource):
     undefined behavior and may result in the code crashing.
     """
 
+    name = "Cherenkov Track Light Source"
+
     class TrackParams(Structure):
         _fields_ = [("medium", buffer_reference), ("track", buffer_reference)]
 
@@ -796,25 +877,25 @@ class CherenkovTrackLightSource(LightSource):
 
     def __init__(
         self,
-        photonSource: PhotonSource,
+        wavelengthSource: WavelengthSource,
         track: ParticleTrack | None = None,
         *,
         medium: int = 0,
         usePhotonCount: bool = False,
     ) -> None:
         super().__init__(
-            nRNGSamples=2 + photonSource.nRNGSamples,
+            nRNGSamples=2 + wavelengthSource.nRNGSamples,
             params={"TrackParams": self.TrackParams},
         )
         # save params
-        self._photonSource = photonSource
+        self._wavelengthSource = wavelengthSource
         self._usePhotonCount = usePhotonCount
         self.setParams(medium=medium, track=track if track is not None else 0)
 
     @property
-    def photonSource(self) -> PhotonSource:
-        """Photon source used to sample wavelengths"""
-        return self._photonSource
+    def wavelengthSource(self) -> WavelengthSource:
+        """Source used to sample wavelengths"""
+        return self._wavelengthSource
 
     @property
     def usePhotonCount(self) -> bool:
@@ -825,12 +906,12 @@ class CherenkovTrackLightSource(LightSource):
     def sourceCode(self) -> str:
         # build preamble
         preamble = createPreamble(
-            RNG_RAY_SAMPLE_OFFSET=self.photonSource.nRNGSamples,
+            RNG_RAY_SAMPLE_OFFSET=self.wavelengthSource.nRNGSamples,
             FRANK_TAMM_USE_PHOTON_COUNT=self.usePhotonCount,
         )
         # assemble full code
-        return "\n".join([preamble, self.photonSource.sourceCode, self._sourceCode])
+        return "\n".join([preamble, self.wavelengthSource.sourceCode, self._sourceCode])
 
     def bindParams(self, program: Program, i: int) -> None:
         super().bindParams(program, i)
-        self.photonSource.bindParams(program, i)
+        self.wavelengthSource.bindParams(program, i)

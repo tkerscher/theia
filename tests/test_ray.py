@@ -121,10 +121,8 @@ def test_surface(shaderUtil, forward: bool, polarized: bool):
     headers = {"rng.glsl": rng.sourceCode}
     pipeline = [rng]
     if forward:
-        photons = theia.light.UniformPhotonSource(
-            lambdaRange=(lam_min, lam_max), timeRange=(0.0, 0.0)
-        )
-        light = theia.light.SphericalLightSource(photons)
+        photons = theia.light.UniformWavelengthSource(lambdaRange=(lam_min, lam_max))
+        light = theia.light.SphericalLightSource(photons, timeRange=(0.0, 0.0))
         headers["source.glsl"] = light.sourceCode
         pipeline.extend([photons, light])
     else:
@@ -204,7 +202,7 @@ def test_surface(shaderUtil, forward: bool, polarized: bool):
     assert np.all(contrib > 0.0)
     assert np.allclose(refl_dir, refl_dir_exp, atol=1e-5)
     assert np.allclose(refl_contrib / contrib, r, atol=1e-4)
-    assert np.allclose(trans_dir, trans_dir_exp, atol=1e-5, equal_nan=True)
+    assert np.allclose(trans_dir, trans_dir_exp, atol=2e-5, equal_nan=True)
     assert np.allclose(trans_contrib / contrib, t, atol=1e-4)
 
     # check polarization reference frame

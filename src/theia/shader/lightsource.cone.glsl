@@ -7,16 +7,19 @@ layout(scalar) uniform LightParams {
     vec3 position;
     vec3 direction;
     float cosOpeningAngle;
-    float budget;
+    float contrib;
+
+    float t_min;
+    float t_max;
 
     //always keep polarization info to make things easier on the python side
     vec3 polRef;
     vec4 stokes;
 } lightParams;
 
-SourceRay sampleLight(uint idx) {
+SourceRay sampleLight(uint idx, uint dim) {
     //sample cone
-    vec2 u = random2D(idx, 0);
+    vec2 u = random2D(idx, dim); dim += 2;
     float phi = TWO_PI * u.x;
     float cos_theta = (1.0 - u.y) + lightParams.cosOpeningAngle * u.y;
     float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
@@ -30,10 +33,14 @@ SourceRay sampleLight(uint idx) {
     mat3 trafo = createLocalCOSY(normalize(lightParams.direction));
     vec3 rayDir = trafo * localDir;
 
+    //sample startTime
+    float v = random(idx, dim); dim++;
+    float startTime = mix(lightParams.t_min, lightParams.t_max, v);
+
     //sample photon
-    SourceSample photon = sampleSource(idx, 2);
+    WavelengthSample photon = sampleWavelength(idx, dim);
     //apply budget
-    photon.contrib *= lightParams.budget;
+    photon.contrib *= lightParams.contrib;
 
     #ifdef LIGHTSOURCE_POLARIZED
     //make polRef orthogonal to light ray direction
@@ -47,7 +54,9 @@ SourceRay sampleLight(uint idx) {
     return createSourceRay(
         lightParams.position,
         rayDir,
-        lightParams.stokes,
+        startTime,
+        // lightParams.stokes,
+        vec4(1.0, 0.9, 0.1, -0.5),
         polRef,
         photon
     );
@@ -56,6 +65,7 @@ SourceRay sampleLight(uint idx) {
     return createSourceRay(
         lightParams.position,
         rayDir,
+        startTime,
         photon
     );
     #endif

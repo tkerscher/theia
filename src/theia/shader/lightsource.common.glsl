@@ -1,22 +1,12 @@
 #ifndef _INCLUDE_LIGHTSOURCE_SAMPLING
 #define _INCLUDE_LIGHTSOURCE_SAMPLING
 
+#include "wavelengthsource.common.glsl"
+
 //only needed for polarization
 #ifdef POLARIZATION
 #include "math.glsl"
 #endif
-
-// struct RaySample {
-//     vec3 position;
-//     vec3 direction;
-//     float contrib;
-// };
-
-struct SourceSample {
-    float wavelength;
-    float startTime;
-    float contrib;
-};
 
 struct SourceRay {
     vec3 position;
@@ -75,13 +65,14 @@ SourceRay createSourceRay(
 SourceRay createSourceRay(
     vec3 position,
     vec3 direction,
-    SourceSample photon
+    float startTime,
+    WavelengthSample photon
 ) {
     return createSourceRay(
         position,
         direction,
         photon.wavelength,
-        photon.startTime,
+        startTime,
         photon.contrib
     );
 }
@@ -111,9 +102,10 @@ SourceRay createSourceRay(
 SourceRay createSourceRay(
     vec3 position,
     vec3 direction,
+    float startTime,
     vec4 stokes,
     vec3 polRef,
-    SourceSample photon
+    WavelengthSample photon
 ) {
     return createSourceRay(
         position,
@@ -121,7 +113,7 @@ SourceRay createSourceRay(
         stokes,
         polRef,
         photon.wavelength,
-        photon.startTime,
+        startTime,
         photon.contrib
     );
 }

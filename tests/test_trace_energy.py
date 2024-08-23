@@ -98,10 +98,10 @@ def test_SceneTracer_GroundTruth(
         targets=targets,
     )
     # create light (delta pulse)
-    photons = theia.light.UniformPhotonSource(
-        lambdaRange=(lam, lam), timeRange=(t0, t0)
+    photons = theia.light.UniformWavelengthSource(lambdaRange=(lam, lam))
+    light = theia.light.SphericalLightSource(
+        photons, position=position, timeRange=(t0, t0), budget=budget
     )
-    light = theia.light.SphericalLightSource(photons, position=position, budget=budget)
     # create tracer
     # rng = theia.random.SobolQRNG(seed=0xC0FFEE)
     rng = theia.random.PhiloxRNG(key=0xC0FFEE)
@@ -220,10 +220,10 @@ def test_SceneTracer_Crosscheck(
         targets=targets,
     )
     # create light (delta pulse)
-    photons = theia.light.UniformPhotonSource(
-        lambdaRange=(lam, lam), timeRange=(t0, t0)
+    photons = theia.light.UniformWavelengthSource(lambdaRange=(lam, lam))
+    light = theia.light.SphericalLightSource(
+        photons, position=light_pos, timeRange=(t0, t0), budget=budget
     )
-    light = theia.light.SphericalLightSource(photons, position=light_pos, budget=budget)
 
     # Calculate ground truth
 
@@ -383,10 +383,10 @@ def test_VolumeTracer_Crosscheck(
         targets=targets,
     )
     # create light (delta pulse)
-    photons = theia.light.UniformPhotonSource(
-        lambdaRange=(lam, lam), timeRange=(t0, t0)
+    photons = theia.light.UniformWavelengthSource(lambdaRange=(lam, lam))
+    light = theia.light.SphericalLightSource(
+        photons, position=light_pos, timeRange=(t0, t0), budget=budget
     )
-    light = theia.light.SphericalLightSource(photons, position=light_pos, budget=budget)
 
     # Calculate ground truth
 

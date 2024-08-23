@@ -66,7 +66,7 @@ void main() {
     
     //sample ray
     Medium medium = Medium(params.sceneMedium);
-    ForwardRay ray = createRay(sampleLight(idx), medium);
+    ForwardRay ray = createRay(sampleLight(idx, 0), medium);
     onEvent(ray, RESULT_CODE_RAY_CREATED, idx, 0);
     //advange rng by amount used by sampleLight()
     uint dim = DIM_OFFSET;

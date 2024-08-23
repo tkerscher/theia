@@ -63,7 +63,7 @@ layout(scalar) uniform TrackParams {
     uvec2 track;
 } trackParams;
 
-SourceRay sampleLight(uint idx) {
+SourceRay sampleLight(uint idx, uint dim) {
     //fetch track
     ParticleTrack track = ParticleTrack(trackParams.track);
 
@@ -80,9 +80,8 @@ SourceRay sampleLight(uint idx) {
     float time = mix(start.time, end.time, u);
 
     //sample photon (wavelength)
-    SourceSample photon = sampleSource(idx, 0);
+    WavelengthSample photon = sampleWavelength(idx, 0);
     float wavelength = photon.wavelength;
-    float startTime = photon.startTime + time;
     float contrib = photon.contrib;
 
     //get refractive index
@@ -121,10 +120,10 @@ SourceRay sampleLight(uint idx) {
     //light is linear polarized in plane of rayDir and particleDir
     vec4 stokes = vec4(1.0, 1.0, 0.0, 0.0);
 
-    return SourceRay(pos, rayDir, stokes, polRef, wavelength, startTime, contrib);
+    return SourceRay(pos, rayDir, stokes, polRef, wavelength, time, contrib);
 #else
     //create and return ray
-    return SourceRay(pos, rayDir, wavelength, startTime, contrib);
+    return SourceRay(pos, rayDir, wavelength, time, contrib);
 #endif
 }
 

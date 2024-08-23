@@ -46,7 +46,7 @@ void main() {
         return;
 
     //sample light
-    SourceRay ray = sampleLight(idx + sampleParams.baseCount);
+    SourceRay ray = sampleLight(idx + sampleParams.baseCount, 0);
     //save sample
     SAVE_SAMPLE(ray, queue, idx);
 
