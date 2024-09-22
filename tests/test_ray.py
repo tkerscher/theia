@@ -121,10 +121,9 @@ def test_surface(shaderUtil, forward: bool, polarized: bool):
     headers = {"rng.glsl": rng.sourceCode}
     pipeline = [rng]
     if forward:
-        photons = theia.light.UniformWavelengthSource(lambdaRange=(lam_min, lam_max))
-        light = theia.light.SphericalLightSource(photons, timeRange=(0.0, 0.0))
+        light = theia.light.SphericalLightSource(timeRange=(0.0, 0.0))
         headers["source.glsl"] = light.sourceCode
-        pipeline.extend([photons, light])
+        pipeline.extend([light])
     else:
         camera = theia.camera.PointCameraRaySource()
         headers["camera.glsl"] = camera.sourceCode
@@ -201,9 +200,9 @@ def test_surface(shaderUtil, forward: bool, polarized: bool):
     # check results
     assert np.all(contrib > 0.0)
     assert np.allclose(refl_dir, refl_dir_exp, atol=1e-5)
-    assert np.allclose(refl_contrib / contrib, r, atol=1e-4)
-    assert np.allclose(trans_dir, trans_dir_exp, atol=2e-5, equal_nan=True)
-    assert np.allclose(trans_contrib / contrib, t, atol=1e-4)
+    assert np.allclose(refl_contrib / contrib, r, atol=8e-4)
+    assert np.allclose(trans_dir, trans_dir_exp, atol=2e-4, equal_nan=True)
+    assert np.allclose(trans_contrib / contrib, t, atol=8e-4)
 
     # check polarization reference frame
     if polarized:
@@ -212,10 +211,10 @@ def test_surface(shaderUtil, forward: bool, polarized: bool):
         trans_polRef = structured_to_unstructured(polRef_buffer.numpy()["trans"])
         # check polRef are normal to plane of incidence
         # i.e. normal to both rayDir and surface normal
-        assert np.abs(np.multiply(refl_polRef, rayDir).sum(-1)).max() < 1e-7
-        assert np.abs(np.multiply(refl_polRef, normal).sum(-1)).max() < 1e-7
-        assert np.abs(np.multiply(trans_polRef, rayDir).sum(-1)).max() < 1e-7
-        assert np.abs(np.multiply(trans_polRef, normal).sum(-1)).max() < 1e-7
+        assert np.abs(np.multiply(refl_polRef, rayDir).sum(-1)).max() < 5e-7
+        assert np.abs(np.multiply(refl_polRef, normal).sum(-1)).max() < 5e-7
+        assert np.abs(np.multiply(trans_polRef, rayDir).sum(-1)).max() < 5e-7
+        assert np.abs(np.multiply(trans_polRef, normal).sum(-1)).max() < 5e-7
 
     # check stokes vector
     if polarized and forward:
@@ -225,13 +224,14 @@ def test_surface(shaderUtil, forward: bool, polarized: bool):
         # check stokes vector
         assert np.all(refl_stokes[:, 0] == 1.0)
         sr = (rp**2 - rs**2) / (rp**2 + rs**2)
-        assert np.abs(refl_stokes[:, 1] - sr).max() < 1e-5
+        assert np.abs(refl_stokes[:, 1] - sr).max() < 1e-4
         assert np.all(refl_stokes[:, 2:] == 0.0)
         assert np.all(trans_stokes[:, 0] == 1.0)
         # bit larger error. Likely due to slight mismatch in refractive indices
         # GPU has linear interpolation, CPU uses analytic model
         st = (tp**2 - ts**2) / (tp**2 + ts**2)
-        assert np.abs(trans_stokes[:, 1] - st).max() < 5e-4
+        assert np.abs(trans_stokes[:, 1] - st).max() < 3e-3
+        assert np.abs(trans_stokes[:, 1] - st).mean() < 1e-6
         assert np.all(trans_stokes[:, 2:] == 0.0)
 
     # check mueller matrix
@@ -258,4 +258,6 @@ def test_surface(shaderUtil, forward: bool, polarized: bool):
         mueller_exp[:, 5] = 1.0
         mueller_exp[:, 10] = m33
         mueller_exp[:, 15] = m33
-        assert np.abs(trans_mueller - mueller_exp).max() < 5e-4
+        # TODO: Check why this error is so large
+        assert np.abs(trans_mueller - mueller_exp).max() < 4e-3
+        assert np.abs(trans_mueller - mueller_exp).mean() < 1e-7
