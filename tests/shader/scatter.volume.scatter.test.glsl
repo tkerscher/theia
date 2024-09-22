@@ -31,7 +31,7 @@ void main() {
     Query q = queries[i];
     
     float prob;
-    vec3 dir = scatter(Medium(q.medium), q.dir, random2D(i, 0), prob);
+    vec3 dir = scatter(Medium(q.medium), q.dir, random2D_s(i, 0), prob);
 
     results[i] = Result(dir, prob);
 }

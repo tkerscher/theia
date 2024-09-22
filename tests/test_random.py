@@ -5,7 +5,7 @@ import theia.util
 
 
 shader = """\
-float random(uint stream, uint i) {
+float random_s(uint stream, uint i) {
     return 10000.0 * stream + i;
 }
 """

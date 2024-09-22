@@ -21,12 +21,6 @@
 #ifndef PATH_LENGTH
 #error "PATH_LENGTH not defined"
 #endif
-#ifndef DIM_OFFSET_LIGHT
-#error "DIM_OFFSET_LIGHT not defined"
-#endif
-#ifndef DIM_OFFSET_PHOTON
-#error "DIM_OFFSET_PHOTON not defined"
-#endif
 // #samples per iteration
 #ifdef DISABLE_MIS
 #define SCENE_TRAVERSE_DISABLE_MIS 1
@@ -65,23 +59,22 @@ layout(scalar) uniform TraceParams {
 #endif
 
 void main() {
+    uint dim = 0;
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= BATCH_SIZE)
         return;
     
     //sample ray
     Medium medium = Medium(params.sceneMedium);
-    WavelengthSample photon = sampleWavelength(idx, 0);
+    WavelengthSample photon = sampleWavelength(idx, dim);
     ForwardRay ray = createRay(
-        sampleLight(photon.wavelength, idx, DIM_OFFSET_PHOTON),
+        sampleLight(photon.wavelength, idx, dim),
         medium, photon);
     onEvent(ray, RESULT_CODE_RAY_CREATED, idx, 0);
-    //advange rng by amount used by sampleLight()
-    uint dim = DIM_OFFSET_LIGHT;
 
     //trace loop
     bool allowResponse = ALLOW_RESPONSE_INIT;
-    [[unroll]] for (uint i = 1; i <= PATH_LENGTH; ++i, dim += SCENE_TRAVERSE_TRACE_RNG_STRIDE) {
+    [[unroll]] for (uint i = 1; i <= PATH_LENGTH; ++i) {
         //trace ray
         bool last = i == PATH_LENGTH; //mark last trace
         SurfaceHit hit;
@@ -95,7 +88,7 @@ void main() {
         if (result >= 0) {
             result = processInteraction(
                 ray, hit, params.targetIdx,
-                idx, dim + SCENE_TRAVERSE_TRACE_OFFSET,
+                idx, dim,
                 params.propagation,
                 allowResponse,
                 last

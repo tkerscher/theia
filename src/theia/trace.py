@@ -535,8 +535,6 @@ class VolumeTracer(Tracer):
             preamble = createPreamble(
                 BATCH_SIZE=batchSize,
                 BLOCK_SIZE=blockSize,
-                DIM_OFFSET_PHOTON=wavelengthSource.nRNGSamples,
-                DIM_OFFSET_LIGHT=source.nRNGForward + wavelengthSource.nRNGSamples,
                 DISABLE_DIRECT_LIGHTING=disableDirectLighting,
                 DISABLE_MIS=disableTargetSampling,
                 PATH_LENGTH=pathLength,
@@ -814,8 +812,6 @@ class SceneTracer(Tracer):
                 DISABLE_MIS=disableTargetSampling,
                 DISABLE_TRANSMISSION=disableTransmission,
                 DISABLE_VOLUME_BORDER=disableVolumeBorder,
-                DIM_OFFSET_PHOTON=wavelengthSource.nRNGSamples,
-                DIM_OFFSET_LIGHT=source.nRNGForward + wavelengthSource.nRNGSamples,
                 PATH_LENGTH=maxPathLength,
                 POLARIZATION=polarized,
             )

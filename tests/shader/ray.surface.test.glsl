@@ -71,11 +71,12 @@ layout(scalar, push_constant) uniform Push {
 #define Ray ForwardRay
 
 Ray sampleRay(uint idx) {
+    uint dim = 0;
     //sample wavelength
-    float u = random(idx, 0);
+    float u = random(idx, dim);
     float lam = push.lam_min + (push.lam_max - push.lam_min) * u;
 
-    SourceRay source = sampleLight(lam, idx, 1);
+    SourceRay source = sampleLight(lam, idx, dim);
     bool inward = dot(source.direction, push.normal) < 0.0;
     Medium med = inward ? push.mat.outside : push.mat.inside; //medium of ray
     
@@ -89,11 +90,12 @@ Ray sampleRay(uint idx) {
 #define Ray BackwardRay
 
 Ray sampleRay(uint idx) {
+    uint dim = 0;
     //sample wavelength
-    float u = random(idx, 0);
+    float u = random_s(idx, dim);
     float lam = push.lam_min + (push.lam_max - push.lam_min) * u;
 
-    CameraRay cam = sampleCameraRay(lam, idx, 1);
+    CameraRay cam = sampleCameraRay(lam, idx, dim);
     bool inward = dot(cam.direction, push.normal) < 0.0;
     Medium med = inward ? push.mat.outside : push.mat.inside; //medium of ray
 

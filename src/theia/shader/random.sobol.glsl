@@ -35,7 +35,7 @@ layout(scalar) uniform SobolParams {
 } sobolParams;
 
 //draws a-th scrambled sobol sample for dim-th dimension
-float random(uint a, uint dim) {
+float random_s(uint a, uint dim) {
     uint v = 0;
     //apply offset
     a += sobolParams.offset;
@@ -64,8 +64,20 @@ float random(uint a, uint dim) {
     return normalizeUint(v);
 }
 
-vec2 random2D(uint a, uint dim) {
-    return vec2(random(a, dim), random(a, dim + 1));
+vec2 random2D_s(uint a, uint dim) {
+    return vec2(random_s(a, dim), random_s(a, dim + 1));
+}
+
+float random(uint stream, inout uint i) {
+    float result = random_s(stream, i);
+    i += 1;
+    return result;
+}
+
+vec2 random2D(uint stream, inout uint i) {
+    vec2 result = random2D_s(stream, i);
+    i += 2;
+    return result;
 }
 
 #endif

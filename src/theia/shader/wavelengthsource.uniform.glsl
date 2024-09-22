@@ -9,7 +9,7 @@ layout(scalar) uniform WavelengthParams {
     float contrib;
 } wavelengthParams;
 
-WavelengthSample sampleWavelength(uint idx, uint i) {
+WavelengthSample sampleWavelength(uint idx, inout uint i) {
     float u = random(idx, i);
     float lam = mix(wavelengthParams.lam_min, wavelengthParams.lam_max, u);
     return WavelengthSample(lam, wavelengthParams.contrib);

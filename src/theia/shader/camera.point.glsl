@@ -8,9 +8,9 @@ layout(scalar) uniform CameraRayParams {
     float timeDelta;
 } cameraRayParams;
 
-CameraRay sampleCameraRay(float wavelength, uint idx, uint dim) {
+CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
     //sample direction
-    vec2 u = random2D(idx, dim); dim += 2;
+    vec2 u = random2D(idx, dim);
     float phi = TWO_PI * u.x;
     float cos_theta = 2.0 * u.y - 1.0;
     float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));

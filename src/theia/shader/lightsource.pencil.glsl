@@ -15,9 +15,9 @@ layout(scalar) uniform LightParams {
     vec3 polRef;
 } lightParams;
 
-SourceRay sampleLight(float wavelength, uint idx, uint dim) {
+SourceRay sampleLight(float wavelength, uint idx, inout uint dim) {
     //sample startTime
-    float u = random(idx, dim); dim++;
+    float u = random(idx, dim);
     float startTime = mix(lightParams.t_min, lightParams.t_max, u);
     //assemble source and return
     return createSourceRay(

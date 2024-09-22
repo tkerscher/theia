@@ -21,9 +21,9 @@ layout(scalar) uniform LightParams {
     uvec2 medium;
 } lightParams;
 
-SourceRay sampleLight(float wavelength, uint idx, uint dim) {
+SourceRay sampleLight(float wavelength, uint idx, inout uint dim) {
     //interpolate track
-    float u = random(idx, dim); dim++;
+    float u = random(idx, dim);
     vec3 position = mix(lightParams.trackStart, lightParams.trackEnd, u);
     float startTime = mix(lightParams.startTime, lightParams.endTime, u);
 
@@ -41,7 +41,7 @@ SourceRay sampleLight(float wavelength, uint idx, uint dim) {
     float cos_theta = 1.0 / n;
     float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
     //sample ray direction
-    float phi = TWO_PI * random(idx, dim); dim += 2; //skipped one earlier
+    float phi = TWO_PI * random(idx, dim);
     vec3 localDir = vec3(
         sin_theta * cos(phi),
         sin_theta * sin(phi),

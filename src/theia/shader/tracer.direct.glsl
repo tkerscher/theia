@@ -112,17 +112,18 @@ ResultCode checkSamples(const CameraSample camSample, const SourceRay light) {
 }
 
 void main() {
+    uint dim = 0;
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= BATCH_SIZE)
         return;
     
     //sample light path from wavelength, camera and lightsource
-    WavelengthSample photon = sampleWavelength(idx, 0);
+    WavelengthSample photon = sampleWavelength(idx, dim);
     CameraSample camSample = sampleCamera(
-        photon.wavelength, idx, DIM_PHOTON_OFFSET);
+        photon.wavelength, idx, dim);
     SourceRay light = sampleLight(
         camSample.position, camSample.normal,
-        photon.wavelength, idx, DIM_CAM_OFFSET);
+        photon.wavelength, idx, dim);
     ForwardRay ray = createRay(light, Medium(params.medium), photon);
     onEvent(ray, RESULT_CODE_RAY_CREATED, idx, 0);
     

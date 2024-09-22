@@ -10,10 +10,10 @@ layout(scalar) uniform CameraRayParams {
     mat3 view;
 } cameraRayParams;
 
-CameraRay sampleCameraRay(float wavelength, uint idx, uint dim) {
+CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
     mat3 objToWorld = transpose(cameraRayParams.view); // inverse, since it's orthogonal
     //sample position on detector
-    vec2 u = random2D(idx, dim); dim += 2;
+    vec2 u = random2D(idx, dim);
     float localX = cameraRayParams.width * (u.x - 0.5);
     float localY = cameraRayParams.height * (u.y - 0.5);
     vec3 localPos = vec3(localX, localY, 0.0);
@@ -21,7 +21,7 @@ CameraRay sampleCameraRay(float wavelength, uint idx, uint dim) {
     vec3 rayPos = objToWorld * localPos + cameraRayParams.offset;
 
     //sample direction
-    u = random2D(idx, dim); dim += 2;
+    u = random2D(idx, dim);
     float cos_theta = 1.0 - u.x; //limit to upper hemisphere (exclude 0.0)
     float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
     float phi = TWO_PI * u.y;
@@ -58,7 +58,7 @@ CameraRay sampleCameraRay(float wavelength, uint idx, uint dim) {
     );
 }
 
-CameraSample sampleCamera(float wavelength, uint idx, uint dim) {
+CameraSample sampleCamera(float wavelength, uint idx, inout uint dim) {
     mat3 objToWorld = transpose(cameraRayParams.view); // inverse, since it's orthogonal
     //sample position on detector
     vec2 u = random2D(idx, dim);

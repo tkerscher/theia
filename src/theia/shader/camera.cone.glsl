@@ -9,7 +9,7 @@ layout(scalar) uniform CameraRayParams {
     float cosOpeningAngle;
 } cameraRayParams;
 
-CameraRay sampleCameraRay(float wavelength, uint idx, uint dim) {
+CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
     //sample cone
     vec2 u = random2D(idx, dim);
     float phi = TWO_PI * u.x;

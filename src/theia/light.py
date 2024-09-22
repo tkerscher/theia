@@ -364,7 +364,6 @@ class LightSampler(PipelineStage):
         if code is None:
             preamble = createPreamble(
                 BATCH_SIZE=batchSize,
-                DIM_PHOTON_OFFSET=wavelengthSource.nRNGSamples,
                 LIGHT_QUEUE_SIZE=capacity,
                 LIGHT_QUEUE_POLARIZED=polarized,
                 PHOTON_QUEUE_SIZE=capacity,

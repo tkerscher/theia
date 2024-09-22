@@ -19,9 +19,9 @@ layout(scalar) uniform LightParams {
     vec4 stokes;
 } lightParams;
 
-SourceRay sampleLight(float wavelength, uint idx, uint dim) {
+SourceRay sampleLight(float wavelength, uint idx, inout uint dim) {
     //sample cone
-    vec2 u = random2D(idx, dim); dim += 2;
+    vec2 u = random2D(idx, dim);
     float phi = TWO_PI * u.x;
     float cos_theta = (1.0 - u.y) + lightParams.cosOpeningAngle * u.y;
     float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
@@ -36,7 +36,7 @@ SourceRay sampleLight(float wavelength, uint idx, uint dim) {
     vec3 rayDir = trafo * localDir;
 
     //sample startTime
-    float v = random(idx, dim); dim++;
+    float v = random(idx, dim);
     float startTime = mix(lightParams.t_min, lightParams.t_max, v);
 
     #ifdef LIGHTSOURCE_POLARIZED
@@ -70,7 +70,7 @@ SourceRay sampleLight(float wavelength, uint idx, uint dim) {
 SourceRay sampleLight(
     vec3 observer, vec3 normal,
     float wavelength,
-    uint idx, uint dim
+    uint idx, inout uint dim
 ) {
     //get direction
     vec3 rayDir = normalize(observer - lightParams.position);    
@@ -80,7 +80,7 @@ SourceRay sampleLight(
     float d = distance(observer, lightParams.position);
     contrib /= d*d;
     //sample start time
-    float u = random(idx, dim); dim++;
+    float u = random(idx, dim);
     float startTime = mix(lightParams.t_min, lightParams.t_max, u);
 
     #ifdef LIGHTSOURCE_POLARIZED

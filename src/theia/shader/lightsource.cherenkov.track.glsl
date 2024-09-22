@@ -24,12 +24,12 @@ layout(scalar) uniform TrackParams {
     uvec2 track;
 } trackParams;
 
-SourceRay sampleLight(float wavelength, uint idx, uint dim) {
+SourceRay sampleLight(float wavelength, uint idx, inout uint dim) {
     //fetch track
     ParticleTrack track = ParticleTrack(trackParams.track);
 
     //randomly select track segment via first vertex [0,length - 1]
-    float u = random(idx, dim); dim++;
+    float u = random(idx, dim);
     u *= float(track.trackLength);
     //random() should exclude 1.0, but just to be safe
     uint vertexIdx = min(uint(floor(u)), track.trackLength - 1);
@@ -53,7 +53,7 @@ SourceRay sampleLight(float wavelength, uint idx, uint dim) {
     float cos_theta = 1.0 / n;
     float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
     //sample ray direction
-    float phi = TWO_PI * random(idx, dim); dim++;
+    float phi = TWO_PI * random(idx, dim);
     vec3 dir = vec3(
         sin_theta * cos(phi),
         sin_theta * sin(phi),

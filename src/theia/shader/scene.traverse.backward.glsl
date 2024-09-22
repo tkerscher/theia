@@ -99,7 +99,7 @@ ResultCode processHit(
 ResultCode trace(
     inout BackwardRay ray,  ///< Ray to trace using its current state
     out SurfaceHit hit,     ///< Resultin hit (includes misses)
-    uint idx, uint dim,     ///< RNG state
+    uint idx, inout uint dim,     ///< RNG state
     PropagateParams params  ///< Propagation parameters
 ) {
     //health check ray
@@ -108,7 +108,7 @@ ResultCode trace(
     vec3 dir = normalize(ray.direction);
 
     //sample distance
-    float u = random(idx, dim); dim++;
+    float u = random(idx, dim);
     float dist = sampleScatterLength(ray, params, u);
 
     //trace ray against scene
@@ -141,7 +141,7 @@ ResultCode trace(
 ResultCode processInteraction(
     inout BackwardRay ray,      ///< Ray to process
     const SurfaceHit hit,       ///< Hit to process (maybe invalid, i.e. no hit)
-    uint idx, uint dim,         ///< RNG state
+    uint idx, inout uint dim,   ///< RNG state
     PropagateParams params,     ///< Propagation parameters
     bool last                   ///< True on last iteration
 ) {
@@ -150,7 +150,7 @@ ResultCode processInteraction(
     if (hit.valid) {
         result = processHit(
             ray, hit,
-            params
+            params,
             random(idx, dim)
         );
         dim++;
@@ -159,7 +159,7 @@ ResultCode processInteraction(
         //dont bother scattering on the last iteration (we wont hit anything)
         if (!last) {
             //scatter ray in new direction
-            scatterRay(ray, random2D(idx, dim)); dim += 2;
+            scatterRay(ray, random2D(idx, dim));
         }
         result = RESULT_CODE_RAY_SCATTERED;
     }

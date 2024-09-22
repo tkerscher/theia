@@ -20,18 +20,6 @@
 #ifndef PATH_LENGTH
 #error "PATH_LENGTH not defined"
 #endif
-#ifndef DIM_OFFSET_LIGHT
-#error "DIM_OFFSET_LIGHT not defined"
-#endif
-#ifndef DIM_OFFSET_PHOTON
-#error "DIM_OFFSET_PHOTON not defined"
-#endif
-//#samples per iteration
-#ifndef DISABLE_MIS
-#define DIM_STRIDE 7
-#else
-#define DIM_STRIDE 3
-#endif
 
 layout(local_size_x = BLOCK_SIZE) in;
 
@@ -93,9 +81,13 @@ void createResponse(ForwardRay ray, vec3 dir, float weight, bool scattered) {
     response(createHit(ray, objPos, hitNormal));
 }
 
-ResultCode trace(inout ForwardRay ray, uint idx, uint dim, bool first, bool allowResponse) {
+ResultCode trace(
+    inout ForwardRay ray,
+    uint idx, inout uint dim,
+    bool first, bool allowResponse
+) {
     //sample distance
-    float u = random(idx, dim); dim++;
+    float u = random(idx, dim);
     float dist = sampleScatterLength(ray, params.propagation, u);
 
     //trace sphere
@@ -139,7 +131,7 @@ ResultCode trace(inout ForwardRay ray, uint idx, uint dim, bool first, bool allo
     //sphere for a possible hit direction
     float wTarget, wPhase;
     vec3 dirTarget, dirPhase;
-    vec2 uTarget = random2D(idx, dim), uPhase = random2D(idx, dim + 2); dim += 4;
+    vec2 uTarget = random2D(idx, dim), uPhase = random2D(idx, dim);
     sampleTargetMIS(
         Medium(params.medium),
         ray.state.position, ray.state.direction, params.target,
@@ -170,17 +162,17 @@ ResultCode trace(inout ForwardRay ray, uint idx, uint dim, bool first, bool allo
 #endif
 
 void main() {
+    uint dim = 0;
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= BATCH_SIZE)
         return;
 
     //sample ray
     Medium medium = Medium(params.medium);
-    WavelengthSample photon = sampleWavelength(idx, 0);
+    WavelengthSample photon = sampleWavelength(idx, dim);
     ForwardRay ray = createRay(
-        sampleLight(photon.wavelength, idx, DIM_OFFSET_PHOTON),
+        sampleLight(photon.wavelength, idx, dim),
         medium, photon);
-    uint dim = DIM_OFFSET_LIGHT; //advance rng by amount light consumed
     onEvent(ray, RESULT_CODE_RAY_CREATED, idx, 0);
     //discard ray if inside target
     if (distance(ray.state.position, params.target.position) <= params.target.radius) {
@@ -201,14 +193,14 @@ void main() {
         return;
     
     //trace loop: rest
-    [[unroll]] for (uint i = 0; i < PATH_LENGTH; ++i, dim += DIM_STRIDE) {
+    [[unroll]] for (uint i = 0; i < PATH_LENGTH; ++i) {
         //scatter ray
         vec2 u = random2D(idx, dim);
         float cos_theta, phi;
         scatterRay(ray, u);
 
         //trace ray
-        ResultCode result = trace(ray, idx, dim + 2, false, ALLOW_RESPONSE);
+        ResultCode result = trace(ray, idx, dim, false, ALLOW_RESPONSE);
         onEvent(ray, result, idx, i + 2);
 
         //stop codes are negative

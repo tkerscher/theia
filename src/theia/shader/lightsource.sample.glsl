@@ -46,14 +46,17 @@ layout(scalar) uniform SampleParams {
 } sampleParams;
 
 void main() {
-    //range check
+    uint dim = 0;
     uint idx = gl_GlobalInvocationID.x;
+    //range check
     if (idx >= sampleParams.count)
         return;
 
     //sample light
-    WavelengthSample photon = sampleWavelength(idx + sampleParams.baseCount, 0);
-    SourceRay ray = sampleLight(photon.wavelength, idx + sampleParams.baseCount, DIM_PHOTON_OFFSET);
+    WavelengthSample photon = sampleWavelength(
+        idx + sampleParams.baseCount, dim);
+    SourceRay ray = sampleLight(
+        photon.wavelength, idx + sampleParams.baseCount, dim);
     //save sample
     SAVE_SAMPLE(ray, lightQueue.data, idx)
     SAVE_PHOTON(photon, photonQueue.data, idx)

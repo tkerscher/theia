@@ -216,7 +216,7 @@ void traceShadowRay(
 void processScatter(
     inout ForwardRay ray,           ///< Ray to scatter
     uint targetId,                  ///< Id of target
-    uint idx, uint dim,             ///< RNG state
+    uint idx, inout uint dim,             ///< RNG state
     const PropagateParams params    ///< Propagation params
 ) {
     #ifndef SCENE_TRAVERSE_DISABLE_MIS
@@ -225,7 +225,7 @@ void processScatter(
     //sphere for a possible hit direction
     float wTarget, wPhase;
     vec3 dirTarget, dirPhase;
-    vec2 uTarget = random2D(idx, dim), uPhase = random2D(idx, dim + 2); dim += 4;
+    vec2 uTarget = random2D(idx, dim), uPhase = random2D(idx, dim);
     Sphere target = targets[targetId]; //NOTE: external dependency !!!
     sampleTargetMIS(
         getMedium(ray),
@@ -249,16 +249,8 @@ void processScatter(
     #endif
 
     //scatter ray in new direction
-    scatterRay(ray, random2D(idx, dim)); dim += 2;
+    scatterRay(ray, random2D(idx, dim));
 }
-
-//tracing rng stride
-#ifndef SCENE_TRAVERSE_DISABLE_MIS
-#define SCENE_TRAVERSE_TRACE_RNG_STRIDE 8
-#else
-#define SCENE_TRAVERSE_TRACE_RNG_STRIDE 4
-#endif
-#define SCENE_TRAVERSE_TRACE_OFFSET 1
 
 /*
  * Traces the given ray and propagates it. Creates a SurfaceHit describing if
@@ -268,12 +260,12 @@ void processScatter(
  * detector to create a response.
 */
 ResultCode trace(
-    inout ForwardRay ray,   ///< Ray to trace using its current state
-    out SurfaceHit hit,     ///< Resulting hit (includes misses)
-    uint targetId,          ///< Id of target
-    uint idx, uint dim,     ///< RNG state
-    PropagateParams params, ///< Propagation parameters
-    bool allowResponse      ///< Whether detector hits can create a response
+    inout ForwardRay ray,       ///< Ray to trace using its current state
+    out SurfaceHit hit,         ///< Resulting hit (includes misses)
+    uint targetId,              ///< Id of target
+    uint idx, inout uint dim,   ///< RNG state
+    PropagateParams params,     ///< Propagation parameters
+    bool allowResponse          ///< Whether detector hits can create a response
 ) {
     //health check ray
     if (isRayBad(ray))
@@ -281,7 +273,7 @@ ResultCode trace(
     vec3 dir = normalize(ray.state.direction); //just to be safe
 
     //sample distance
-    float u = random(idx, dim); dim++;
+    float u = random(idx, dim);
     float dist = sampleScatterLength(ray, params, u);
 
     //next event estimate target by extending ray if possible
@@ -352,7 +344,7 @@ ResultCode processInteraction(
     inout ForwardRay ray,       ///< Ray to process
     const SurfaceHit hit,       ///< Hit to process (maybe invalid, i.e. no hit)
     uint targetId,              ///< Id of target
-    uint idx, uint dim,         ///< RNG state
+    uint idx, inout uint dim,   ///< RNG state
     PropagateParams params,     ///< Propagation parameters
     bool allowResponse,         ///< Whether detector hit by chance are allowed to create a response
     bool last                   ///< True on last iteration (skips MIS)

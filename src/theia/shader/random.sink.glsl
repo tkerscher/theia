@@ -38,6 +38,6 @@ void main() {
         i < DRAWS && count < samples;
         ++i, idx += BATCH_SIZE, count += BATCH_SIZE
     ) {
-        u[idx] = random(stream, count + baseCount);
+        u[idx] = random_s(stream, count + baseCount);
     }
 }

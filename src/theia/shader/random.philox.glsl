@@ -53,8 +53,7 @@ void philox(uint stream, uint i) {
     philoxBuffer = normalizeUint(state);
 }
 
-
-float random(uint stream, uint i) {
+float random_s(uint stream, uint i) {
     //get which element of buffer we need
     uint count = i << 2; //divide by 4
     uint idx = i & 0x03; //remainder
@@ -79,9 +78,21 @@ float random(uint stream, uint i) {
     return philoxBuffer[idx];
 }
 
-vec2 random2D(uint stream, uint i) {
+vec2 random2D_s(uint stream, uint i) {
     //TODO: Maybe skip one value if last in buffer, to do only one update?
-    return vec2(random(stream, i), random(stream, i+1));
+    return vec2(random_s(stream, i), random_s(stream, i+1));
+}
+
+float random(uint stream, inout uint i) {
+    float result = random_s(stream, i);
+    i += 1;
+    return result;
+}
+
+vec2 random2D(uint stream, inout uint i) {
+    vec2 result = random2D_s(stream, i);
+    i += 2;
+    return result;
 }
 
 #endif

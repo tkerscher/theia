@@ -12,9 +12,9 @@ layout(scalar) uniform LightParams {
     float t_max;
 } lightParams;
 
-SourceRay sampleLight(float wavelength, uint idx, uint dim) {
+SourceRay sampleLight(float wavelength, uint idx, inout uint dim) {
     //sample direction
-    vec2 u = random2D(idx, dim); dim += 2;
+    vec2 u = random2D(idx, dim);
     float cos_theta = 2.0 * u.x - 1.0;
     float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
     float phi = TWO_PI * u.y;
@@ -24,7 +24,7 @@ SourceRay sampleLight(float wavelength, uint idx, uint dim) {
         cos_theta
     );
     //sample startTime
-    float v = random(idx, dim); dim++;
+    float v = random(idx, dim);
     float startTime = mix(lightParams.t_min, lightParams.t_max, v);
 
     //assemble source ray
@@ -39,13 +39,13 @@ SourceRay sampleLight(float wavelength, uint idx, uint dim) {
 SourceRay sampleLight(
     vec3 observer, vec3 normal,
     float wavelength,
-    uint idx, uint dim
+    uint idx, inout uint dim
 ) {
     //get direction
     vec3 direction = normalize(observer - lightParams.position);
     
     //sample start time
-    float u = random(idx, dim); dim++;
+    float u = random(idx, dim);
     float startTime = mix(lightParams.t_min, lightParams.t_max, u);
 
     //calculate contribution

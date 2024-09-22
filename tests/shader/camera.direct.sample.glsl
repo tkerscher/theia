@@ -23,13 +23,14 @@ layout(scalar) writeonly buffer ResultBuffer { Result r[]; };
 
 void main() {
     uint i = gl_GlobalInvocationID.x;
+    uint dim = 0;
 
     //sample wavelength
-    float lambda = mix(LAM_MIN, LAM_MAX, random(i, 0));
+    float lambda = mix(LAM_MIN, LAM_MAX, random(i, dim));
     //sample light direction
-    float cos_theta = 2.0 * random(i, 1) - 1.0;
+    float cos_theta = 2.0 * random(i, dim) - 1.0;
     float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
-    float phi = TWO_PI * random(i, 2);
+    float phi = TWO_PI * random(i, dim);
     vec3 lightDir = vec3(
         sin_theta * sin(phi),
         sin_theta * cos(phi),
@@ -37,7 +38,7 @@ void main() {
     );
 
     //sample camera
-    CameraSample cam = sampleCamera(lambda, i, 3);
+    CameraSample cam = sampleCamera(lambda, i, dim);
     CameraRay ray = createCameraRay(cam, lightDir, lambda);
 
     //save result
