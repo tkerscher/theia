@@ -53,4 +53,41 @@ mat3 createLocalCOSY(vec3 vz) {
     return mat3(vx,vy,vz);
 }
 
+//returns a unit vector normal to unit vector v
+vec3 perpendicularTo(vec3 v) {
+    float s = signBit(v.z);
+    float a = -1.0 / (s + v.z);
+    float b = v.x * v.y * a;
+    return vec3(b, s + v.y * v.y * a, -v.y);
+}
+
+//returns a unit vector normal to both unit vectors a and b
+vec3 perpendicularTo(vec3 a, vec3 b) {
+    vec3 c = crosser(a, b);
+    //degenerate case a || b
+    float len = length(c);
+    if (len < 1e-5) {
+        //return vector perp to a (and thus b)
+        return perpendicularTo(a);
+    }
+    else {
+        //normalize c
+        return c / len;
+    }
+}
+
+//returns a unit vector normal to the given unit vector and the z direction
+vec3 perpendicularToZand(vec3 a) {
+    vec3 b = vec3(a.y, -a.x, 0.0); //cross(a, vec3(0.0, 0.0, 1.0))
+    //degenerate case: a || z
+    float len = length(b);
+    if (len < 1e-5) {
+        return vec3(1.0, 0.0, 0.0);
+    }
+    else {
+        //normalize b
+        return b / len;
+    }
+}
+
 #endif
