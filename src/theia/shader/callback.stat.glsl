@@ -12,6 +12,7 @@ layout(scalar) writeonly buffer Statistics {
     uint lost;
     uint decayed;
     uint absorbed;
+    uint missed;
     uint error;
 } stats;
 
@@ -41,6 +42,9 @@ void onEvent(const RayState ray, ResultCode code, uint idx, uint i) {
         break;
     case RESULT_CODE_RAY_ABSORBED:
         atomicAdd(stats.absorbed, 1);
+        break;
+    case RESULT_CODE_RAY_MISSED:
+        atomicAdd(stats.missed, 1);
         break;
     default:
         //collect all errors in one statistic

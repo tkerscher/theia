@@ -46,13 +46,14 @@ def test_VolumeTracer(
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
     photons = theia.light.UniformWavelengthSource()
     source = theia.light.SphericalLightSource(
-        photons, position=light_pos, budget=light_budget, timeRange=(T0, T1)
+        position=light_pos, budget=light_budget, timeRange=(T0, T1)
     )
     recorder = theia.estimator.HitRecorder(polarized=polarized)
     stats = theia.trace.EventStatisticCallback()
     tracer = theia.trace.VolumeTracer(
         N,
         source,
+        photons,
         recorder,
         rng,
         medium=store.media["water"],
@@ -179,7 +180,7 @@ def test_SceneTracer(
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
     photons = theia.light.UniformWavelengthSource()
     source = theia.light.SphericalLightSource(
-        photons, position=light_pos, timeRange=(T0, T1), budget=light_budget
+        position=light_pos, timeRange=(T0, T1), budget=light_budget
     )
     recorder = theia.estimator.HitRecorder(polarized=polarized)
     # stats = theia.trace.EventStatisticCallback()
@@ -187,6 +188,7 @@ def test_SceneTracer(
     tracer = theia.trace.SceneTracer(
         N,
         source,
+        photons,
         recorder,
         rng,
         scene,
@@ -401,12 +403,13 @@ def test_EventStatisticCallback():
     # create pipeline
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
     photons = theia.light.UniformWavelengthSource()
-    source = theia.light.SphericalLightSource(photons, timeRange=(T0, T1))
+    source = theia.light.SphericalLightSource(timeRange=(T0, T1))
     response = theia.estimator.EmptyResponse()
     stats = theia.trace.EventStatisticCallback()
     tracer = theia.trace.SceneTracer(
         N,
         source,
+        photons,
         response,
         rng,
         callback=stats,
@@ -485,7 +488,6 @@ def test_TrackRecordCallback(polarizedTrack: bool, polarized: bool):
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
     photons = theia.light.UniformWavelengthSource()
     source = theia.light.PencilLightSource(
-        photons,
         position=light_pos,
         direction=light_dir,
         timeRange=(T0, T1),
@@ -497,6 +499,7 @@ def test_TrackRecordCallback(polarizedTrack: bool, polarized: bool):
     tracer = theia.trace.VolumeTracer(
         N,
         source,
+        photons,
         response,
         rng,
         callback=track,
@@ -569,7 +572,6 @@ def test_volumeBorder():
         lambdaRange=(LAMBDA, LAMBDA),  # const lambda
     )
     source = theia.light.PencilLightSource(
-        photons,
         position=(0.0, 0.0, 0.0),
         # important: hit cube not straight on but in angle to test for no refraction
         direction=(0.8, 0.36, 0.48),
@@ -581,6 +583,7 @@ def test_volumeBorder():
     tracer = theia.trace.SceneTracer(
         N,
         source,
+        photons,
         estimator,
         rng,
         callback=tracker,
@@ -664,7 +667,6 @@ def test_tracer_reflection(flag, reflectance, err):
         lambdaRange=(500.0, 500.0) * u.nm,  # const lambda
     )
     source = theia.light.PencilLightSource(
-        photons,
         position=(-20.0, 0.0, 0.0) * u.m,
         direction=(1.0, 0.0, 0.0),
         timeRange=(0.0, 0.0),  # const time
@@ -674,6 +676,7 @@ def test_tracer_reflection(flag, reflectance, err):
     tracer = theia.trace.SceneTracer(
         N,
         source,
+        photons,
         recorder,
         rng,
         scene=scene,
@@ -694,3 +697,188 @@ def test_tracer_reflection(flag, reflectance, err):
     assert hits_ref.count + hits_trans.count == N
     reflectance_sim = hits_ref.count / N
     assert np.abs(reflectance_sim - reflectance) <= err
+
+
+@pytest.mark.parametrize("polarized", [True, False])
+def test_DirectTracer_volume(polarized: bool):
+    N = 32 * 256
+    # params
+    T0, T1 = 10.0 * u.ns, 20.0 * u.ns
+    T_MAX = 45.0 * u.ns
+    camDir = (1.0, 0.0, 0.0)
+    camPos = (5.0, 2.0, -1.0)
+    camUp = (0.0, 0.0, 1.0)
+    width, length = 50.0 * u.cm, 40.0 * u.cm
+    lightPos = (10.0, 5.0, 2.0)
+    lightBudget = 1000.0
+
+    # create water medium
+    water = WaterModel().createMedium()
+    store = theia.material.MaterialStore([], media=[water])
+
+    # estimate min time
+    v_max = np.max(water.group_velocity)
+    d = np.array(lightPos) - np.array(camPos)
+    d = np.multiply(d, camDir).sum(-1)  # not exact, but lower bound
+    t_min = d / v_max + T0
+
+    # create pipeline
+    rng = theia.random.PhiloxRNG(key=0xC0FFEE)
+    photons = theia.light.UniformWavelengthSource()
+    light = theia.light.SphericalLightSource(
+        position=lightPos, budget=lightBudget, timeRange=(T0, T1)
+    )
+    camera = theia.camera.FlatCameraRaySource(
+        width=width,
+        length=length,
+        position=camPos,
+        direction=camDir,
+        up=camUp,
+    )
+    recorder = theia.estimator.HitRecorder(polarized=polarized)
+    stats = theia.trace.EventStatisticCallback()
+    tracer = theia.trace.DirectLightTracer(
+        N,
+        light,
+        camera,
+        photons,
+        recorder,
+        rng,
+        callback=stats,
+        medium=store.media["water"],
+        maxTime=T_MAX,
+        polarized=polarized,
+    )
+    # run pipeline
+    pl.runPipeline([rng, photons, light, camera, tracer, stats, recorder])
+
+    # check hits
+    hits = recorder.view(0)
+    assert hits.count > 0
+    assert hits.count <= tracer.maxHits
+    hits = hits[: hits.count]
+    assert np.min(hits["time"]) >= t_min
+    assert np.max(hits["time"]) <= T_MAX
+
+    # sanity check polarization
+    if polarized:
+        # check stokes is normalized
+        assert np.abs(hits["stokes"][:, 0] - 1.0).max() < 1e-6
+        assert np.square(hits["stokes"][:, 1:]).sum(-1).max() <= 1.0
+        assert hits["stokes"][:, 1:].max() <= 1.0
+        assert hits["stokes"][:, 1:].min() >= -1.0
+        # check polarization ref is perpendicular to plane of incidence and normalized
+        polRef = hits["polarizationRef"]
+        assert np.abs(np.square(polRef).sum(-1) - 1.0).max() < 1e-6
+        polRef_exp = np.cross(hits["direction"], hits["normal"])
+        d = np.square(polRef_exp).sum(-1)
+        mask = d > 1e-7
+        polRef_exp /= np.sqrt(d)[:, None]
+        # for very small angle we reuse the old polRef to minimize error
+        assert np.abs(np.abs((polRef_exp * polRef).sum(-1))[mask] - 1.0).max() < 1e-6
+
+    # check stats
+    assert stats.created == tracer.batchSize
+    assert stats.detected + stats.decayed + stats.absorbed == tracer.batchSize
+    assert stats.detected == len(hits)
+
+
+@pytest.mark.parametrize("polarized", [True, False])
+def test_DirectTracer_scene(polarized: bool):
+    if not hp.isRaytracingEnabled():
+        pytest.skip("ray tracing is not supported")
+
+    N = 32 * 256
+    # TODO
+    # same as volume version, but now put something before camera to test shadow rays
+    T0, T1 = 10.0 * u.ns, 20.0 * u.ns
+    T_MAX = 45.0 * u.ns
+    camDir = (1.0, 0.0, 0.0)
+    camPos = (5.0, 2.0, -1.0)
+    camUp = (0.0, 0.0, 1.0)
+    width, length = 50.0 * u.cm, 40.0 * u.cm
+    lightPos = (10.0, 5.0, 2.0)
+    lightBudget = 1000.0
+
+    # create water medium
+    water = WaterModel().createMedium()
+    absorber = theia.material.Material("absorber", None, water, flags="B")
+    store = theia.material.MaterialStore([absorber], media=[water])
+    # create scene
+    # block half of the camera to see whether shadow rays work properly
+    meshes = theia.scene.MeshStore({"cube": "assets/cube.ply"})
+    aperture_size = (1.0 * u.cm, width, length)
+    aperture_pos = (5.03, 2.0 + width, -1.0)
+    t = theia.scene.Transform.Scale(*aperture_size).translate(*aperture_pos)
+    a = meshes.createInstance("cube", "absorber", transform=t)
+    scene = theia.scene.Scene([a], store.material, medium=store.media["water"])
+
+    # estimate min time
+    v_max = np.max(water.group_velocity)
+    d = np.array(lightPos) - np.array(camPos)
+    d = np.multiply(d, camDir).sum(-1)  # not exact, but lower bound
+    t_min = d / v_max + T0
+
+    # create pipeline stages
+    rng = theia.random.PhiloxRNG(key=0xC0FFEE)
+    photons = theia.light.UniformWavelengthSource()
+    light = theia.light.SphericalLightSource(
+        position=lightPos, budget=lightBudget, timeRange=(T0, T1)
+    )
+    camera = theia.camera.FlatCameraRaySource(
+        width=width,
+        length=length,
+        position=camPos,
+        direction=camDir,
+        up=camUp,
+    )
+    recorder = theia.estimator.HitRecorder(polarized=polarized)
+    stats = theia.trace.EventStatisticCallback()
+    tracer = theia.trace.DirectLightTracer(
+        N,
+        light,
+        camera,
+        photons,
+        recorder,
+        rng,
+        scene,
+        callback=stats,
+        maxTime=T_MAX,
+        polarized=polarized,
+    )
+    # run pipeline
+    pl.runPipeline([rng, photons, light, camera, tracer, stats, recorder])
+
+    # check hits
+    hits = recorder.view(0)
+    assert hits.count > 0
+    assert hits.count <= tracer.maxHits
+    hits = hits[: hits.count]
+    assert np.min(hits["time"]) >= t_min
+    assert np.max(hits["time"]) <= T_MAX
+    # check we hit only half of the detector
+    assert np.abs(hits["position"].max(0) - (0.0, length / 2, 0.0)).max() < 0.025
+    assert np.abs(hits["position"].min(0) - (-width / 2, -length / 2, 0.0)).max() < 5e-4
+
+    # sanity check polarization
+    if polarized:
+        # check stokes is normalized
+        assert np.abs(hits["stokes"][:, 0] - 1.0).max() < 1e-6
+        assert np.square(hits["stokes"][:, 1:]).sum(-1).max() <= 1.0
+        assert hits["stokes"][:, 1:].max() <= 1.0
+        assert hits["stokes"][:, 1:].min() >= -1.0
+        # check polarization ref is perpendicular to plane of incidence and normalized
+        polRef = hits["polarizationRef"]
+        assert np.abs(np.square(polRef).sum(-1) - 1.0).max() < 1e-6
+        polRef_exp = np.cross(hits["direction"], hits["normal"])
+        d = np.square(polRef_exp).sum(-1)
+        mask = d > 1e-7
+        polRef_exp /= np.sqrt(d)[:, None]
+        # for very small angle we reuse the old polRef to minimize error
+        assert np.abs(np.abs((polRef_exp * polRef).sum(-1))[mask] - 1.0).max() < 1e-6
+
+    # check stats
+    assert stats.created == tracer.batchSize
+    assert stats.detected + stats.decayed + stats.absorbed == tracer.batchSize
+    assert stats.detected == len(hits)
+    assert stats.absorbed > 0

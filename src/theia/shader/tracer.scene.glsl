@@ -21,8 +21,11 @@
 #ifndef PATH_LENGTH
 #error "PATH_LENGTH not defined"
 #endif
-#ifndef DIM_OFFSET
-#error "DIM_OFFSET not defined"
+#ifndef DIM_OFFSET_LIGHT
+#error "DIM_OFFSET_LIGHT not defined"
+#endif
+#ifndef DIM_OFFSET_PHOTON
+#error "DIM_OFFSET_PHOTON not defined"
 #endif
 // #samples per iteration
 #ifdef DISABLE_MIS
@@ -35,12 +38,14 @@ layout(local_size_x = BLOCK_SIZE) in;
 #include "scene.intersect.glsl"
 #include "scene.traverse.forward.glsl"
 
+#include "wavelengthsource.common.glsl"
 #include "lightsource.common.glsl"
 #include "response.common.glsl"
 //user provided code
 #include "rng.glsl"
 #include "callback.glsl"
 #include "source.glsl"
+#include "photon.glsl"
 #include "response.glsl"
 
 #include "callback.util.glsl"
@@ -66,10 +71,13 @@ void main() {
     
     //sample ray
     Medium medium = Medium(params.sceneMedium);
-    ForwardRay ray = createRay(sampleLight(idx, 0), medium);
+    WavelengthSample photon = sampleWavelength(idx, 0);
+    ForwardRay ray = createRay(
+        sampleLight(photon.wavelength, idx, DIM_OFFSET_PHOTON),
+        medium, photon);
     onEvent(ray, RESULT_CODE_RAY_CREATED, idx, 0);
     //advange rng by amount used by sampleLight()
-    uint dim = DIM_OFFSET;
+    uint dim = DIM_OFFSET_LIGHT;
 
     //trace loop
     bool allowResponse = ALLOW_RESPONSE_INIT;

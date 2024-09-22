@@ -20,8 +20,11 @@
 #ifndef PATH_LENGTH
 #error "PATH_LENGTH not defined"
 #endif
-#ifndef DIM_OFFSET
-#error "DIM_OFFSET not defined"
+#ifndef DIM_OFFSET_LIGHT
+#error "DIM_OFFSET_LIGHT not defined"
+#endif
+#ifndef DIM_OFFSET_PHOTON
+#error "DIM_OFFSET_PHOTON not defined"
 #endif
 //#samples per iteration
 #ifndef DISABLE_MIS
@@ -54,12 +57,14 @@ Medium getMedium() {
 #include "result.glsl"
 #include "tracer.mis.glsl"
 
+#include "wavelengthsource.common.glsl"
 #include "lightsource.common.glsl"
 #include "response.common.glsl"
 //user provided code
 #include "rng.glsl"
 #include "callback.glsl"
 #include "source.glsl"
+#include "photon.glsl"
 #include "response.glsl"
 
 #include "callback.util.glsl"
@@ -171,8 +176,11 @@ void main() {
 
     //sample ray
     Medium medium = Medium(params.medium);
-    ForwardRay ray = createRay(sampleLight(idx, 0), medium);
-    uint dim = DIM_OFFSET; //advance rng by amount light consumed
+    WavelengthSample photon = sampleWavelength(idx, 0);
+    ForwardRay ray = createRay(
+        sampleLight(photon.wavelength, idx, DIM_OFFSET_PHOTON),
+        medium, photon);
+    uint dim = DIM_OFFSET_LIGHT; //advance rng by amount light consumed
     onEvent(ray, RESULT_CODE_RAY_CREATED, idx, 0);
     //discard ray if inside target
     if (distance(ray.state.position, params.target.position) <= params.target.radius) {
