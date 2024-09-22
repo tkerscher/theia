@@ -18,4 +18,15 @@ bool isRayBad(const BackwardRay ray) {
     return isRayBad(ray.state);
 }
 
+//returns the contribution of a ray
+float getContrib(const RayState ray) {
+    return ray.lin_contrib * exp(ray.log_contrib);
+}
+float getContrib(const ForwardRay ray) {
+    return getContrib(ray.state);
+}
+float getContrib(const BackwardRay ray) {
+    return getContrib(ray.state);
+}
+
 #endif

@@ -9,6 +9,7 @@
 layout(local_size_x = BATCH_SIZE) in;
 
 #include "lightsource.queue.glsl"
+#include "wavelengthsource.queue.glsl"
 //test for rare edge case:
 //combine HostLightSource & LightSampler, but mismatch polarization
 //(would require two different version of LightSourceQueue)
@@ -19,6 +20,7 @@ layout(local_size_x = BATCH_SIZE) in;
 //user provided source
 #include "rng.glsl"
 #include "light.glsl"
+#include "photon.glsl"
 
 //check for queue mismatch
 #ifdef _INCLUDE_LIGHTSOURCE_HOST
@@ -30,8 +32,12 @@ layout(local_size_x = BATCH_SIZE) in;
 //output queue
 layout(scalar) writeonly buffer LightQueueOut {
     uint sampleCount;
-    LightSourceQueue queue;
-};
+    LightSourceQueue data;
+} lightQueue;
+layout(scalar) writeonly buffer PhotonQueueOut {
+    uint sampleCount;
+    WavelengthQueue data;
+} photonQueue;
 
 //sample params
 layout(scalar) uniform SampleParams {
@@ -46,13 +52,15 @@ void main() {
         return;
 
     //sample light
-    SourceRay ray = sampleLight(idx + sampleParams.baseCount, 0);
+    WavelengthSample photon = sampleWavelength(idx + sampleParams.baseCount, 0);
+    SourceRay ray = sampleLight(photon.wavelength, idx + sampleParams.baseCount, DIM_PHOTON_OFFSET);
     //save sample
-    SAVE_SAMPLE(ray, queue, idx);
+    SAVE_SAMPLE(ray, lightQueue.data, idx)
+    SAVE_PHOTON(photon, photonQueue.data, idx)
 
     //save the item count exactly once
-    if (idx == 0) {
-        sampleCount = sampleParams.count;
+    if (gl_GlobalInvocationID.x == 0) {
+        lightQueue.sampleCount = sampleParams.count;
+        photonQueue.sampleCount = sampleParams.count;
     }
 }
-

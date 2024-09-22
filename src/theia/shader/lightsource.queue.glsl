@@ -26,7 +26,6 @@ struct LightSourceQueue {
     float polZ[LIGHT_QUEUE_SIZE];
 #endif
     //sample
-    float wavelength[LIGHT_QUEUE_SIZE];
     float startTime[LIGHT_QUEUE_SIZE];
     float contrib[LIGHT_QUEUE_SIZE];
 };
@@ -45,7 +44,6 @@ SourceRay RAY = createSourceRay(\
     vec3(QUEUE.dirX[IDX], QUEUE.dirY[IDX], QUEUE.dirZ[IDX]),\
     vec4(QUEUE.stokesI[IDX], QUEUE.stokesQ[IDX], QUEUE.stokesU[IDX], QUEUE.stokesV[IDX]),\
     vec3(QUEUE.polX[IDX], QUEUE.polY[IDX], QUEUE.polZ[IDX]),\
-    QUEUE.wavelength[IDX],\
     QUEUE.startTime[IDX],\
     QUEUE.contrib[IDX]);
 
@@ -55,7 +53,6 @@ SourceRay RAY = createSourceRay(\
 SourceRay RAY = createSourceRay(\
     vec3(QUEUE.posX[IDX], QUEUE.posY[IDX], QUEUE.posZ[IDX]),\
     vec3(QUEUE.dirX[IDX], QUEUE.dirY[IDX], QUEUE.dirZ[IDX]),\
-    QUEUE.wavelength[IDX],\
     QUEUE.startTime[IDX],\
     QUEUE.contrib[IDX]);
 
@@ -78,7 +75,6 @@ QUEUE.stokesV[IDX] = RAY.stokes.w;\
 QUEUE.polX[IDX] = RAY.polRef.x;\
 QUEUE.polY[IDX] = RAY.polRef.y;\
 QUEUE.polZ[IDX] = RAY.polRef.z;\
-QUEUE.wavelength[IDX] = RAY.wavelength;\
 QUEUE.startTime[IDX] = RAY.startTime;\
 QUEUE.contrib[IDX] = RAY.contrib;
 
@@ -95,7 +91,6 @@ QUEUE.posZ[IDX] = RAY.position.z;\
 QUEUE.dirX[IDX] = RAY.direction.x;\
 QUEUE.dirY[IDX] = RAY.direction.y;\
 QUEUE.dirZ[IDX] = RAY.direction.z;\
-QUEUE.wavelength[IDX] = RAY.wavelength;\
 QUEUE.startTime[IDX] = RAY.startTime;\
 QUEUE.contrib[IDX] = RAY.contrib;
 

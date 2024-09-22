@@ -20,7 +20,6 @@ struct SourceRay {
     vec3 polRef;
 #endif
     
-    float wavelength;
     float startTime;
     float contrib;
 };
@@ -34,7 +33,6 @@ struct SourceRay {
 SourceRay createSourceRay(
     vec3 position,
     vec3 direction,
-    float wavelength,
     float startTime,
     float contrib
 ) {
@@ -48,7 +46,6 @@ SourceRay createSourceRay(
         direction,
         vec4(1.0, 0.0, 0.0, 0.0), //stokes
         polRef,
-        wavelength,
         startTime,
         contrib
     );
@@ -56,25 +53,10 @@ SourceRay createSourceRay(
     return SourceRay(
         position,
         direction,
-        wavelength,
         startTime,
         contrib
     );
 #endif
-}
-SourceRay createSourceRay(
-    vec3 position,
-    vec3 direction,
-    float startTime,
-    WavelengthSample photon
-) {
-    return createSourceRay(
-        position,
-        direction,
-        photon.wavelength,
-        startTime,
-        photon.contrib
-    );
 }
 
 //create polarized source ray
@@ -83,7 +65,6 @@ SourceRay createSourceRay(
     vec3 direction,
     vec4 stokes,
     vec3 polRef,
-    float wavelength,
     float startTime,
     float contrib
 ) {
@@ -94,27 +75,8 @@ SourceRay createSourceRay(
         stokes,
         polRef,
 #endif
-        wavelength,
         startTime,
         contrib
-    );
-}
-SourceRay createSourceRay(
-    vec3 position,
-    vec3 direction,
-    float startTime,
-    vec4 stokes,
-    vec3 polRef,
-    WavelengthSample photon
-) {
-    return createSourceRay(
-        position,
-        direction,
-        stokes,
-        polRef,
-        photon.wavelength,
-        startTime,
-        photon.contrib
     );
 }
 

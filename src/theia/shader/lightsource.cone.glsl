@@ -7,7 +7,9 @@ layout(scalar) uniform LightParams {
     vec3 position;
     vec3 direction;
     float cosOpeningAngle;
-    float contrib;
+
+    float contribFwd;
+    float contribBwd;
 
     float t_min;
     float t_max;
@@ -17,7 +19,7 @@ layout(scalar) uniform LightParams {
     vec4 stokes;
 } lightParams;
 
-SourceRay sampleLight(uint idx, uint dim) {
+SourceRay sampleLight(float wavelength, uint idx, uint dim) {
     //sample cone
     vec2 u = random2D(idx, dim); dim += 2;
     float phi = TWO_PI * u.x;
@@ -37,11 +39,6 @@ SourceRay sampleLight(uint idx, uint dim) {
     float v = random(idx, dim); dim++;
     float startTime = mix(lightParams.t_min, lightParams.t_max, v);
 
-    //sample photon
-    WavelengthSample photon = sampleWavelength(idx, dim);
-    //apply budget
-    photon.contrib *= lightParams.contrib;
-
     #ifdef LIGHTSOURCE_POLARIZED
     //make polRef orthogonal to light ray direction
     //Obviously fails for rayDir || polRef
@@ -54,11 +51,10 @@ SourceRay sampleLight(uint idx, uint dim) {
     return createSourceRay(
         lightParams.position,
         rayDir,
-        startTime,
-        // lightParams.stokes,
-        vec4(1.0, 0.9, 0.1, -0.5),
+        lightParams.stokes,
         polRef,
-        photon
+        startTime,
+        lightParams.contribFwd
     );
     #else
     //assemble source ray
@@ -66,7 +62,50 @@ SourceRay sampleLight(uint idx, uint dim) {
         lightParams.position,
         rayDir,
         startTime,
-        photon
+        lightParams.contribFwd
+    );
+    #endif
+}
+
+SourceRay sampleLight(
+    vec3 observer, vec3 normal,
+    float wavelength,
+    uint idx, uint dim
+) {
+    //get direction
+    vec3 rayDir = normalize(observer - lightParams.position);    
+    //calculate contribution (zero if outside cone)
+    float cos_angle = dot(rayDir, lightParams.direction);
+    float contrib = lightParams.contribBwd * float(cos_angle > lightParams.cosOpeningAngle);
+    float d = distance(observer, lightParams.position);
+    contrib /= d*d;
+    //sample start time
+    float u = random(idx, dim); dim++;
+    float startTime = mix(lightParams.t_min, lightParams.t_max, u);
+
+    #ifdef LIGHTSOURCE_POLARIZED
+    //TODO: Check if edge case rayDir || polRef causes problems
+    //      (contrib should be zero)
+    vec3 polRef = lightParams.polRef;
+    polRef -= dot(polRef, rayDir) * rayDir;
+    polRef = normalize(polRef);
+
+    //assemble source ray
+    return createSourceRay(
+        lightParams.position,
+        rayDir,
+        lightParams.stokes,
+        polRef,
+        startTime,
+        contrib
+    );
+    #else
+    //assemble source ray
+    return createSourceRay(
+        lightParams.position,
+        rayDir,
+        startTime,
+        contrib
     );
     #endif
 }

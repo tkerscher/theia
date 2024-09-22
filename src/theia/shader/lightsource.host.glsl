@@ -9,7 +9,7 @@ layout(scalar) readonly buffer LightQueueIn {
     LightSourceQueue queue;
 } lightQueueIn;
 
-SourceRay sampleLight(uint idx, uint dim) {
+SourceRay sampleLight(float wavelength, uint idx, uint dim) {
     LOAD_SAMPLE(ray, lightQueueIn.queue, idx)
     return ray;
 }
