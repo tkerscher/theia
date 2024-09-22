@@ -7,7 +7,7 @@ layout(scalar) readonly buffer CameraQueueIn {
     CameraQueue queue;
 } cameraQueueIn;
 
-CameraRay sampleCameraRay(uint idx, uint dim) {
+CameraRay sampleCameraRay(float wavelength, uint idx, uint dim) {
     LOAD_CAMERA(ray, cameraQueueIn.queue, idx)
     return ray;
 }

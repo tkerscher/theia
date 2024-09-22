@@ -8,6 +8,7 @@
 layout(local_size_x = BATCH_SIZE) in;
 
 #include "camera.queue.glsl"
+#include "wavelengthsource.queue.glsl"
 //test for rare edge case:
 //combine HostCameraRaySource & CameraRaySampler, but mismatch polarization
 //(would require two different version of CameraQueue)
@@ -18,6 +19,7 @@ layout(local_size_x = BATCH_SIZE) in;
 //user provided code
 #include "rng.glsl"
 #include "camera.glsl"
+#include "photon.glsl"
 
 //check for queue mismatch
 #ifdef _INCLUDE_CAMERARAYSOURCE_HOST
@@ -29,8 +31,12 @@ layout(local_size_x = BATCH_SIZE) in;
 //output queue
 layout(scalar) writeonly buffer CameraQueueOut {
     uint sampleCount;
-    CameraQueue queue;
-};
+    CameraQueue data;
+} camQueue;
+layout(scalar) writeonly buffer PhotonQueueOut {
+    uint sampleCount;
+    WavelengthQueue data;
+} photonQueue;
 
 //sample params
 layout(scalar) uniform SampleParams {
@@ -45,12 +51,19 @@ void main() {
         return;
     
     //sample camera
-    CameraRay ray = sampleCameraRay(idx + sampleParams.baseCount, 0);
+    WavelengthSample photon = sampleWavelength(idx + sampleParams.baseCount, 0);
+    CameraRay ray = sampleCameraRay(
+        photon.wavelength,
+        idx + sampleParams.baseCount,
+        DIM_PHOTON_OFFSET
+    );
     //save sample
-    SAVE_CAMERA(ray, queue, idx)
+    SAVE_CAMERA(ray, camQueue.data, idx)
+    SAVE_PHOTON(photon, photonQueue.data, idx)
 
     //save the item count exactly once
-    if (idx == 0) {
-        sampleCount = sampleParams.count;
+    if (gl_GlobalInvocationID.x == 0) {
+        camQueue.sampleCount = sampleParams.count;
+        photonQueue.sampleCount = sampleParams.count;
     }
 }

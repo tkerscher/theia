@@ -6,14 +6,22 @@
 layout(scalar) uniform CameraRayParams {
     float width;
     float height; //length
-    float contrib;
     vec3 offset;
-    mat3 trafo;
+    mat3 view;
 } cameraRayParams;
 
-CameraRay sampleCameraRay(uint idx, uint dim) {
+CameraRay sampleCameraRay(float wavelength, uint idx, uint dim) {
+    mat3 objToWorld = transpose(cameraRayParams.view); // inverse, since it's orthogonal
+    //sample position on detector
+    vec2 u = random2D(idx, dim); dim += 2;
+    float localX = cameraRayParams.width * (u.x - 0.5);
+    float localY = cameraRayParams.height * (u.y - 0.5);
+    vec3 localPos = vec3(localX, localY, 0.0);
+    //transform to sceen coord space
+    vec3 rayPos = objToWorld * localPos + cameraRayParams.offset;
+
     //sample direction
-    vec2 u = random2D(idx, dim);
+    u = random2D(idx, dim); dim += 2;
     float cos_theta = 1.0 - u.x; //limit to upper hemisphere (exclude 0.0)
     float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
     float phi = TWO_PI * u.y;
@@ -22,45 +30,79 @@ CameraRay sampleCameraRay(uint idx, uint dim) {
         sin_theta * sin(phi),
         cos_theta
     );
-    vec3 rayDir = cameraRayParams.trafo * localDir;
+    vec3 rayDir = objToWorld * localDir;
     //flip local dir as it should hit the detector
     localDir *= -1.0;
+    //calculate contribution
+    float contrib = TWO_PI * cameraRayParams.width * cameraRayParams.height * cos_theta;
 
-#ifdef POLARIZATION
-    //create polarization reference frame in plane of incidence (normal e_z)
-    vec3 polRef = vec3(localDir.y, -localDir.x, 0.0);
-    //degenerate case: localDir || e_z
-    float len = length(polRef);
-    if (len < 1e-5) {
-        polRef = vec3(1.0, 0.0, 0.0);
-    }
-    else {
-        //normalize
-        polRef /= len;
-    }
-    polRef = cameraRayParams.trafo * polRef;
-#endif
+    //polarization
+    vec3 hitPolRef, polRef;
+    #ifdef POLARIZATION
+    hitPolRef = perpendicularToZand(localDir);
+    polRef = objToWorld * hitPolRef;
+    #endif
 
+    //assemble ray
+    return createCameraRay(
+        rayPos,
+        rayDir,
+        polRef,
+        mat4(1.0),
+        contrib,
+        0.0,
+        localPos,
+        localDir,
+        vec3(0.0, 0.0, 1.0),
+        hitPolRef
+    );
+}
+
+CameraSample sampleCamera(float wavelength, uint idx, uint dim) {
+    mat3 objToWorld = transpose(cameraRayParams.view); // inverse, since it's orthogonal
     //sample position on detector
-    u = random2D(idx, dim + 2);
+    vec2 u = random2D(idx, dim);
     float localX = cameraRayParams.width * (u.x - 0.5);
     float localY = cameraRayParams.height * (u.y - 0.5);
     vec3 localPos = vec3(localX, localY, 0.0);
     //transform to sceen coord space
-    vec3 rayPos = cameraRayParams.trafo * localPos + cameraRayParams.offset;
-
+    vec3 rayPos = objToWorld * localPos + cameraRayParams.offset;
+    vec3 rayNrm = transpose(cameraRayParams.view) * vec3(0.0, 0.0, 1.0);
     //calculate contribution
-    //(need an extra cosine factor)
-    float contrib = cos_theta * cameraRayParams.contrib;
+    float contrib = cameraRayParams.width * cameraRayParams.height;
+    //return sample
+    return CameraSample(rayPos, rayNrm, contrib);
+}
+
+CameraRay createCameraRay(CameraSample cam, vec3 lightDir, float wavelength) {
+    //get local coordinates
+    vec3 localPos = cameraRayParams.view * (cam.position - cameraRayParams.offset);
+    vec3 localDir = cameraRayParams.view * lightDir;
+    //calculate contribution
+    float cos_theta = -localDir.z; //dot(-localDir, vec3(0.0, 0.0, 1.0));
+    float contrib = cam.contrib * cos_theta;
+    //check light comes from the right side
+    contrib *= float(dot(cam.normal, lightDir) < 0.0);
+
+    //polarization
+    vec3 hitPolRef, polRef;
+    #ifdef POLARIZATION
+    hitPolRef = perpendicularToZand(localDir);
+    polRef = transpose(cameraRayParams.view) * hitPolRef;
+    #endif
+
     //assemble camera ray
-    return CameraRay(
-        rayPos, rayDir,                 // ray pos / dir
-        contrib, 0.0,   // contrib / time delta
-#ifdef POLARIZATION
+    return createCameraRay(
+        cam.position,
+        -lightDir,
         polRef,
-#endif
-        localPos, localDir,             // hit pos / dir
-        vec3(0.0, 0.0, 1.0)             // hit normal
+        mat4(1.0),
+        contrib,
+        0.0,
+        localPos,
+        localDir,
+        vec3(0.0, 0.0, 1.0),
+        hitPolRef
     );
 }
 

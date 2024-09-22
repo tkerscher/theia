@@ -9,6 +9,7 @@ from hephaistos.queue import QueueBuffer, QueueTensor, QueueView
 from ctypes import Structure, c_float, c_uint32
 
 import theia.units as u
+from theia.light import WavelengthSampleItem, WavelengthSource
 from theia.random import RNG
 from theia.scene import Transform
 from theia.util import ShaderLoader, compileShader, createPreamble
@@ -21,7 +22,6 @@ __all__ = [
     "ConeCameraRaySource",
     "FlatCameraRaySource",
     "HostCameraRaySource",
-    "LenseCameraRaySource",
     "PencilCameraRaySource",
     "PointCameraRaySource",
     "PolarizedCameraRayItem",
@@ -44,16 +44,30 @@ class CameraRaySource(SourceCodeMixin):
         self,
         *,
         nRNGSamples: int,
+        nRNGDirect: int = 0,
+        supportDirect: bool = False,
         params: Dict[str, Type[Structure]] = {},
         extra: Set[str] = set(),
     ) -> None:
         super().__init__(params, extra)
         self._nRNGSamples = nRNGSamples
+        self._nRNGDirect = nRNGDirect
+        self._supportDirect = supportDirect
+
+    @property
+    def nRNGDirect(self) -> int:
+        """Number of random numbers drawn per sample for direct lighting"""
+        return self._nRNGDirect
 
     @property
     def nRNGSamples(self) -> int:
         """Amount of random numbers drawn per sample"""
         return self._nRNGSamples
+
+    @property
+    def supportDirect(self) -> bool:
+        """Whether sampling for direct lighting is supported"""
+        return self._supportDirect
 
 
 class CameraRayItem(Structure):
@@ -75,6 +89,8 @@ class PolarizedCameraRayItem(Structure):
         ("contrib", c_float),
         ("timeDelta", c_float),
         ("polarizationRef", c_float * 3),
+        ("mueller", c_float * 16),
+        ("hitPolRef", c_float * 3),
         ("hitPosition", c_float * 3),
         ("hitDirection", c_float * 3),
         ("hitNormal", c_float * 3),
@@ -90,6 +106,8 @@ class CameraRaySampler(PipelineStage):
     ----------
     camera: CameraRaySource
         Camera to sample
+    wavelengthSource: WavelengthSource
+        Source to sample wavelengths from
     capacity: int
         Maximum number of samples that can be drawn per run
     rng: RNG | None, default=None
@@ -122,6 +140,7 @@ class CameraRaySampler(PipelineStage):
     def __init__(
         self,
         camera: CameraRaySource,
+        wavelengthSource: WavelengthSource,
         capacity: int,
         *,
         rng: Optional[RNG] = None,
@@ -131,7 +150,8 @@ class CameraRaySampler(PipelineStage):
         code: Optional[bytes] = None,
     ) -> None:
         # check if we have a rng if needed
-        if camera.nRNGSamples > 0 and rng is None:
+        needRNG = camera.nRNGSamples > 0 or wavelengthSource.nRNGSamples > 0
+        if needRNG and rng is None:
             raise ValueError("camera requires a rng but none was given!")
         # init stage
         super().__init__({"SampleParams": self.SampleParams})
@@ -143,19 +163,23 @@ class CameraRaySampler(PipelineStage):
         self._polarized = polarized
         self._retrieve = retrieve
         self._rng = rng
+        self._wavelengthSource = wavelengthSource
         self.setParams(count=capacity, baseCount=0)
 
         # create code if needed
         if code is None:
             preamble = createPreamble(
                 BATCH_SIZE=batchSize,
+                DIM_PHOTON_OFFSET=wavelengthSource.nRNGSamples,
                 CAMERA_QUEUE_SIZE=capacity,
                 CAMERA_QUEUE_POLARIZED=polarized,
+                PHOTON_QUEUE_SIZE=capacity,
                 POLARIZATION=polarized,
             )
             headers = {
                 "camera.glsl": camera.sourceCode,
                 "rng.glsl": rng.sourceCode if rng is not None else "",
+                "photon.glsl": wavelengthSource.sourceCode,
             }
             code = compileShader("camera.sample.glsl", preamble, headers)
         self._code = code
@@ -165,12 +189,20 @@ class CameraRaySampler(PipelineStage):
 
         # create queue holding samples
         item = PolarizedCameraRayItem if polarized else CameraRayItem
-        self._tensor = QueueTensor(item, capacity)
-        self._buffer = [
+        self._camTensor = QueueTensor(item, capacity)
+        self._camBuffer = [
+            QueueBuffer(item, capacity) if retrieve else None for _ in range(2)
+        ]
+        item = WavelengthSampleItem
+        self._photonTensor = QueueTensor(item, capacity)
+        self._photonBuffer = [
             QueueBuffer(item, capacity) if retrieve else None for _ in range(2)
         ]
         # bind memory
-        self._program.bindParams(CameraQueueOut=self._tensor)
+        self._program.bindParams(
+            CameraQueueOut=self._camTensor,
+            PhotonQueueOut=self._photonTensor,
+        )
 
     @property
     def batchSize(self) -> int:
@@ -208,28 +240,62 @@ class CameraRaySampler(PipelineStage):
         return self._rng
 
     @property
-    def tensor(self) -> QueueTensor:
+    def cameraTensor(self) -> QueueTensor:
         """Tensor holding the queue storing the samples"""
-        return self._tensor
+        return self._camTensor
 
-    def buffer(self, i: int) -> Optional[QueueBuffer]:
-        """
-        Buffer holding the i-th queue. `None` if retrieve was set to False.
-        """
-        return self._buffer[i]
+    @property
+    def wavelengthSource(self) -> WavelengthSource:
+        """Source used to sample wavelengths"""
+        return self._wavelengthSource
 
-    def view(self, i: int) -> Optional[QueueView]:
-        """View into the i-th queue. `None` if retrieve was set to `False`."""
-        return self.buffer(i).view if self.retrieve else None
+    @property
+    def wavelengthTensor(self) -> QueueTensor:
+        """Tensor holding the sampled wavelengths"""
+        return self._photonTensor
+
+    def cameraBuffer(self, i: int) -> Optional[QueueBuffer]:
+        """
+        Buffer holding the i-th queue containing camera samples.
+        `None` if retrieve was set to False.
+        """
+        return self._camBuffer[i]
+
+    def cameraView(self, i: int) -> Optional[QueueView]:
+        """
+        View into the i-th queue containing camera samples.
+        `None` if retrieve was set to `False`.
+        """
+        return self.cameraBuffer(i).view if self.retrieve else None
+
+    def wavelengthBuffer(self, i: int) -> Optional[QueueBuffer]:
+        """
+        Buffer holding the i-th queue containing wavelength samples.
+        `None` if retrieve was set to False.
+        """
+        return self._photonBuffer[i]
+
+    def wavelengthView(self, i: int) -> Optional[QueueView]:
+        """
+        View into the i-th queue containing wavelength samples.
+        `None` if retrieve was set to False.
+        """
+        return self.wavelengthBuffer(i).view if self.retrieve else None
 
     def run(self, i: int) -> List[hp.Command]:
         self._bindParams(self._program, i)
         self.camera.bindParams(self._program, i)
+        self.wavelengthSource.bindParams(self._program, i)
         if self.rng is not None:
             self.rng.bindParams(self._program, i)
         cmds: List[hp.Command] = [self._program.dispatch(self._groups)]
         if self.retrieve:
-            cmds.append(hp.retrieveTensor(self.tensor, self.buffer(i)))
+            cmds.extend(
+                [
+                    hp.retrieveTensor(self.cameraTensor, self.cameraBuffer(i)),
+                    hp.retrieveTensor(self.wavelengthTensor, self.wavelengthBuffer(i)),
+                ]
+            )
         return cmds
 
 
@@ -247,6 +313,11 @@ class HostCameraRaySource(CameraRaySource):
         Optional update function called before the pipeline processes a task.
         `i` is the i-th configuration the update should affect.
         Can be used to stream in new samples on demand.
+
+    Note
+    ----
+    To comply with API requirements the shader code expects a wavelength,
+    which gets ignored.
     """
 
     name = "Host Camera Ray Source"
@@ -260,7 +331,7 @@ class HostCameraRaySource(CameraRaySource):
         polarized: bool = False,
         updateFn: Optional[Callable[[HostCameraRaySource, int], None]] = None,
     ) -> None:
-        super().__init__(nRNGSamples=0)
+        super().__init__(nRNGSamples=0, supportDirect=False)
         # save params
         self._capacity = capacity
         self._polarized = polarized
@@ -339,6 +410,11 @@ class PencilCameraRaySource(CameraRaySource):
         Ray direction at the hit position in the local frame of the detector
     hitNormal: (float, float, float), default=(0.0,0.0,1.0)
         Surface normal at the hit position in the local frame of the detector
+    hitPolarizationRef: (float, float, float)|None, default=None
+        Reference frame of polarization indicating vertical polarized light
+        defined in the object space of the hit/camera. Must be unit and
+        orthogonal to the ray direction. If None, creates an unspecified
+        orthogonal one.
 
     Stage Parameters
     ----------------
@@ -357,6 +433,11 @@ class PencilCameraRaySource(CameraRaySource):
         Ray direction at the hit position in the local frame of the detector
     hitNormal: (float, float, float), default=(0.0,0.0,1.0)
         Surface normal at the hit position in the local frame of the detector
+    hitPolarizationRef: (float, float, float)|None, default=None
+        Reference frame of polarization indicating vertical polarized light
+        defined in the object space of the hit/camera. Must be unit and
+        orthogonal to the hit direction. If None, creates an unspecified
+        orthogonal one.
     """
 
     name = "Pencil Camera Beam"
@@ -370,6 +451,7 @@ class PencilCameraRaySource(CameraRaySource):
             ("hitPosition", vec3),
             ("hitDirection", vec3),
             ("hitNormal", vec3),
+            ("hitPolarizationRef", vec3),
         ]
 
     def __init__(
@@ -382,9 +464,12 @@ class PencilCameraRaySource(CameraRaySource):
         hitPosition: Tuple[float, float, float] = (0.0, 0.0, 0.0),
         hitDirection: Tuple[float, float, float] = (0.0, 0.0, -1.0),
         hitNormal: Tuple[float, float, float] = (0.0, 0.0, 1.0),
+        hitPolarizationRef: Union[Tuple[float, float, float], None] = None,
     ) -> None:
         super().__init__(
-            nRNGSamples=0, params={"CameraRayParams": self.CameraRayParams}
+            nRNGSamples=0,
+            supportDirect=False,
+            params={"CameraRayParams": self.CameraRayParams},
         )
         # create polarization reference frame if not specified
         if polarizationRef is None:
@@ -397,6 +482,14 @@ class PencilCameraRaySource(CameraRaySource):
             l1 = np.sqrt(np.square(ref1).sum())
             l2 = np.sqrt(np.square(ref2).sum())
             polarizationRef = tuple(ref1 / l1 if l1 > l2 else ref2 / l2)
+        if hitPolarizationRef is None:
+            x, y, z = hitDirection
+            ref1 = np.array([0.0, -z, y])
+            ref2 = np.array([-z, 0.0, x])
+            # take the longe one and normalize
+            l1 = np.sqrt(np.square(ref1).sum())
+            l2 = np.sqrt(np.square(ref2).sum())
+            hitPolarizationRef = tuple(ref1 / l1 if l1 > l2 else ref2 / l2)
         self.setParams(
             rayPosition=rayPosition,
             rayDirection=rayDirection,
@@ -405,6 +498,7 @@ class PencilCameraRaySource(CameraRaySource):
             hitPosition=hitPosition,
             hitDirection=hitDirection,
             hitNormal=hitNormal,
+            hitPolarizationRef=hitPolarizationRef,
         )
 
     # source code via descriptor
@@ -425,26 +519,41 @@ class FlatCameraRaySource(CameraRaySource):
 
     Parameters
     ----------
-    width: float
-        Width of the detector
-    length: float
-        Length of the detector
-    transform: Transform, default=identity
-        Transformation applied to change from local to scene coordinates
+    width: float, default=1cm
+        Width of the detector. Corresponds in local space to the camera
+        surface's extension in x direction.
+    length: float, default=1cm
+        Length of the detector. Corresponds in local space to the camera
+        surface's extension in y direction.
+    position: (float, float, float), default=(0.0,0.0,0.0)
+        Position of the camera in world space.
+    direction: (float, float, float), default=(0.0,0.0,1.0)
+        Direction the camera faces. Corresponds in local space positive z
+        direction.
+    up: (float, float, float), default=(0.0,1.0,0.0)
+        Direction identifying where 'up' is for the camera. Corresponds in local
+        space to the positive y direction.
 
     Stage Parameters
     ----------------
     width: float, default=1cm
-        Width of the detector
+        Width of the detector. Corresponds in local space to the camera
+        surface's extension in x direction.
     length: float, default=1cm
-        Length of the detector
-    transform: Transform, default=identity
-        Transformation applied to change from local to scene coordinates
+        Length of the detector. Corresponds in local space to the camera
+        surface's extension in y direction.
+    position: (float, float, float), default=(0.0,0.0,0.0)
+        Position of the camera in world space.
+    direction: (float, float, float), default=(0.0,0.0,1.0)
+        Direction the camera faces. Corresponds in local space positive z
+        direction.
+    up: (float, float, float), default=(0.0,1.0,0.0)
+        Direction identifying where 'up' is for the camera. Corresponds in local
+        space to the positive y direction.
 
     Note
     ----
-    Non orthogonal transformation are not handled correctly and will raise an
-    exception.
+    `direction` and `up` may not be parallel.
     """
 
     name = "Flat Camera Ray Source"
@@ -453,9 +562,8 @@ class FlatCameraRaySource(CameraRaySource):
         _fields_ = [
             ("width", c_float),
             ("length", c_float),
-            ("_contrib", c_float),
-            ("_offset", vec3),
-            ("_mat", mat3),
+            ("position", vec3),
+            ("_view", mat3),
         ]
 
     def __init__(
@@ -463,47 +571,58 @@ class FlatCameraRaySource(CameraRaySource):
         *,
         width: float = 1.0 * u.cm,
         length: float = 1.0 * u.cm,
-        transform: Transform = Transform(),
+        position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        direction: Tuple[float, float, float] = (0.0, 0.0, 1.0),
+        up: Tuple[float, float, float] = (0.0, 1.0, 0.0),
     ) -> None:
         super().__init__(
             nRNGSamples=4,
+            nRNGDirect=2,
+            supportDirect=True,
             params={"CameraRayParams": self.CameraRayParams},
-            extra={"transform"},
+            extra={"direction", "up"},
         )
         # save params
-        self.transform = transform
-        self.setParams(width=width, length=length)
+        self.position = position
+        self.direction = direction
+        self.up = up
+        self.setParams(width=width, length=length, position=position)
 
     # source code via descriptor
     sourceCode = ShaderLoader("camera.flat.glsl")
 
     @property
-    def transform(self) -> Transform:
-        """
-        Transformation applied on the camera to change from local to scene
-        coordinates.
-        """
-        return self._transform
+    def direction(self) -> Tuple[float, float, float]:
+        """Direction the camera faces"""
+        return self._direction
 
-    @transform.setter
-    def transform(self, value: Transform) -> None:
-        self._transform = value
-        mat = value.numpy()
-        # we dont take scaling/shearing into account
-        # generate warning if transform is not orthogonal
-        det = np.linalg.det(mat[:, :3])
-        if np.abs(np.abs(det) - 1.0) > 1e-5:
-            raise ValueError("transform is not orthogonal!")
+    @direction.setter
+    def direction(self, value: Tuple[float, float, float]) -> None:
+        self._direction = value
 
-        self.setParam("_offset", mat[:, 3])
-        self.setParam("_mat", mat[:, :3].T)  # row major -> column major
+    @property
+    def up(self) -> Tuple[float, float, float]:
+        """Direction of the local y-Axis identifying where 'up' us for the camera"""
+        return self._up
+
+    @up.setter
+    def up(self, value: Tuple[float, float, float]) -> None:
+        self._up = value
 
     def _finishParams(self, i: int) -> None:
-        # p = 1 / (area * 2pi) -> contrib = area * 2pi
-        # TODO: Not totally certain on wether we need to change p(point) from
-        #       point space to directional space (i.e. a factor cos/r^2)
-        area = self.getParam("width") * self.getParam("length")
-        self.setParam("_contrib", 2.0 * np.pi * area)  # 1 / prob
+        super()._finishParams(i)
+
+        def normalize(name):
+            v = np.array(self.getParam(name))
+            return v / np.sqrt(np.square(v).sum(-1))
+
+        # assemble view matrix
+        z = normalize("direction")
+        x = np.cross(normalize("up"), z)
+        y = np.cross(z, x)
+        view = np.stack([x, y, z], -1)
+        # set matrices
+        self.setParam("_view", view)
 
 
 class ConeCameraRaySource(CameraRaySource):
@@ -547,6 +666,8 @@ class ConeCameraRaySource(CameraRaySource):
     ) -> None:
         super().__init__(
             nRNGSamples=2,
+            nRNGDirect=0,
+            supportDirect=True,
             params={"CameraRayParams": self.CameraRayParams},
         )
         self.setParams(
@@ -557,121 +678,6 @@ class ConeCameraRaySource(CameraRaySource):
 
     # source code via descriptor
     sourceCode = ShaderLoader("camera.cone.glsl")
-
-
-class LenseCameraRaySource(CameraRaySource):
-    """
-    Camera ray source similar to `FlatCameraRaySource` simulating a rectangular
-    detector, but is illuminated exclusively through a lense in front of it.
-    The lense itself is not simulated, but rays are restricted to hitting it.
-
-    Source is defined in local detector coordinates. The detector rectangle lies
-    on the xy plane centered in the origin with width being the dimension in x
-    direction and length the dimension in y direction. The lense is parallel to
-    the detector offset in z direction by a distance `focalLength` and modeled
-    as circle of given radius.
-
-    Parameters
-    ----------
-    width: float, default=1cm
-        Width of the detector
-    length: float, default=1cm
-        Length of the detector
-    focalLength: float, default=10cm
-        Distance between detector and lense
-    lenseRadius: float, default=5cm
-        Radius of the lense
-    transform: Transform, default=identity
-        Transformation applied to change from local to scene coordinates
-
-    Stage Parameters
-    ----------------
-    width: float, default=1cm
-        Width of the detector
-    length: float, default=1cm
-        Length of the detector
-    focalLength: float, default=10cm
-        Distance between detector and lense
-    lenseRadius: float, default=5cm
-        Radius of the lense
-    transform: Transform, default=identity
-        Transformation applied to change from local to scene coordinates
-
-    Note
-    ----
-    Non orthogonal transformation are not handled correctly and will generate
-    a warning.
-    """
-
-    name = "Lense Camera Ray Source"
-
-    class CameraRayParams(Structure):
-        _fields_ = [
-            ("width", c_float),
-            ("length", c_float),
-            ("focalLength", c_float),
-            ("lenseRadius", c_float),
-            ("_contrib", c_float),
-            ("_offset", vec3),
-            ("_mat", mat3),
-        ]
-
-    def __init__(
-        self,
-        *,
-        width: float = 1.0 * u.cm,
-        length: float = 1.0 * u.cm,
-        focalLength: float = 10.0 * u.cm,
-        lenseRadius: float = 5.0 * u.cm,
-        transform: Transform = Transform(),
-    ) -> None:
-        super().__init__(
-            nRNGSamples=4,
-            params={"CameraRayParams": self.CameraRayParams},
-            extra={"transform"},
-        )
-        # save params
-        self.transform = transform
-        self.setParams(
-            width=width,
-            length=length,
-            focalLength=focalLength,
-            lenseRadius=lenseRadius,
-        )
-
-    # source code via descriptor
-    sourceCode = ShaderLoader("camera.lense.glsl")
-
-    @property
-    def transform(self) -> Transform:
-        """
-        Transformation applied on the camera to change from local to scene
-        coordinates.
-        """
-        return self._transform
-
-    @transform.setter
-    def transform(self, value: Transform) -> None:
-        self._transform = value
-        mat = value.numpy()
-        # we dont take scaling/shearing into account
-        # generate warning if transform is not orthogonal
-        det = np.linalg.det(mat[:, :3])
-        if np.abs(np.abs(det) - 1.0) > 1e-5:
-            raise ValueError("transform is not orthogonal!")
-
-        self.setParam("_offset", mat[:, 3])
-        self.setParam("_mat", mat[:, :3].T)  # row major -> column major
-
-    def _finishParams(self, i: int) -> None:
-        # p(sample) = 1/(A_det * A_lense)
-        # p(dir) = p(sample) * cos(theta)/d^2 = p(sample) * focal/d^3
-        # where theta = angle to lense normal; d distance point det <-> point lense
-        # contrib = 1/p
-        area_det = self.getParam("width") * self.getParam("length")
-        area_lense = np.pi * self.getParam("lenseRadius") ** 2
-        contrib = area_det * area_lense / self.getParam("focalLength")
-        self.setParam("_contrib", contrib)
 
 
 class SphereCameraRaySource(CameraRaySource):
@@ -696,6 +702,11 @@ class SphereCameraRaySource(CameraRaySource):
         Radius of the detector sphere
     timeDelta: float, default=0.0
         Time offset applied to camera rays and this light paths.
+
+    Note
+    ----
+    The sign of the radius determines wether the camera rays point outward
+    (positive) or inward (negative).
     """
 
     name = "Spherical Camera Ray Source"
@@ -705,7 +716,8 @@ class SphereCameraRaySource(CameraRaySource):
             ("position", vec3),
             ("radius", c_float),
             ("timeDelta", c_float),
-            ("_contrib", c_float),
+            ("_contribFwd", c_float),
+            ("_contribBwd", c_float),
         ]
 
     def __init__(
@@ -717,6 +729,8 @@ class SphereCameraRaySource(CameraRaySource):
     ) -> None:
         super().__init__(
             nRNGSamples=4,
+            nRNGDirect=2,
+            supportDirect=True,
             params={"CameraRayParams": self.CameraRayParams},
         )
         self.setParams(position=position, radius=radius, timeDelta=timeDelta)
@@ -726,8 +740,10 @@ class SphereCameraRaySource(CameraRaySource):
 
     def _finishParams(self, i: int) -> None:
         r = self.getParam("radius")
-        contrib = 4 * np.pi * r**2 * 2 * np.pi
-        self.setParam("_contrib", contrib)
+        contribFwd = 4 * np.pi * r**2 * 2 * np.pi
+        contribBwd = 4 * np.pi * r**2
+        self.setParam("_contribFwd", contribFwd)
+        self.setParam("_contribBwd", contribBwd)
 
 
 class PointCameraRaySource(CameraRaySource):
@@ -765,7 +781,9 @@ class PointCameraRaySource(CameraRaySource):
         timeDelta: float = 0.0,
     ) -> None:
         super().__init__(
-            nRNGSamples=2, params={"CameraRayParams": self.CameraRayParams}
+            nRNGSamples=2,
+            supportDirect=False,
+            params={"CameraRayParams": self.CameraRayParams},
         )
         self.setParams(position=position, timeDelta=timeDelta)
 

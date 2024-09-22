@@ -8,7 +8,7 @@ layout(scalar) uniform CameraRayParams {
     float timeDelta;
 } cameraRayParams;
 
-CameraRay sampleCameraRay(uint idx, uint dim) {
+CameraRay sampleCameraRay(float wavelength, uint idx, uint dim) {
     //sample direction
     vec2 u = random2D(idx, dim); dim += 2;
     float phi = TWO_PI * u.x;
@@ -19,24 +19,20 @@ CameraRay sampleCameraRay(uint idx, uint dim) {
         sin_theta * cos(phi),
         cos_theta
     );
-
-    //create polRef normal to ray direction
-    #ifdef POLARIZATION
-    vec3 polRef = createLocalCOSY(dir)[0];
-    #endif
+    vec3 polRef = perpendicularTo(dir);
 
     //assemble camera ray
-    return CameraRay(
+    return createCameraRay(
         cameraRayParams.position,   //ray position
         dir,                        //ray direction
+        polRef,                     //ray polRef
+        mat4(1.0),                  //ray mueller matrix
         FOUR_PI,                    //contrib
-        cameraRayParams.timeDelta,  //ray ellapsed time
-        #ifdef POLARIZATION
-        polRef,                     //polRef (ignored if unpolarized)
-        #endif
-        vec3(0.0),                  //hit position
+        cameraRayParams.timeDelta,  //time delta
+        vec3(0.0, 0.0, 0.0),        //hit position
         -dir,                       //hit direction
-        dir                         //hit normal
+        dir,                        //hit normal
+        polRef                      //hit polRef
     );
 }
 
