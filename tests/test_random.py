@@ -1,8 +1,7 @@
 import numpy as np
+import hephaistos.pipeline as pl
 import theia.random
 import theia.util
-
-from hephaistos.pipeline import RetrieveTensorStage, runPipeline
 
 
 shader = """\
@@ -26,8 +25,8 @@ class DebugRNG(theia.random.RNG):
 def test_rngSink():
     gen = DebugRNG()
     sink = theia.random.RNGBufferSink(gen, 250, 800, baseStream=12, baseCount=316)
-    ret = RetrieveTensorStage(sink.tensor)
-    runPipeline([gen, sink, ret])
+    ret = pl.RetrieveTensorStage(sink.tensor)
+    pl.runPipeline([gen, sink, ret])
 
     samples = ret.view(0)
     streams = (np.arange(250) + 12) * 10000.0
@@ -40,9 +39,9 @@ def test_rngSink():
 def test_philox():
     philox = theia.random.PhiloxRNG(key=0xC0FFEE)
     generator = theia.random.RNGBufferSink(philox, 4096, 8192)
-    retrieve = RetrieveTensorStage(generator.tensor)
+    retrieve = pl.RetrieveTensorStage(generator.tensor)
 
-    runPipeline([philox, generator, retrieve])
+    pl.runPipeline([philox, generator, retrieve])
 
     # checking randomness is a bit much for a unit test
     # let's check for uniform instead
@@ -72,9 +71,9 @@ def test_sobol():
     sobol = theia.random.SobolQRNG(seed=0xC0FFEE)
     # sobol is limited to 1024 samples
     generator = theia.random.RNGBufferSink(sobol, 32_768, 1024)
-    retrieve = RetrieveTensorStage(generator.tensor)
+    retrieve = pl.RetrieveTensorStage(generator.tensor)
 
-    runPipeline([sobol, generator, retrieve])
+    pl.runPipeline([sobol, generator, retrieve])
 
     # checking randomness is a bit much for a unit test
     # let's check for uniform instead

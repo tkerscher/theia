@@ -3,6 +3,8 @@
 
 #extension GL_KHR_shader_subgroup_vote : require
 
+#include "random.util.glsl"
+
 //Based on the implementation presented in pbrt v4:
 //M. Pharr, W. Jakob, G. Humphreys: Physical Based Rendering, 4th Edition. 2023
 
@@ -58,11 +60,8 @@ float random(uint a, uint dim) {
     uint h = hash(dim, sobolParams.seed);
     v = fastOwenScramble(v, h);
 #endif
-    //exclude 1.0
-    v = min(v, 0xFFFFFFFEu);
-    return v * uintBitsToFloat(0x2F800000); //2^-32
-    //interpret lower 23 bit as new mantissa (excluding 2.0) with zero exponent
-    //return uintBitsToFloat(min(v & 0x7FFFFF, 0x7FFFFE) | 0x3F800000) - 1.0;
+
+    return normalizeUint(v);
 }
 
 vec2 random2D(uint a, uint dim) {

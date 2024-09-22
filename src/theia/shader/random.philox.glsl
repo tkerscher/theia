@@ -3,6 +3,8 @@
 
 #extension GL_KHR_shader_subgroup_vote : require
 
+#include "random.util.glsl"
+
 #define PHILOX_ITERATION 10
 
 layout(scalar) uniform PhiloxParams {
@@ -47,8 +49,8 @@ void philox(uint stream, uint i) {
             key.y += 0xBB67AE85u;
         }
     }
-    //interpret lower 23 bit as new mantissa (excluding 2.0) with zero exponent
-    philoxBuffer = uintBitsToFloat(min(state & 0x7FFFFF, 0x7FFFFE) | 0x3F800000) - 1.0;
+    
+    philoxBuffer = normalizeUint(state);
 }
 
 
