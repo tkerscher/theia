@@ -434,12 +434,16 @@ class Scene:
         targets: Iterable[SphereBBox] = [],
     ) -> None:
         instances = list(instances)
+        if len(instances) == 0:
+            raise ValueError("No instances given. Scene cannot be empty!")
         # collect geometries
         geometries = hp.ArrayBuffer(Scene.GLSLGeometry, len(instances))
         for i, inst in enumerate(instances):
             geometries[i].vertices = inst.vertices
             geometries[i].indices = inst.indices
             if inst.material is not None:
+                if inst.material not in materials:
+                    raise ValueError(f'Unknown material "{inst.material}"')
                 geometries[i].material = materials.get(inst.material)
             else:
                 geometries[i].material = 0
