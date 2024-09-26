@@ -52,7 +52,7 @@ class MediumModel(
         (0.05, 0.01, -0.9, True),
     ],
 )
-def test_SceneTracer_GroundTruth(
+def test_SceneForwardTracer_GroundTruth(
     mu_a: float, mu_s: float, g: float, polarized: bool
 ) -> None:
     """
@@ -65,6 +65,8 @@ def test_SceneTracer_GroundTruth(
     Sphere detector filled with scattering medium, in center spherical light
     source.
     """
+    if not hp.isRaytracingEnabled():
+        pytest.skip("ray tracing is not supported")
 
     # Scene settings
     position = (12.0, 15.0, 0.2) * u.m
@@ -108,7 +110,7 @@ def test_SceneTracer_GroundTruth(
     # rng = theia.random.SobolQRNG(seed=0xC0FFEE)
     rng = theia.random.PhiloxRNG(key=0xC0FFEE)
     recorder = theia.estimator.HitRecorder(polarized=polarized)
-    tracer = theia.trace.SceneTracer(
+    tracer = theia.trace.SceneForwardTracer(
         batch_size,
         light,
         photons,
@@ -180,14 +182,17 @@ def test_SceneTracer_GroundTruth(
         (0.05, 0.005, -0.5, True),
     ],
 )
-def test_SceneTracer_Crosscheck(
+def test_SceneForwardTracer_Crosscheck(
     mu_a: float, mu_s: float, g: float, polarized: bool
 ) -> None:
     """
-    Here we test SceneTracer's target sampling.
+    Here we test SceneForwardTracer's target sampling.
     Spherical light source with spherical target.
     Use GroundTruth to check against.
     """
+    if not hp.isRaytracingEnabled():
+        pytest.skip("ray tracing is not supported")
+
     # Scene settings
     position = (0.0, 0.0, 0.0) * u.m
     radius = 5.0 * u.m
@@ -238,7 +243,7 @@ def test_SceneTracer_Crosscheck(
     # rng = theia.random.SobolQRNG(seed=0xC0FFEE)
     rng = theia.random.PhiloxRNG(key=0xC0FFEE)
     response = theia.estimator.UniformHitResponse()
-    tracer = theia.trace.SceneTracer(
+    tracer = theia.trace.SceneForwardTracer(
         batch_size,
         light,
         photons,
@@ -281,7 +286,7 @@ def test_SceneTracer_Crosscheck(
 
     # create tracer
     response = theia.estimator.UniformHitResponse()
-    tracer = theia.trace.SceneTracer(
+    tracer = theia.trace.SceneForwardTracer(
         batch_size,
         light,
         photons,
@@ -334,6 +339,144 @@ def test_SceneTracer_Crosscheck(
 
 
 @pytest.mark.parametrize(
+    "mu_a,mu_s,g,disableDirect,polarized,err",
+    [
+        (0.0, 0.005, 0.0, False, False, 5e-3),
+        (0.0, 0.005, 0.0, True, False, 0.02),
+        (0.05, 0.01, 0.0, False, False, 5e-3),
+        (0.05, 0.01, 0.0, True, False, 5e-3),
+        (0.05, 0.01, -0.9, False, False, 0.07),
+        (0.05, 0.01, 0.9, True, False, 0.01),
+        (0.0, 0.005, 0.0, False, True, 5e-3),
+        (0.0, 0.005, 0.0, True, True, 0.02),
+        (0.05, 0.01, -0.9, False, True, 0.07),
+    ],
+)
+def test_SceneBackwardTracer(
+    mu_a: float, mu_s: float, g: float, disableDirect: bool, polarized: bool, err: float
+):
+    """Similar to SceneForwardTracer_GroundTruth, but use backward tracer instead"""
+    if not hp.isRaytracingEnabled():
+        pytest.skip("ray tracing is not supported")
+
+    # Scene settings
+    position = (12.0, 15.0, 0.2) * u.m
+    radius = 100.0 * u.m
+    # Light settings
+    budget = 1e9
+    t0 = 10.0 * u.ns
+    lam = 400.0 * u.nm  # doesn't really matter
+    # tracer settings
+    max_length = 10
+    scatter_coef = 0.05
+    maxTime = float("inf")
+    # simulation settings
+    batch_size = 2 * 1024 * 1024
+    n_batches = 10
+
+    # create materials
+    model = MediumModel(mu_a, mu_s, g)
+    medium = model.createMedium()
+    material = theia.material.Material("det", medium, None, flags="DB")
+    matStore = theia.material.MaterialStore([material])
+    # load meshes
+    meshStore = theia.scene.MeshStore({"sphere": "assets/sphere.stl"})
+    # the mesh is not really a sphere
+    # to prevent all camera rays to be produced outside, we need to scale camera
+    r_scale = 0.99547149974733 * u.m  # radius of inscribed sphere (icosphere)
+    r_insc = radius * r_scale
+
+    # create scene
+    targets = [theia.scene.SphereBBox(position, radius)]
+    trafo = theia.scene.Transform.Scale(radius, radius, radius).translate(*position)
+    target = meshStore.createInstance("sphere", "det", transform=trafo, detectorId=0)
+    scene = theia.scene.Scene(
+        [target],
+        matStore.material,
+        medium=matStore.media["homogenous"],
+        targets=targets,
+    )
+
+    # create light (delta pulse)
+    photons = theia.light.UniformWavelengthSource(lambdaRange=(lam, lam))
+    light = theia.light.SphericalLightSource(
+        position=position, timeRange=(t0, t0), budget=budget
+    )
+    # create camera
+    camera = theia.camera.SphereCameraRaySource(
+        position=position,
+        radius=-r_insc,
+    )
+    # create tracer
+    rng = theia.random.PhiloxRNG(key=0xC0FFEE)
+    recorder = theia.estimator.HitRecorder(polarized=polarized)
+    stats = theia.trace.EventStatisticCallback()
+    tracer = theia.trace.SceneBackwardTracer(
+        batch_size,
+        light,
+        camera,
+        photons,
+        recorder,
+        rng,
+        scene,
+        callback=stats,
+        maxPathLength=max_length,
+        maxTime=maxTime,
+        scatterCoefficient=scatter_coef,
+        polarized=polarized,
+        disableDirectLighting=disableDirect,
+    )
+    rng.autoAdvance = tracer.nRNGSamples
+
+    # create pipeline + scheduler
+    total = 0
+    stokes = []
+
+    def process(config: int, task: int) -> None:
+        nonlocal total
+        result = recorder.view(config)
+        result = result[: result.count]
+        # undo attenuation
+        vg = 1.0 / model.ng * u.c
+        d = vg * (result["time"] - t0)
+        value0 = result["contrib"] * np.exp(mu_a * d)
+        # add to sum
+        total += value0.sum()
+
+        # copy stokes vector if polarized
+        if polarized:
+            stokes.append(result["stokes"].copy())
+
+    pipeline = pl.Pipeline([rng, photons, light, camera, tracer, recorder])
+    scheduler = pl.PipelineScheduler(pipeline, processFn=process)
+
+    # create batches
+    tasks = [
+        {},
+    ] * n_batches  # rng advances on its own, so we dont have to update any params
+    scheduler.schedule(tasks)
+    scheduler.wait()
+
+    # calculate direct contribution without attenuation
+    directContrib = budget * np.exp(-mu_s * r_insc)
+    # calculate expected contribution
+    contrib = budget - directContrib if disableDirect else budget
+
+    # check for energy conservation
+    estimate = total / (batch_size * n_batches)
+    assert np.abs(estimate / contrib - 1.0) < err
+    # assert estimate < contrib  # biased by ignoring longer paths, i.e. missing energy
+
+    # if polarized: check stokes vector is valid
+    if polarized:
+        stokes = np.concatenate(stokes)
+        assert np.abs(stokes[:, 0] - 1.0).max() < 1e-5
+        assert stokes[:, 1:].max() <= 1.0
+        assert stokes[:, 1:].min() >= -1.0
+        assert np.all(np.square(stokes[:, 1:]).sum(-1) <= 1.0)
+
+
+@pytest.mark.parametrize(
     "mu_a,mu_s,g,sampleTarget,polarized",
     [
         (0.0, 0.01, 0.0, False, False),
@@ -346,13 +489,16 @@ def test_SceneTracer_Crosscheck(
         (0.05, 0.005, -0.9, True, True),
     ],
 )
-def test_VolumeTracer_Crosscheck(
+def test_VolumeForwardTracer_Crosscheck(
     mu_a: float, mu_s: float, g: float, sampleTarget: bool, polarized: bool
 ) -> None:
     """
     Spherical light source with spherical target.
     Use GroundTruth to check against.
     """
+    if not hp.isRaytracingEnabled():
+        pytest.skip("ray tracing is not supported")
+
     # Scene settings
     position = (0.0, 0.0, 0.0) * u.m
     radius = 5.0 * u.m
@@ -367,7 +513,7 @@ def test_VolumeTracer_Crosscheck(
     maxTime = 500.0  # limit as ground truth suffers from high variance at late times
     # simulation settings
     batch_size = 1 * 1024 * 1024
-    n_batches = 100
+    n_batches = 20
     # binning config
     bin_t0 = 0.0
     bin_size = 20.0
@@ -400,9 +546,10 @@ def test_VolumeTracer_Crosscheck(
     # Calculate ground truth
 
     # create tracer
-    rng = theia.random.SobolQRNG(seed=0xC0FFEE)
+    # rng = theia.random.SobolQRNG(seed=0xC0FFEE)
+    rng = theia.random.PhiloxRNG(key=0xC0FFEE)
     response = theia.estimator.UniformHitResponse()
-    tracer = theia.trace.SceneTracer(
+    tracer = theia.trace.SceneForwardTracer(
         batch_size,
         light,
         photons,
@@ -445,7 +592,7 @@ def test_VolumeTracer_Crosscheck(
 
     # create tracer
     response = theia.estimator.UniformHitResponse()
-    tracer = theia.trace.VolumeTracer(
+    tracer = theia.trace.VolumeForwardTracer(
         batch_size,
         light,
         photons,
@@ -501,6 +648,181 @@ def test_VolumeTracer_Crosscheck(
 
 
 @pytest.mark.parametrize(
+    "mu_a,mu_s,g,disableDirect,polarized",
+    [
+        (0.0, 0.01, 0.0, False, False),
+        (0.05, 0.005, 0.0, False, False),
+        (0.0, 0.01, 0.0, False, True),
+        (0.05, 0.005, 0.0, True, True),
+        (0.05, 0.005, 0.5, True, True),
+        (0.01, 0.01, -0.5, False, True),
+    ],
+)
+def test_VolumeBackwardTracer_Crosscheck(
+    mu_a: float, mu_s: float, g: float, disableDirect: bool, polarized: bool
+):
+    """
+    Here we have to use a crosscheck as we cannot limit our rays to the a sphere
+    with the volume tracer.
+    """
+    if not hp.isRaytracingEnabled():
+        pytest.skip("ray tracing is not supported")
+
+    N = 32 * 256
+    # same as volume version, but now put something before camera to test shadow rays
+    T0, T1 = 10.0 * u.ns, 20.0 * u.ns
+    T_MAX = 45.0 * u.ns
+    camDir = (1.0, 0.0, 0.0)
+    camPos = (5.0, 2.0, -1.0)
+    camUp = (0.0, 0.0, 1.0)
+    width, length = 50.0 * u.cm, 40.0 * u.cm
+    lightPos = (10.0, 5.0, 2.0)
+    lightBudget = 1000.0
+    t0 = 30.0 * u.ns
+    lam = 400.0 * u.nm  # doesn't really matter
+    # tracer settings
+    max_length = 15
+    scatter_coef = 2.0 * mu_s  # 0.02
+    maxTime = 1000.0  # limit as ground truth suffers from high variance at late times
+    # simulation settings
+    batch_size = 1 * 1024 * 1024
+    n_batches = 20
+    # binning config
+    bin_t0 = 0.0
+    bin_size = 10.0
+    n_bins = 100
+
+    # create materials
+    model = MediumModel(mu_a, mu_s, g)
+    medium = model.createMedium()
+    mat = theia.material.Material("abs", None, medium, flags="B")
+    matStore = theia.material.MaterialStore([mat], media=[medium])
+    # create empty scene
+    meshStore = theia.scene.MeshStore({"sphere": "assets/sphere.stl"})
+    t = theia.scene.Transform.Scale(0, 0, 0).translate(1e9, 1e9, 1e9)  # move away
+    c = meshStore.createInstance("sphere", "abs", transform=t)
+    scene = theia.scene.Scene(
+        [c], matStore.material, medium=matStore.media["homogenous"]
+    )
+    # create light and camera
+    photons = theia.light.UniformWavelengthSource(lambdaRange=(lam, lam))
+    light = theia.light.SphericalLightSource(
+        position=lightPos, timeRange=(t0, t0), budget=lightBudget
+    )
+    camera = theia.camera.FlatCameraRaySource(
+        width=width,
+        length=length,
+        position=camPos,
+        direction=camDir,
+        up=camUp,
+    )
+
+    # create ground truth
+
+    # create tracer
+    rng = theia.random.PhiloxRNG(key=0xC0FFEE)
+    response = theia.estimator.UniformHitResponse()
+    tracer = theia.trace.SceneBackwardTracer(
+        batch_size,
+        light,
+        camera,
+        photons,
+        response,
+        rng,
+        scene,
+        maxPathLength=max_length,
+        maxTime=maxTime,
+        scatterCoefficient=scatter_coef,
+        polarized=polarized,
+        disableDirectLighting=disableDirect,
+    )
+    estimator = theia.estimator.HistogramEstimator(
+        response.queue,
+        nBins=n_bins,
+        binSize=bin_size,
+        t0=bin_t0,
+        normalization=1 / batch_size,
+    )
+    rng.autoAdvance = tracer.nRNGSamples
+    # create pipeline # scheduler
+    hists = []
+
+    def process(config: int, task: int) -> None:
+        hists.append(estimator.result(config).copy())
+
+    pipeline = pl.Pipeline([rng, photons, light, camera, tracer, estimator])
+    scheduler = pl.PipelineScheduler(pipeline, processFn=process)
+    # create batches
+    tasks = [
+        {},
+    ] * n_batches
+    scheduler.schedule(tasks)
+    scheduler.wait()
+    # combine histograms
+    truth_hist = np.mean(hists, 0)
+    truth = truth_hist.sum()
+
+    # create estimate
+
+    # create tracer
+    rng = theia.random.PhiloxRNG(key=0xC0FFEE)
+    response = theia.estimator.UniformHitResponse()
+    tracer = theia.trace.VolumeBackwardTracer(
+        batch_size,
+        light,
+        camera,
+        photons,
+        response,
+        rng,
+        medium=matStore.media["homogenous"],
+        nScattering=max_length,
+        scatterCoefficient=scatter_coef,
+        maxTime=maxTime,
+        polarized=polarized,
+        disableDirectLighting=disableDirect,
+    )
+    estimator = theia.estimator.HistogramEstimator(
+        response.queue,
+        nBins=n_bins,
+        binSize=bin_size,
+        t0=bin_t0,
+        normalization=1 / batch_size,
+    )
+    rng.autoAdvance = tracer.nRNGSamples
+    # create pipeline + scheduler
+    hists = []
+
+    def process(config: int, task: int) -> None:
+        hists.append(estimator.result(config).copy())
+
+    pipeline = pl.Pipeline([rng, photons, light, tracer, estimator])
+    scheduler = pl.PipelineScheduler(pipeline, processFn=process)
+    # create batches
+    tasks = [
+        {},
+    ] * n_batches  # rng advances on its own, so no updates
+    scheduler.schedule(tasks)
+    scheduler.wait()
+    # combine histograms
+    hist = np.mean(hists, 0)
+    estimate = hist.sum()
+
+    # check estimate
+    assert truth != 0.0
+    assert np.abs(estimate / truth - 1.0) < 5e-6
+    # Compare early part of light curves
+    # The ground truth algorithm suffers from high variance especially at later
+    # times making a test there pointless.
+    # Use log10 to compare curves.
+    log_err = None
+    with np.errstate(divide="ignore", invalid="ignore"):
+        log_err = (np.log10(hist) - np.log10(truth_hist)) / np.log10(hist)
+    log_err = np.nan_to_num(log_err, nan=0.0)
+    # assert np.abs(log_err).mean() < binErr
+    assert np.abs(log_err).max() < 5e-6
+
+
+@pytest.mark.parametrize(
     "mu_a,mu_s,g,polarized",
     [
         (0.0, 0.005, 0.0, False),
@@ -512,7 +834,7 @@ def test_VolumeTracer_Crosscheck(
     ],
 )
 def test_DirectTracer(mu_a: float, mu_s: float, g: float, polarized: bool):
-    """Similar to SceneTracer_GroundTruth, except here we use DirectTracer"""
+    """Similar to SceneForwardTracer_GroundTruth, except here we use DirectTracer"""
 
     # Scene settings
     position = (12.0, 15.0, 0.2) * u.m

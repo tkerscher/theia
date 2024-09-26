@@ -39,6 +39,10 @@ ResultCode combineRaysAligned(
     contrib *= stokes.x;
     stokes /= stokes.x;
 
+    //check if time is within bounds
+    if (time > params.maxTime)
+        return RESULT_CODE_RAY_DECAYED;
+
     //create HitItem
     result = HitItem(
         hit.position,
@@ -76,6 +80,10 @@ ResultCode combineRaysAligned(
     contrib *= stokes.x;
     stokes /= stokes.x;
 
+    //check if time is within bounds
+    if (time > params.maxTime)
+        return RESULT_CODE_RAY_DECAYED;
+
     //create HitItem
     result = HitItem(
         camera.hit.position,
@@ -110,6 +118,10 @@ ResultCode combineRaysAligned(
     float contrib = source.contrib * getContrib(ray);
     float time = source.startTime + ray.state.time;
 
+    //check if time is within bounds
+    if (time > params.maxTime)
+        return RESULT_CODE_RAY_DECAYED;
+
     //create HitItem
     result = HitItem(
         hit.position,
@@ -137,6 +149,10 @@ ResultCode combineRaysAligned(
     //combine rays
     float contrib = camera.contrib * getContrib(ray);
     float time = ray.state.time + camera.timeDelta;
+
+    //check if time is within bounds
+    if (time > params.maxTime)
+        return RESULT_CODE_RAY_DECAYED;
 
     //create HitItem
     result = HitItem(

@@ -20,7 +20,7 @@ from common.models import WaterModel
 @pytest.mark.parametrize("disableTarget", [True, False])
 @pytest.mark.parametrize("limitTime", [True, False])
 @pytest.mark.parametrize("polarized", [True, False])
-def test_VolumeTracer(
+def test_VolumeForwardTracer(
     disableDirect: bool, disableTarget: bool, limitTime: bool, polarized: bool
 ):
     N = 32 * 256
@@ -50,7 +50,7 @@ def test_VolumeTracer(
     )
     recorder = theia.estimator.HitRecorder(polarized=polarized)
     stats = theia.trace.EventStatisticCallback()
-    tracer = theia.trace.VolumeTracer(
+    tracer = theia.trace.VolumeForwardTracer(
         N,
         source,
         photons,
@@ -124,11 +124,117 @@ def test_VolumeTracer(
 
 
 @pytest.mark.parametrize("disableDirect", [True, False])
+@pytest.mark.parametrize("disableTarget", [True, False])
+@pytest.mark.parametrize("limitTime", [True, False])
+@pytest.mark.parametrize("polarized", [True, False])
+def test_VolumeBackwardTracer(
+    disableDirect: bool, disableTarget: bool, limitTime: bool, polarized: bool
+):
+    N = 32 * 256
+    N_SCATTER = 6
+    T0, T1 = 10.0 * u.ns, 20.0 * u.ns
+    T_MAX = 1.0 * u.us
+    light_pos = (-1.0, -7.0, 0.0) * u.m
+    light_budget = 1000.0
+    target_pos, target_radius = (5.0, 2.0, -8.0) * u.m, 4.0 * u.m
+    target = theia.scene.SphereBBox(target_pos, target_radius)
+    if disableTarget:
+        target = None
+
+    # create water medium
+    water = WaterModel().createMedium()
+    store = theia.material.MaterialStore([], media=[water])
+
+    # estimate max speed
+    d_min = (
+        np.sqrt(np.square(np.subtract(light_pos, target_pos)).sum(-1)) - target_radius
+    )
+    v_max = np.max(water.group_velocity)
+    t_min = d_min / v_max + T0
+
+    # create pipeline
+    rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
+    photons = theia.light.UniformWavelengthSource()
+    light = theia.light.SphericalLightSource(
+        position=light_pos,
+        budget=light_budget,
+        timeRange=(T0, T1),
+    )
+    camera = theia.camera.SphereCameraRaySource(
+        position=target_pos, radius=target_radius
+    )
+    recorder = theia.estimator.HitRecorder(polarized=polarized)
+    stats = theia.trace.EventStatisticCallback()
+    tracer = theia.trace.VolumeBackwardTracer(
+        N,
+        light,
+        camera,
+        photons,
+        recorder,
+        rng,
+        callback=stats,
+        medium=store.media["water"],
+        nScattering=N_SCATTER,
+        maxTime=T_MAX if limitTime else 10.0 * u.ms,
+        target=target,
+        polarized=polarized,
+        disableDirectLighting=disableDirect,
+    )
+    # run pipeline
+    pl.runPipeline([rng, photons, camera, light, tracer, recorder])
+
+    # check hits
+    hits = recorder.view(0)
+    assert hits.count > 0
+    assert hits.count <= tracer.maxHits
+    hits = hits[: hits.count]
+
+    assert np.allclose(np.square(hits["position"]).sum(-1), 1.0)
+    assert np.allclose(np.square(hits["normal"]).sum(-1), 1.0)
+    assert np.min(hits["time"]) >= t_min
+    if limitTime:
+        assert np.max(hits["time"]) <= T_MAX
+    else:
+        assert np.max(hits["time"]) > T_MAX
+
+    # sanity check polarization
+    if polarized:
+        # check stokes is normalized
+        assert np.abs(hits["stokes"][:, 0] - 1.0).max() < 1e-6
+        assert np.square(hits["stokes"][:, 1:]).sum(-1).max() <= 1.0
+        assert hits["stokes"][:, 1:].max() <= 1.0
+        assert hits["stokes"][:, 1:].min() >= -1.0
+        # check polarization ref is perpendicular to plane of incidence and normalized
+        polRef = hits["polarizationRef"]
+        assert np.abs(np.square(polRef).sum(-1) - 1.0).max() < 1e-6
+        polRef_exp = np.cross(hits["direction"], hits["normal"])
+        d = np.square(polRef_exp).sum(-1)
+        mask = d > 1e-7
+        polRef_exp /= np.sqrt(d)[:, None]
+        # for very small angle we reuse the old polRef to minimize error
+        assert np.abs(np.abs((polRef_exp * polRef).sum(-1))[mask] - 1.0).max() < 1e-6
+
+    # check config via stats
+    assert stats.scattered > 0
+    if disableTarget:
+        assert stats.absorbed == 0
+    else:
+        assert stats.absorbed > 0
+    if disableDirect:
+        assert stats.created == tracer.batchSize
+        # there will only be hits from shadow rays
+        assert stats.detected == 0
+    else:
+        assert stats.created == 2 * tracer.batchSize
+        assert stats.detected > 0
+
+
+@pytest.mark.parametrize("disableDirect", [True, False])
 @pytest.mark.parametrize("disableVolumeBorder", [True, False])
 @pytest.mark.parametrize("disableTransmission", [True, False])
 @pytest.mark.parametrize("disableTarget", [True, False])
 @pytest.mark.parametrize("polarized", [True, False])
-def test_SceneTracer(
+def test_SceneForwardTracer(
     polarized: bool,
     disableDirect: bool,
     disableVolumeBorder: bool,
@@ -183,9 +289,8 @@ def test_SceneTracer(
         position=light_pos, timeRange=(T0, T1), budget=light_budget
     )
     recorder = theia.estimator.HitRecorder(polarized=polarized)
-    # stats = theia.trace.EventStatisticCallback()
-    track = theia.trace.TrackRecordCallback(N, MAX_PATH + 1, polarized=polarized)
-    tracer = theia.trace.SceneTracer(
+    stats = theia.trace.EventStatisticCallback()
+    tracer = theia.trace.SceneForwardTracer(
         N,
         source,
         photons,
@@ -196,17 +301,14 @@ def test_SceneTracer(
         targetIdx=1,
         maxTime=T_MAX,
         polarized=polarized,
-        # callback=stats,
-        callback=track,
+        callback=stats,
         disableDirectLighting=disableDirect,
         disableTargetSampling=disableTarget,
         disableTransmission=disableTransmission,
         disableVolumeBorder=disableVolumeBorder,
     )
     # run pipeline
-    # pl.runPipeline([rng, photons, source, tracer, recorder])
-    pl.runPipeline([rng, photons, source, tracer, recorder, track])
-    tracks, lengths, codes = track.result(0)
+    pl.runPipeline([rng, photons, source, tracer, recorder])
 
     # check hits
     hits = recorder.view(0)
@@ -239,6 +341,139 @@ def test_SceneTracer(
         assert np.abs(np.abs((polRef_exp * polRef).sum(-1))[mask] - 1.0).max() < 1e-6
 
     # TODO: more sophisticated tests
+
+
+@pytest.mark.parametrize("disableDirect", [True, False])
+@pytest.mark.parametrize("disableVolumeBorder", [True, False])
+@pytest.mark.parametrize("disableTransmission", [True, False])
+@pytest.mark.parametrize("polarized", [True, False])
+def test_SceneBackwardTracer(
+    polarized: bool,
+    disableDirect: bool,
+    disableVolumeBorder: bool,
+    disableTransmission: bool,
+):
+    if not hp.isRaytracingEnabled():
+        pytest.skip("ray tracing is not supported")
+
+    N = 32 * 256
+    N_SCATTER = 6
+    T0, T1 = 10.0 * u.ns, 20.0 * u.ns
+    T_MAX = 100000.0 * u.us
+    light_pos = (-1.0, -7.0, 0.0) * u.m
+    light_budget = 1000.0
+
+    # create materials
+    water = WaterModel().createMedium()
+    glass = theia.material.BK7Model().createMedium()
+    mat = theia.material.Material("mat", glass, water, flags=("DR", "B"))
+    matAbs = theia.material.Material("abs", None, water, flags="B")
+    matVol = theia.material.Material("vol", water, water, flags="V")
+    matStore = theia.material.MaterialStore([mat, matAbs, matVol])
+    # create scene
+    store = theia.scene.MeshStore(
+        {"cube": "assets/cube.ply", "sphere": "assets/sphere.stl"}
+    )
+    r, d = 40.0 * u.m, 5.0 * u.m
+    r_scale = 0.99547149974733 * u.m  # radius of inscribed sphere (icosphere)
+    r_insc = r * r_scale
+    x, y, z = 10.0, 5.0, -5.0
+    t1 = theia.scene.Transform.Scale(r, r, r).translate(x, y, z + r + d)
+    c1 = store.createInstance("sphere", "mat", transform=t1, detectorId=0)
+    t2 = theia.scene.Transform.Scale(r, r, r).translate(x, y, z - r - d)
+    c2 = store.createInstance("sphere", "mat", transform=t2, detectorId=1)
+    t3 = theia.scene.Transform.Scale(r, r, r).translate(-x, -y, z + r + d)
+    c3 = store.createInstance("sphere", "abs", transform=t3)
+    instances = [c1, c2, c3]
+    t4 = theia.scene.Transform.Scale(r, r, r).translate(-x, -y, z - r - d)
+    c4 = store.createInstance("sphere", "vol", transform=t4)
+    if not disableVolumeBorder:
+        instances.append(c4)
+    targets = [
+        theia.scene.SphereBBox((x, y, z + r + d), r),
+        theia.scene.SphereBBox((x, y, z - r - d), r),
+    ]
+    scene = theia.scene.Scene(
+        instances, matStore.material, medium=matStore.media["water"], targets=targets
+    )
+
+    # calculate min time
+    target_pos = (x, y, z - r - d) * u.m  # detector #1
+    d_min = np.sqrt(np.square(np.subtract(target_pos, light_pos)).sum(-1)) - r
+    v_max = np.max(water.group_velocity)
+    t_min = d_min / v_max + T0
+
+    # create pipeline stages
+    rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
+    photons = theia.light.UniformWavelengthSource()
+    source = theia.light.SphericalLightSource(
+        position=light_pos,
+        timeRange=(T0, T1),
+        budget=light_budget,
+    )
+    camera = theia.camera.SphereCameraRaySource(
+        position=target_pos,
+        radius=r,
+    )
+    recorder = theia.estimator.HitRecorder(polarized=polarized)
+    stats = theia.trace.EventStatisticCallback()
+    tracer = theia.trace.SceneBackwardTracer(
+        N,
+        source,
+        camera,
+        photons,
+        recorder,
+        rng,
+        scene,
+        callback=stats,
+        maxPathLength=N_SCATTER,
+        maxTime=T_MAX,
+        polarized=polarized,
+        disableDirectLighting=disableDirect,
+        disableTransmission=disableTransmission,
+        disableVolumeBorder=disableVolumeBorder,
+    )
+    # run pipeline
+    pl.runPipeline([rng, photons, source, camera, tracer, recorder])
+
+    # check hits
+    hits = recorder.view(0)
+    assert hits.count > 0
+    assert hits.count <= tracer.maxHits
+    hits = hits[: hits.count]
+
+    # sanity check polarization
+    if polarized:
+        # check stokes is normalized
+        assert np.abs(hits["stokes"][:, 0] - 1.0).max() < 1e-6
+        assert np.sqrt(np.square(hits["stokes"][:, 1:]).sum(-1).max()) - 1.0 <= 1e-6
+        assert hits["stokes"][:, 1:].max() <= 1.0
+        assert hits["stokes"][:, 1:].min() >= -1.0
+        # check polarization ref is perpendicular to plane of incidence and normalized
+        # note: this only works because we use spheres and only scale and translate them
+        polRef = hits["polarizationRef"]
+        assert np.abs(np.square(polRef).sum(-1) - 1.0).max() < 1e-6
+        polRef_exp = np.cross(hits["direction"], hits["normal"])
+        d = np.square(polRef_exp).sum(-1)
+        mask = d > 1e-7
+        polRef_exp /= np.sqrt(d)[:, None]
+        # for very small angle we reuse the old polRef to minimize error
+        assert np.abs(np.abs((polRef_exp * polRef).sum(-1))[mask] - 1.0).max() < 1e-6
+
+    # check config via stats
+    assert stats.scattered > 0
+    assert stats.absorbed > 0
+    if disableDirect:
+        assert stats.created == tracer.batchSize
+        # there will only be hits from shadow rays
+        assert stats.detected == 0
+    else:
+        assert stats.created == 2 * tracer.batchSize
+        assert stats.detected > 0
+    if disableVolumeBorder:
+        assert stats.volume == 0
+    else:
+        assert stats.volume > 0
 
 
 @pytest.mark.parametrize("polarized", [True, False])
@@ -406,7 +641,7 @@ def test_EventStatisticCallback():
     source = theia.light.SphericalLightSource(timeRange=(T0, T1))
     response = theia.estimator.EmptyResponse()
     stats = theia.trace.EventStatisticCallback()
-    tracer = theia.trace.SceneTracer(
+    tracer = theia.trace.SceneForwardTracer(
         N,
         source,
         photons,
@@ -496,7 +731,7 @@ def test_TrackRecordCallback(polarizedTrack: bool, polarized: bool):
     )
     response = theia.estimator.EmptyResponse()
     track = theia.trace.TrackRecordCallback(N, LENGTH, polarized=polarizedTrack)
-    tracer = theia.trace.VolumeTracer(
+    tracer = theia.trace.VolumeForwardTracer(
         N,
         source,
         photons,
@@ -580,7 +815,7 @@ def test_volumeBorder():
     )
     estimator = theia.estimator.EmptyResponse()
     tracker = theia.trace.TrackRecordCallback(N, 4)
-    tracer = theia.trace.SceneTracer(
+    tracer = theia.trace.SceneForwardTracer(
         N,
         source,
         photons,
@@ -673,7 +908,7 @@ def test_tracer_reflection(flag, reflectance, err):
         budget=1.0,
     )
     recorder = theia.estimator.HitRecorder()
-    tracer = theia.trace.SceneTracer(
+    tracer = theia.trace.SceneForwardTracer(
         N,
         source,
         photons,
@@ -789,7 +1024,6 @@ def test_DirectTracer_scene(polarized: bool):
         pytest.skip("ray tracing is not supported")
 
     N = 32 * 256
-    # TODO
     # same as volume version, but now put something before camera to test shadow rays
     T0, T1 = 10.0 * u.ns, 20.0 * u.ns
     T_MAX = 45.0 * u.ns

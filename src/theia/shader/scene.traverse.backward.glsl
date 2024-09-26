@@ -2,6 +2,7 @@
 #define _INCLUDE_SCENE_TRAVERSE_BACKWARD
 
 #include "ray.glsl"
+#include "ray.combine.glsl"
 #include "ray.propagate.glsl"
 #include "ray.scatter.glsl"
 #include "ray.surface.glsl"
@@ -11,6 +12,36 @@
 
 //user provided code
 #include "rng.glsl"
+#include "light.glsl"
+#include "response.glsl"
+
+//Top level acceleration structure containing the scene
+uniform accelerationStructureEXT tlas;
+
+/**
+ * Checks if observer and target are mutually visible.
+*/
+bool isVisible(vec3 observer, vec3 target) {
+    //Direction and length of shadow ray
+    vec3 dir = target - observer;
+    float dist = length(dir);
+    dir /= dist;
+
+    //create and trace ray query
+    rayQueryEXT rayQuery;
+    rayQueryInitializeEXT(
+        rayQuery, tlas,
+        gl_RayFlagsOpaqueEXT,
+        0xFF,
+        observer,
+        0.0, dir, dist
+    );
+    rayQueryProceedEXT(rayQuery);
+
+    //points are mutable visible if no hit
+    return rayQueryGetIntersectionTypeEXT(rayQuery, true) ==
+        gl_RayQueryCommittedIntersectionNoneEXT;
+}
 
 /**
  * Process the surface hit the given ray produced.
@@ -97,15 +128,15 @@ ResultCode processHit(
  * a surface was hit and holds additional information about the hit.
 */
 ResultCode trace(
-    inout BackwardRay ray,  ///< Ray to trace using its current state
-    out SurfaceHit hit,     ///< Resultin hit (includes misses)
-    uint idx, inout uint dim,     ///< RNG state
-    PropagateParams params  ///< Propagation parameters
+    inout BackwardRay ray,      ///< Ray to trace using its current state
+    out SurfaceHit hit,         ///< Resultin hit (includes misses)
+    uint idx, inout uint dim,   ///< RNG state
+    PropagateParams params      ///< Propagation parameters
 ) {
     //health check ray
     if (isRayBad(ray))
         return ERROR_CODE_RAY_BAD;
-    vec3 dir = normalize(ray.direction);
+    vec3 dir = normalize(ray.state.direction);
 
     //sample distance
     float u = random(idx, dim);
@@ -117,21 +148,47 @@ ResultCode trace(
         rayQuery, tlas,
         gl_RayFlagsOpaqueEXT,
         0xFF, //mask -> hit everything
-        ray.position,
+        ray.state.position,
         0.0, //t_min; self-intersections handled via offsets
         dir,
         dist);
     rayQueryProceedEXT(rayQuery);
-    ResultCode result = processRayQuery(ray, rayQuery, hit);
+    ResultCode result = processRayQuery(ray.state, rayQuery, hit);
     if (result <= ERROR_CODE_MAX_VALUE)
         return result;
     
-    //propagate ray (ray, dist, params, scatter)
-    result = propagateRay(ray, dist, params, false);
+    //propagate ray
+    result = propagateRay(ray, dist, params);
     updateRayIS(ray, dist, params, hit.valid);
 
     //done
     return result;
+}
+
+/**
+ * Samples the light to create a shadow ray. If successful creates a hit.
+*/
+void traceShadowRay(
+    BackwardRay ray,                ///< Ray the shadow ray is based on
+    uint idx, inout uint dim,       ///< RNG state
+    const CameraHit camera,         ///< Sampled camera hit
+    const PropagateParams params    ///< Propagation params
+) {
+    //sample light
+    SourceRay source = sampleLight(
+        ray.state.position, vec3(0.0),
+        ray.state.wavelength,
+        idx, dim);
+    //check if light is visible
+    if (!isVisible(source.position, ray.state.position))
+        return;
+        
+    //create hit by combining source and camera ray
+    HitItem hit;
+    ResultCode result = combineRays(ray, source, camera, params, hit);
+    if (result >= 0) {
+        response(hit);
+    }
 }
 
 /**
@@ -141,9 +198,9 @@ ResultCode trace(
 ResultCode processInteraction(
     inout BackwardRay ray,      ///< Ray to process
     const SurfaceHit hit,       ///< Hit to process (maybe invalid, i.e. no hit)
+    const CameraHit camera,     ///< Sampled camera hit
     uint idx, inout uint dim,   ///< RNG state
-    PropagateParams params,     ///< Propagation parameters
-    bool last                   ///< True on last iteration
+    const PropagateParams params///< Propagation parameters
 ) {
     ResultCode result;
     //handle either intersection or scattering
@@ -156,11 +213,11 @@ ResultCode processInteraction(
         dim++;
     }
     else {
-        //dont bother scattering on the last iteration (we wont hit anything)
-        if (!last) {
-            //scatter ray in new direction
-            scatterRay(ray, random2D(idx, dim));
-        }
+        //trace shadow ray
+        traceShadowRay(ray, idx, dim, camera, params);
+
+        //sample new direction
+        scatterRay(ray, random2D(idx, dim));
         result = RESULT_CODE_RAY_SCATTERED;
     }
 

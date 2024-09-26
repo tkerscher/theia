@@ -26,11 +26,13 @@ __all__ = [
     "EmptyEventCallback",
     "EventResultCode",
     "EventStatisticCallback",
-    "SceneTracer",
+    "SceneBackwardTracer",
+    "SceneForwardTracer",
     "Tracer",
     "TraceEventCallback",
     "TrackRecordCallback",
-    "VolumeTracer",
+    "VolumeBackwardTracer",
+    "VolumeForwardTracer",
 ]
 
 
@@ -371,7 +373,7 @@ class Tracer(PipelineStage):
         return self._response
 
 
-class VolumeTracer(Tracer):
+class VolumeForwardTracer(Tracer):
     """
     Path tracer simulating light traveling through media originating at a light
     source and ending at a detector. It does NOT check for any intersection
@@ -451,7 +453,7 @@ class VolumeTracer(Tracer):
         which a ray gets stopped
     """
 
-    name = "Empty Scene Tracer"
+    name = "Volume Forward Tracer"
 
     class TraceParams(Structure):
         _fields_ = [
@@ -540,7 +542,6 @@ class VolumeTracer(Tracer):
                 PATH_LENGTH=pathLength,
                 POLARIZATION=polarized,
             )
-            # create preamble
             headers = {
                 "callback.glsl": callback.sourceCode,
                 "response.glsl": response.sourceCode,
@@ -548,7 +549,7 @@ class VolumeTracer(Tracer):
                 "source.glsl": source.sourceCode,
                 "photon.glsl": wavelengthSource.sourceCode,
             }
-            code = compileShader("tracer.volume.glsl", preamble, headers)
+            code = compileShader("tracer.volume.forward.glsl", preamble, headers)
         self._code = code
         # create program
         self._program = hp.Program(self._code)
@@ -630,6 +631,10 @@ class VolumeTracer(Tracer):
         """Source used to sample wavelengths"""
         return self._wavelengthSource
 
+    def _finishParams(self, i: int) -> None:
+        super()._finishParams(i)
+        self.setParam("_maxDist", self.traceBBox.diagonal)
+
     def run(self, i: int) -> List[hp.Command]:
         self._bindParams(self._program, i)
         self.callback.bindParams(self._program, i)
@@ -640,7 +645,279 @@ class VolumeTracer(Tracer):
         return [self._program.dispatch(self._groups)]
 
 
-class SceneTracer(Tracer):
+class VolumeBackwardTracer(Tracer):
+    """
+    Path tracer sampling paths starting at the camera and creating complete ones
+    by sampling the light independently at each scatter point. It does NOT check
+    for any intersection with a scene but may include self shadowing from a
+    spherical detector. Can be run on hardware without ray tracing support and
+    may be faster.
+
+    Parameters
+    ----------
+    batchSize: int
+        Number of rays to simulate per run. Note that a single ray may generate
+        up to nScattering hits plus one if direct lighting is enabled.
+    source: LightSource
+        Source producing light rays. Must support backward mode.
+    camera: CameraRaySource
+        Source producing camera rays. If direct lighting is enabled, must
+        support direct mode.
+    wavelengthSource: WavelengthSource
+        Source to sample wavelengths from
+    response: HitResponse
+        Response function simulating the detector
+    rng: RNG
+        Generator for creating random numbers
+    callback: TraceEventCallback, default=EmptyEventCallback()
+        Callback called for each tracing event. See `TraceEventCallback`
+    medium: int, default=0
+        device address of the medium the scene is emerged in, e.g. the address
+        of a water medium for an underwater simulation.
+        Defaults to zero specifying vacuum.
+    nScattering: int, default=6
+        Number of simulated scattering events
+    target: Optional[SphereBBox], default=None
+        Detector sphere used to determine self shadowing. If None, this test is
+        disabled.
+    scatterCoefficient: float, default=0.01 1/m
+        Scatter coefficient used for sampling ray lengths. Tuning this parameter
+        affects the time distribution of the hits.
+    traceBBox: RectBBox, default=(-1km,1km)^3
+        Boundary box marking limits beyond tracing of an individual ray is
+        stopped
+    maxTime: float, default=1000.0 ns
+        Max total time including delay from the source and travel time, after
+        which a ray gets stopped
+    polarized: bool, default=False
+        Whether to simulate polarization effects.
+    disableDirectLighting: bool, default=False
+        Whether to ignore contributions from direct lighting, i.e. light paths
+        with no scattering.
+    blockSize: int, default=128
+        Number of threads in a single work group
+    code: Optional[bytes], default=None
+        Cached compiled byte code. If `None` compiles it from source.
+        The given byte code is not checked and must match the given
+        configuration
+
+    Stage Parameters
+    ----------------
+    targetPosition: vec3
+        Center of the target sphere. Ignored if target was None.
+    targetRadius: float
+        Radius of the target sphere. Ignored if target was None.
+    scatterCoefficient: float
+        Scatter coefficient used for sampling ray lengths
+    medium: int
+        device address of the medium the scene is emerged in, e.g. the
+        address of a water medium for an underwater simulation.
+        Defaults to zero specifying vacuum.
+    lowerBBoxCorner: (float, float, float)
+        Lower limit of the x,y,z coordinates a ray must stay above to not get
+        stopped
+    upperBBoxCorner: (float, float, float)
+        Upper limit of the x,y,z coordinates a ray must stay below to not get
+        stopped
+    maxTime: float
+        Max total time including delay from the source and travel time, after
+        which a ray gets stopped
+    """
+
+    name = "Volume Backward Tracer"
+
+    class TraceParams(Structure):
+        _fields_ = [
+            ("targetPosition", vec3),
+            ("targetRadius", c_float),
+            ("medium", buffer_reference),
+            ("scatterCoefficient", c_float),
+            ("lowerBBoxCorner", vec3),
+            ("upperBBoxCorner", vec3),
+            ("maxTime", c_float),
+            ("_maxDist", c_float),
+        ]
+
+    def __init__(
+        self,
+        batchSize: int,
+        source: LightSource,
+        camera: CameraRaySource,
+        wavelengthSource: WavelengthSource,
+        response: HitResponse,
+        rng: RNG,
+        *,
+        callback: TraceEventCallback = EmptyEventCallback(),
+        medium: int = 0,
+        nScattering: int = 6,
+        target: Optional[SphereBBox] = None,
+        scatterCoefficient: float = 0.01 / u.m,
+        traceBBox: RectBBox = RectBBox((-1.0 * u.km,) * 3, (1.0 * u.km,) * 3),
+        maxTime: float = 1000.0 * u.ns,
+        polarized: bool = False,
+        disableDirectLighting: bool = False,
+        blockSize: int = 128,
+        code: Optional[bytes] = None,
+    ) -> None:
+        # check if source and camera support this mode
+        if not source.supportBackward:
+            raise ValueError("Light source does not support backward mode!")
+        if not disableDirectLighting and not camera.supportDirect:
+            raise ValueError("Camera does not support direct mode!")
+
+        # Calculate max hits
+        maxHits = nScattering
+        if not disableDirectLighting:
+            maxHits += 1
+        maxHits *= batchSize
+        # calculate number of rng samples
+        rngStride = 3 + source.nRNGBackward
+        rngPre = wavelengthSource.nRNGSamples + camera.nRNGSamples
+        if not disableDirectLighting:
+            rngPre += wavelengthSource.nRNGSamples
+            rngPre += camera.nRNGDirect
+            rngPre += source.nRNGBackward
+        nRNG = rngPre + rngStride * nScattering
+        # init tracer
+        super().__init__(
+            response,
+            {"TraceParams": self.TraceParams},
+            maxHits=maxHits,
+            normalization=1.0 / batchSize,
+            nRNGSamples=nRNG,
+            polarized=polarized,
+        )
+        # save params
+        self._batchSize = batchSize
+        self._source = source
+        self._camera = camera
+        self._wavelengthSource = wavelengthSource
+        self._rng = rng
+        self._callback = callback
+        self._nScattering = nScattering
+        self._directLightingDisabled = disableDirectLighting
+        self._blockSize = blockSize
+        self.setParams(
+            targetPosition=target.center if target is not None else (0.0, 0.0, 0.0),
+            targetRadius=target.radius if target is not None else 0.0,
+            scatterCoefficient=scatterCoefficient,
+            medium=medium,
+            lowerBBoxCorner=traceBBox.lowerCorner,
+            upperBBoxCorner=traceBBox.upperCorner,
+            maxTime=maxTime,
+            _maxDist=traceBBox.diagonal,
+        )
+        # calculate group size
+        self._groups = -(batchSize // -blockSize)
+
+        # compile code if needed
+        if code is None:
+            preamble = createPreamble(
+                BATCH_SIZE=batchSize,
+                BLOCK_SIZE=blockSize,
+                DISABLE_DIRECT_LIGHTING=disableDirectLighting,
+                DISABLE_SELF_SHADOWING=target is None,
+                PATH_LENGTH=nScattering,
+                POLARIZATION=polarized,
+            )
+            headers = {
+                "callback.glsl": callback.sourceCode,
+                "camera.glsl": camera.sourceCode,
+                "light.glsl": source.sourceCode,
+                "response.glsl": response.sourceCode,
+                "rng.glsl": rng.sourceCode,
+                "source.glsl": wavelengthSource.sourceCode,
+            }
+            code = compileShader("tracer.volume.backward.glsl", preamble, headers)
+        self._code = code
+        # create program
+        self._program = hp.Program(self._code)
+
+    @property
+    def batchSize(self) -> int:
+        """Number of rays to simulate per run"""
+        return self._batchSize
+
+    @property
+    def blockSize(self) -> int:
+        """Number of threads in a single work group"""
+        return self._blockSize
+
+    @property
+    def callback(self) -> TraceEventCallback:
+        """Callback called for each tracing event"""
+        return self._callback
+
+    @property
+    def camera(self) -> CameraRaySource:
+        """Source producing camera rays"""
+        return self._camera
+
+    @property
+    def code(self) -> bytes:
+        """Compiled source code. Can be used for caching"""
+        return self._code
+
+    @property
+    def directLightingDisabled(self) -> bool:
+        """Wether direct lighting is disabled"""
+        return self._directLightingDisabled
+
+    @property
+    def nScattering(self) -> int:
+        """Number of simulated scattering events"""
+        return self._nScattering
+
+    @property
+    def rng(self) -> RNG:
+        """Generator for creating random numbers"""
+        return self._rng
+
+    @property
+    def source(self) -> LightSource:
+        """Source producing light rays"""
+        return self._source
+
+    @property
+    def target(self) -> SphereBBox:
+        """Sphere the tracer targets"""
+        return SphereBBox(
+            self.getParam("targetPosition"),
+            self.getParam("targetRadius"),
+        )
+
+    @target.setter
+    def target(self, value: SphereBBox) -> None:
+        self.setParams(targetPosition=value.center, targetRadius=value.radius)
+
+    @property
+    def traceBBox(self) -> RectBBox:
+        """Boundary box of simulated rays"""
+        return RectBBox(
+            self.getParam("lowerBBoxCorner"), self.getParam("upperBBoxCorner")
+        )
+
+    @property
+    def wavelengthSource(self) -> WavelengthSource:
+        """Source used to sample wavelengths"""
+        return self._wavelengthSource
+
+    def _finishParams(self, i: int) -> None:
+        super()._finishParams(i)
+        self.setParam("_maxDist", self.traceBBox.diagonal)
+
+    def run(self, i: int) -> List[hp.Command]:
+        self._bindParams(self._program, i)
+        self.callback.bindParams(self._program, i)
+        self.camera.bindParams(self._program, i)
+        self.source.bindParams(self._program, i)
+        self.wavelengthSource.bindParams(self._program, i)
+        self.response.bindParams(self._program, i)
+        self.rng.bindParams(self._program, i)
+        return [self._program.dispatch(self._groups)]
+
+
+class SceneForwardTracer(Tracer):
     """
     Path tracer simulating light traveling through media originating at a light
     source and ending at detectors. Traces rays against the geometries defined
@@ -713,7 +990,7 @@ class SceneTracer(Tracer):
         which a ray gets stopped
     """
 
-    name = "Scene Tracer"
+    name = "Scene Forward Tracer"
 
     class TraceParams(Structure):
         _fields_ = [
@@ -822,7 +1099,7 @@ class SceneTracer(Tracer):
                 "source.glsl": source.sourceCode,
                 "photon.glsl": wavelengthSource.sourceCode,
             }
-            code = compileShader("tracer.scene.glsl", preamble, headers)
+            code = compileShader("tracer.scene.forward.glsl", preamble, headers)
         self._code = code
         # create program
         self._program = hp.Program(self._code)
@@ -906,6 +1183,262 @@ class SceneTracer(Tracer):
         return [self._program.dispatch(self._groups)]
 
 
+class SceneBackwardTracer(Tracer):
+    """
+    Path tracer sampling paths starting at the camera and creating complete ones
+    by sampling the light independently at each scatter point. Traces rays
+    against the geometries defined by the provided scene to simulate accurate
+    intersections and shadowing. Depending on the geometry's material rays may
+    reflect or transmit through them.
+
+    Parameters
+    ----------
+    batchSize: int
+        Number of rays to simulate per run. Note that a single ray may generate
+        up to `maxPathLength` hits plus one if direct lighting is enabled.
+    source: LightSource
+        Source producing light rays. Must support backward mode.
+    camera: CameraRaySource
+        Source producing camera rays. If direct lighting is enabled must support
+        direct mode.
+    wavelengthSource: WavelengthSource
+        Source to sample wavelengths from
+    response: HitResponse
+        Response function simulating the detector
+    rng: RNG
+        Generator for creating random numbers
+    scene: Scene
+        Scene in which the rays are traced
+    callback: TraceEventCallback, default=EmptyEventCallback()
+        Callback called for each tracing event. See `TraceEventCallback`.
+    medium: Optional[int], default=None
+        Medium the camera is emerged in. Defaults to the scene's medium.
+        Overrides scene's medium if present.
+    maxPathLength: int, default=6
+        Maximum number of events per simulated ray. An event includes volume
+        scatter and scene intersections.
+    scatterCoefficient: float, default=0.01 1/m
+        Scatter coefficient used for sampling ray lengths. Tuning this parameter
+        affects the time distribution of the hits.
+    maxTime: float, default=1000.0 ns
+        Max total time including delay from source, camera and travel time after
+        which a ray gets stopped
+    polarized: bool, default=False
+        Whether to simulate polarization effects.
+    disableDirectLighting: bool, default=False
+        Whether to ignore contributions from direct lighting, i.e. light paths
+        with no scattering. Must be supported by camera to be enabled.
+    disableTransmission: bool, default=False
+        Disables GPU code handling transmission, which may improve performance.
+        Rays will default to always reflect where possible.
+    disableVolumeBorder: bool, default=False
+        Disables GPU code handling volume borders, which may improve performance
+        if there are none. Settings this to `True` while the scene contains
+        volume border will produce wrong results.
+    blockSize: int, default=128
+        Number of threads in a single work group
+    code: Optional[bytes], default=None
+        Cached compiled byte code. If `None` compiles it from source.
+        The given byte code is not checked and must match the given
+        configuration
+
+    Stage Parameters
+    ----------------
+    scatterCoefficient: float
+        Scatter coefficient used for sampling ray lengths
+    maxTime: float
+        Max total time including delay from the source and travel time, after
+        which a ray gets stopped
+    """
+
+    name = "Scene Backward Tracer"
+
+    class TraceParams(Structure):
+        _fields_ = [
+            ("_medium", buffer_reference),
+            ("scatterCoefficient", c_float),
+            ("_lowerBBoxCorner", vec3),
+            ("_upperBBoxCorner", vec3),
+            ("maxTime", c_float),
+            ("_maxDist", c_float),
+        ]
+
+    def __init__(
+        self,
+        batchSize: int,
+        source: LightSource,
+        camera: CameraRaySource,
+        wavelengthSource: WavelengthSource,
+        response: HitResponse,
+        rng: RNG,
+        scene: Scene,
+        *,
+        callback: TraceEventCallback = EmptyEventCallback(),
+        medium: Optional[int] = None,
+        maxPathLength: int = 6,
+        scatterCoefficient: float = 0.01 / u.m,
+        maxTime: float = 1000.0 * u.ns,
+        polarized: bool = False,
+        disableDirectLighting: bool = False,
+        disableTransmission: bool = False,
+        disableVolumeBorder: bool = False,
+        blockSize: int = 128,
+        code: Optional[bytes] = None,
+    ) -> None:
+        # check if source and camera support this mode
+        if not source.supportBackward:
+            raise ValueError("Light source does not support backward mode!")
+        if not disableDirectLighting and not camera.supportDirect:
+            raise ValueError("Camera does not support direct mode!")
+
+        # Calculate max hits
+        maxHits = maxPathLength
+        if not disableDirectLighting:
+            maxHits += 1
+        maxHits *= batchSize
+        # calculate number of rng samples
+        rngStride = 3 + source.nRNGBackward
+        rngPre = wavelengthSource.nRNGSamples + camera.nRNGSamples
+        if not disableDirectLighting:
+            rngPre += wavelengthSource.nRNGSamples
+            rngPre += camera.nRNGDirect
+            rngPre += source.nRNGBackward
+        nRNG = rngPre + rngStride * maxPathLength
+        # init tracer
+        super().__init__(
+            response,
+            {"TraceParams": self.TraceParams},
+            maxHits=maxHits,
+            normalization=1.0 / batchSize,
+            nRNGSamples=nRNG,
+            polarized=polarized,
+        )
+        # save params
+        self._batchSize = batchSize
+        self._source = source
+        self._camera = camera
+        self._wavelengthSource = wavelengthSource
+        self._rng = rng
+        self._scene = scene
+        self._callback = callback
+        self._maxPathLength = maxPathLength
+        self._directLightingDisabled = disableDirectLighting
+        self._transmissionDisabled = disableTransmission
+        self._volumeBorderDisabled = disableVolumeBorder
+        self._blockSize = blockSize
+        self.setParams(
+            scatterCoefficient=scatterCoefficient,
+            _medium=scene.medium if medium is None else medium,
+            maxTime=maxTime,
+            _lowerBBoxCorner=scene.bbox.lowerCorner,
+            _upperBBoxCorner=scene.bbox.upperCorner,
+            _maxDist=scene.bbox.diagonal,
+        )
+        # calculate group size
+        self._groups = -(batchSize // -blockSize)
+
+        # compile code if needed
+        if code is None:
+            preamble = createPreamble(
+                BATCH_SIZE=batchSize,
+                BLOCK_SIZE=blockSize,
+                DISABLE_DIRECT_LIGHTING=disableDirectLighting,
+                DISABLE_TRANSMISSION=disableTransmission,
+                DISABLE_VOLUME_BORDER=disableVolumeBorder,
+                PATH_LENGTH=maxPathLength,
+                POLARIZATION=polarized,
+            )
+            headers = {
+                "callback.glsl": callback.sourceCode,
+                "camera.glsl": camera.sourceCode,
+                "light.glsl": source.sourceCode,
+                "response.glsl": response.sourceCode,
+                "rng.glsl": rng.sourceCode,
+                "photon.glsl": wavelengthSource.sourceCode,
+            }
+            code = compileShader("tracer.scene.backward.glsl", preamble, headers)
+        self._code = code
+        # create program
+        self._program = hp.Program(self._code)
+        # bind scene
+        self._program.bindParams(Geometries=scene.geometries, tlas=scene.tlas)
+
+    @property
+    def batchSize(self) -> int:
+        """Number of rays to simulate per run"""
+        return self._batchSize
+
+    @property
+    def blockSize(self) -> int:
+        """Number of threads in a single work group"""
+        return self._blockSize
+
+    @property
+    def callback(self) -> TraceEventCallback:
+        """Callback called for each tracing event"""
+        return self._callback
+
+    @property
+    def camera(self) -> CameraRaySource:
+        """Source producing camera rays"""
+        return self._camera
+
+    @property
+    def code(self) -> bytes:
+        """Compiled source code. Can be used for caching"""
+        return self._code
+
+    @property
+    def directLightingDisabled(self) -> bool:
+        """Whether direct lighting is disabled"""
+        return self._directLightingDisabled
+
+    @property
+    def maxPathLength(self) -> int:
+        """Maximum number of events per simulated ray"""
+        return self._maxPathLength
+
+    @property
+    def rng(self) -> RNG:
+        """Generator for creating random numbers"""
+        return self._rng
+
+    @property
+    def scene(self) -> Scene:
+        """Scene in which the rays are traced"""
+        return self._scene
+
+    @property
+    def source(self) -> LightSource:
+        """Source producing light rays"""
+        return self._source
+
+    @property
+    def transmissionDisabled(self) -> bool:
+        """Whether transmission is disabled"""
+        return self._transmissionDisabled
+
+    @property
+    def volumeBorderDisabled(self) -> bool:
+        """Whether volume borders are disabled"""
+        return self._volumeBorderDisabled
+
+    @property
+    def wavelengthSource(self) -> WavelengthSource:
+        """Source used to sample wavelengths"""
+        return self._wavelengthSource
+
+    def run(self, i: int) -> List[hp.Command]:
+        self._bindParams(self._program, i)
+        self.callback.bindParams(self._program, i)
+        self.camera.bindParams(self._program, i)
+        self.source.bindParams(self._program, i)
+        self.wavelengthSource.bindParams(self._program, i)
+        self.response.bindParams(self._program, i)
+        self.rng.bindParams(self._program, i)
+        return [self._program.dispatch(self._groups)]
+
+
 class DirectLightTracer(Tracer):
     """
     Path tracer directly connecting light source and camera without any
@@ -920,6 +1453,8 @@ class DirectLightTracer(Tracer):
         Source producing light rays. Must support backward mode.
     camera: CameraRaySource
         Source producing camera rays. Must support direct mode.
+    wavelengthSource: WavelengthSource
+        Source to sample wavelengths from
     response: HitResponse
         Response function simulating the detector
     rng: RNG
