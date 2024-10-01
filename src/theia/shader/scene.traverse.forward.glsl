@@ -14,11 +14,8 @@
 #include "rng.glsl"
 #include "response.glsl"
 
-//Top level acceleration structure containing the scene
-uniform accelerationStructureEXT tlas;
-
 //Additional dependencies for MIS
-#ifndef SCENE_TRAVERSE_DISABLE_MIS
+#ifndef SCENE_TRAVERSE_FORWARD_DISABLE_MIS
 
 #include "sphere.intersect.glsl"
 #include "tracer.mis.glsl"
@@ -219,7 +216,7 @@ void processScatter(
     uint idx, inout uint dim,             ///< RNG state
     const PropagateParams params    ///< Propagation params
 ) {
-    #ifndef SCENE_TRAVERSE_DISABLE_MIS
+    #ifndef SCENE_TRAVERSE_FORWARD_DISABLE_MIS
     //MIS detector:
     //we both sample the scattering phase function as well as the detector
     //sphere for a possible hit direction
@@ -278,7 +275,7 @@ ResultCode trace(
 
     //next event estimate target by extending ray if possible
     //only if allowResponse is true
-    #ifndef SCENE_TRAVERSE_DISABLE_MIS
+    #ifndef SCENE_TRAVERSE_FORWARD_DISABLE_MIS
     float sampledDist = dist;
     Sphere target = targets[targetId];
     //check if we have a chance on hitting the detector by extending ray
@@ -314,7 +311,7 @@ ResultCode trace(
         dist = distance(ray.state.position, hit.worldPos);
     }
 
-    #ifndef SCENE_TRAVERSE_DISABLE_MIS
+    #ifndef SCENE_TRAVERSE_FORWARD_DISABLE_MIS
     //Check if hit was actually our shadow ray
     if (mis_target && hit.valid && dist > sampledDist) {
         //create response

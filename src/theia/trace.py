@@ -18,7 +18,7 @@ import warnings
 
 from enum import IntEnum
 from numpy.typing import NDArray
-from typing import Dict, List, Optional, Set, Tuple, Type, Union
+from typing import Dict, List, Literal, Optional, Set, Tuple, Type, Union
 
 
 __all__ = [
@@ -1670,6 +1670,8 @@ class BidirectionalPathTracer(Tracer):
         Source producing light rays
     camera: CameraRaySource
         Source producing camera rays
+    wavelengthSource: WavelengthSource
+        Source to sample wavelengths from
     response: HitResponse
         Response function simulating the detector
     rng: RNG
@@ -1680,6 +1682,8 @@ class BidirectionalPathTracer(Tracer):
         Callback called for each tracing event. See `TraceEventCallback`.
         Starts with the light sub path followed by the camera sub path.
         Each subpath starts with an `RAY_CREATED` event.
+    callbackScope: "light"|"camera"|"both", default="both"
+        Optionally limits the scope of callback calls to the specified subpath.
     lightPathLength: int, default=6
         Length of the light subpath
     cameraPathLength: int, default=6
@@ -1697,13 +1701,6 @@ class BidirectionalPathTracer(Tracer):
         Whether to simulate polarization effects.
     cameraMedium: Optional[int], default=None
         Medium the camera is submerged in. If `None`, same as `scene.medium`.
-    disableDirectLighting: bool, default=False
-        Whether to ignore contributions from direct lighting, i.e. light paths
-        with no scattering. If True, one can use a more performant direct
-        lighting estimator in addition to increase overall performance.
-    disableLightPathResponse: bool, default=False
-        Whether the light subpath can generate hits on its own, i.e. before
-        connecting with the camera subpath.
     disableTransmission: bool, default=False
         Disables GPU code handling transmission, which may improve performance.
         Rays will default to always reflect where possible.
@@ -1720,20 +1717,23 @@ class BidirectionalPathTracer(Tracer):
 
     Stage Parameters
     ----------------
-    targetIdx: int
-        Id of the detector, the tracer should generate hits for.
     scatterCoefficient: float
         Scatter coefficient used for sampling ray lengths
     maxTime: float
         Max total time including delay from each source and travel time, after
         which no responses are generated.
+
+    Note
+    ----
+    The BidirectionalPathTracer samples only paths of at least length 2, i.e.
+    only paths with at least two scattering events and thus misses energy from
+    direct contribution and single scattering events.
     """
 
     name = "Bidirectional Path Tracer"
 
     class TraceParams(Structure):
         _fields_ = [
-            ("targetIdx", c_uint32),
             ("_sceneMedium", buffer_reference),
             ("_cameraMedium", buffer_reference),
             ("scatterCoefficient", c_float),
@@ -1748,20 +1748,19 @@ class BidirectionalPathTracer(Tracer):
         batchSize: int,
         source: LightSource,
         camera: CameraRaySource,
+        wavelengthSource: WavelengthSource,
         response: HitResponse,
         rng: RNG,
         scene: Scene,
         *,
         callback: TraceEventCallback = EmptyEventCallback(),
+        callbackScope: Literal["light", "camera", "both"] = "both",
         lightPathLength: int = 6,
         cameraPathLength: int = 6,
-        targetIdx: int = 0,
         scatterCoefficient: float = 0.01 / u.m,
         maxTime: float = 1000.0 * u.ns,
         polarized: bool = False,
         cameraMedium: Optional[int] = None,
-        disableDirectLighting: bool = False,
-        disableLightPathResponse: bool = False,
         disableTransmission: bool = False,
         disableVolumeBorder: bool = False,
         blockSize: int = 128,
@@ -1772,13 +1771,9 @@ class BidirectionalPathTracer(Tracer):
             raise RuntimeError("Ray tracing is not supported on this system")
         # calculate max hits
         maxHits = lightPathLength * cameraPathLength
-        if not disableLightPathResponse:
-            maxHits += lightPathLength - 1
-        if not disableDirectLighting:
-            maxHits += 1
         maxHits *= batchSize
         # calculate rng samples
-        nRNG = source.nRNGSamples + camera.nRNGSamples
+        nRNG = source.nRNGForward + camera.nRNGSamples + wavelengthSource.nRNGSamples
         nRNG += (lightPathLength + cameraPathLength) * 4
         # init tracer
         super().__init__(
@@ -1792,6 +1787,7 @@ class BidirectionalPathTracer(Tracer):
 
         # save params
         self._batchSize = batchSize
+        self._wavelengthSource = wavelengthSource
         self._source = source
         self._camera = camera
         self._callback = callback
@@ -1800,12 +1796,10 @@ class BidirectionalPathTracer(Tracer):
         self._blockSize = blockSize
         self._lightPathLength = lightPathLength
         self._cameraPathLength = cameraPathLength
-        self._directLightingDisabled = disableDirectLighting
-        self._lightPathResponseDisabled = disableLightPathResponse
+        self._callbackScope = callbackScope
         self._transmissionDisabled = disableTransmission
         self._volumeBorderDisabled = disableVolumeBorder
         self.setParams(
-            targetIdx=targetIdx,
             _sceneMedium=scene.medium,
             _cameraMedium=(scene.medium if cameraMedium is None else cameraMedium),
             scatterCoefficient=scatterCoefficient,
@@ -1823,10 +1817,8 @@ class BidirectionalPathTracer(Tracer):
                 BATCH_SIZE=batchSize,
                 BLOCK_SIZE=blockSize,
                 CAMERA_PATH_LENGTH=cameraPathLength,
-                DIM_OFFSET_CAMERA=camera.nRNGSamples,
-                DIM_OFFSET_LIGHT=source.nRNGSamples,
-                DISABLE_DIRECT_LIGHTING=disableDirectLighting,
-                DISABLE_LIGHT_PATH_RESPONSE=disableLightPathResponse,
+                DISABLE_CAMERA_CALLBACK=callbackScope == "light",
+                DISABLE_LIGHT_CALLBACK=callbackScope == "camera",
                 DISABLE_TRANSMISSION=disableTransmission,
                 DISABLE_VOLUME_BORDER=disableVolumeBorder,
                 LIGHT_PATH_LENGTH=lightPathLength,
@@ -1836,8 +1828,9 @@ class BidirectionalPathTracer(Tracer):
                 "callback.glsl": callback.sourceCode,
                 "response.glsl": response.sourceCode,
                 "rng.glsl": rng.sourceCode,
-                "source.glsl": source.sourceCode,
+                "light.glsl": source.sourceCode,
                 "camera.glsl": camera.sourceCode,
+                "photon.glsl": wavelengthSource.sourceCode,
             }
             code = compileShader("tracer.bidirectional.glsl", preamble, headers)
         self._code = code
@@ -1862,6 +1855,11 @@ class BidirectionalPathTracer(Tracer):
         return self._callback
 
     @property
+    def callbackScope(self) -> Literal["light", "camera", "both"]:
+        """Scope the callback is limited to"""
+        return self._callbackScope
+
+    @property
     def camera(self) -> CameraRaySource:
         """Source generating camera rays"""
         return self._camera
@@ -1877,19 +1875,9 @@ class BidirectionalPathTracer(Tracer):
         return self._code
 
     @property
-    def directLightingDisabled(self) -> bool:
-        """Whether direct lighting is disabled"""
-        return self._directLightingDisabled
-
-    @property
     def lightPathLength(self) -> int:
         """Length of the light subpath"""
         return self._lightPathLength
-
-    @property
-    def lightPathResponseDisabled(self) -> bool:
-        """Whether contributions are generated from the light path"""
-        return self._lightPathResponseDisabled
 
     @property
     def rng(self) -> RNG:
@@ -1916,6 +1904,11 @@ class BidirectionalPathTracer(Tracer):
         """Whether volume borders are disabled"""
         return self._volumeBorderDisabled
 
+    @property
+    def wavelengthSource(self) -> WavelengthSource:
+        """Source used to sample wavelengths"""
+        return self._wavelengthSource
+
     def run(self, i: int) -> List[hp.Command]:
         self._bindParams(self._program, i)
         self.callback.bindParams(self._program, i)
@@ -1923,4 +1916,5 @@ class BidirectionalPathTracer(Tracer):
         self.source.bindParams(self._program, i)
         self.response.bindParams(self._program, i)
         self.rng.bindParams(self._program, i)
+        self.wavelengthSource.bindParams(self._program, i)
         return [self._program.dispatch(self._groups)]

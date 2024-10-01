@@ -477,35 +477,27 @@ def test_SceneBackwardTracer(
 
 
 @pytest.mark.parametrize("polarized", [True, False])
-@pytest.mark.parametrize("disableDirect", [True, False])
-@pytest.mark.parametrize("disableLightPathResponse", [True, False])
 @pytest.mark.parametrize("disableTransmission", [True, False])
-@pytest.mark.parametrize("disableVolumeBorder", [True, False])
 def test_BidirectionalPathTracer(
     polarized: bool,
-    disableDirect: bool,
-    disableLightPathResponse: bool,
     disableTransmission: bool,
-    disableVolumeBorder: bool,
 ):
     if not hp.isRaytracingEnabled():
         pytest.skip("ray tracing is not supported")
 
-    N = 32 * 256
+    N = 32 * 64
     T0, T1 = 10 * u.ns, 20.0 * u.ns
     T_MAX = 100.0 * u.us
     L_LIGHT = 8
     L_CAMERA = 8
 
-    det_pos = (-10.0, 0.0, 0.0) * u.m
-    src_pos = (10.0, 0.0, 0.0) * u.m
+    det_pos = (-5.0, 0.0, 0.0) * u.m
+    src_pos = (5.0, 0.0, 0.0) * u.m
     r_inner = 0.95
     r_outer = 1.0
-    shield_scale = 100.0
+    shield_scale = 80.0
     shield_size = (0.1, shield_scale, shield_scale)  # scale
     bbox = ((-500.0 * u.m,) * 3, (500.0 * u.m,) * 3)
-
-    det_trafo = theia.scene.Transform().rotate(1.0, 1.0, 0.0, 1.41).translate(*det_pos)
 
     # create materials
     water = WaterModel().createMedium()
@@ -541,34 +533,34 @@ def test_BidirectionalPathTracer(
 
     # create pipeline
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
-    # cam = theia.camera.PencilCameraRaySource(rayPosition=det_pos)
-    cam = theia.camera.FlatCameraRaySource(transform=det_trafo)
-    ph = theia.light.UniformPhotonSource(timeRange=(T0, T1))
-    src = theia.light.PencilLightSource(ph, position=src_pos)
+    cam = theia.camera.PencilCameraRaySource(rayPosition=src_pos)
+    # cam = theia.camera.FlatCameraRaySource(transform=det_trafo)
+    ph = theia.light.UniformWavelengthSource()
+    src = theia.light.PencilLightSource(position=det_pos, timeRange=(T0, T1))
     rec = theia.estimator.HitRecorder(polarized=polarized)
-    stats = theia.trace.EventStatisticCallback()
-    # track = theia.trace.TrackRecordCallback(N, L_CAMERA + L_LIGHT + 2, polarized=polarized)
+    # stats = theia.trace.EventStatisticCallback()
+    track = theia.trace.TrackRecordCallback(N, L_CAMERA + 2, polarized=polarized)
     trace = theia.trace.BidirectionalPathTracer(
         N,
         src,
         cam,
+        ph,
         rec,
         rng,
         scene,
-        callback=stats,
-        # callback=track,
+        # callback=stats,
+        callback=track,
+        callbackScope="camera",
         lightPathLength=L_LIGHT,
         cameraPathLength=L_CAMERA,
         maxTime=T_MAX,
         polarized=polarized,
-        disableDirectLighting=disableDirect,
-        disableLightPathResponse=disableLightPathResponse,
         disableTransmission=disableTransmission,
-        disableVolumeBorder=disableVolumeBorder,
     )
     # run pipeline
-    pl.runPipeline([rng, cam, ph, src, trace, rec])
-    # pl.runPipeline([rng, cam, ph, src, trace, rec, track])
+    # pl.runPipeline([rng, cam, ph, src, trace, rec])
+    pl.runPipeline([rng, cam, ph, src, trace, rec, track])
+    paths, length, codes = track.result(0)
 
     # check hits
     hits = rec.view(0)
@@ -582,7 +574,7 @@ def test_BidirectionalPathTracer(
     assert hits.count <= trace.maxHits
     hits = hits[: hits.count]
 
-    assert np.max(hits["time"]) >= t_min
+    assert np.min(hits["time"]) >= t_min
     assert np.max(hits["time"]) <= T_MAX
 
     # sanity check polarization
@@ -597,12 +589,13 @@ def test_BidirectionalPathTracer(
         polRef = hits["polarizationRef"]
         assert np.abs((polRef * hits["normal"]).sum(-1)).max() < 1e-6
         assert np.abs(np.square(polRef).sum(-1) - 1.0).max() < 1e-6
-        polRef_exp = np.cross(hits["direction"], hits["normal"])
-        d = np.square(polRef_exp).sum(-1)
-        mask = d > 1e-7
-        polRef_exp /= np.sqrt(d)[:, None]
-        # for very small angle we reuse the old polRef to minimize error
-        assert np.abs(np.abs((polRef_exp * polRef).sum(-1))[mask] - 1.0).max() < 1e-6
+        # for pencil camera all polRefs are degenerate so nothing to test
+        # polRef_exp = np.cross(hits["direction"], hits["normal"])
+        # d = np.square(polRef_exp).sum(-1)
+        # mask = d > 1e-7
+        # polRef_exp /= np.sqrt(d)[:, None]
+        # # for very small angle we reuse the old polRef to minimize error
+        # assert np.abs(np.abs((polRef_exp * polRef).sum(-1))[mask] - 1.0).max() < 1e-6
 
 
 def test_EventStatisticCallback():

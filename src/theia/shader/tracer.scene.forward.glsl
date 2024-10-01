@@ -23,10 +23,13 @@
 #endif
 // #samples per iteration
 #ifdef DISABLE_MIS
-#define SCENE_TRAVERSE_DISABLE_MIS 1
+#define SCENE_TRAVERSE_FORWARD_DISABLE_MIS 1
 #endif
 
 layout(local_size_x = BLOCK_SIZE) in;
+
+//Top level acceleration structure containing the scene
+uniform accelerationStructureEXT tlas;
 
 #include "ray.propagate.glsl"
 #include "scene.intersect.glsl"

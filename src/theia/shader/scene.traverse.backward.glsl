@@ -15,9 +15,6 @@
 #include "light.glsl"
 #include "response.glsl"
 
-//Top level acceleration structure containing the scene
-uniform accelerationStructureEXT tlas;
-
 /**
  * Checks if observer and target are mutually visible.
 */
@@ -39,8 +36,8 @@ bool isVisible(vec3 observer, vec3 target) {
     rayQueryProceedEXT(rayQuery);
 
     //points are mutable visible if no hit
-    return rayQueryGetIntersectionTypeEXT(rayQuery, true) ==
-        gl_RayQueryCommittedIntersectionNoneEXT;
+    return rayQueryGetIntersectionTypeEXT(rayQuery, true) !=
+        gl_RayQueryCommittedIntersectionTriangleEXT;
 }
 
 /**
@@ -157,6 +154,11 @@ ResultCode trace(
     if (result <= ERROR_CODE_MAX_VALUE)
         return result;
     
+    //fetch actual travelled distance if we hit anything
+    if (hit.valid) {
+        dist = distance(ray.state.position, hit.worldPos);
+    }
+    
     //propagate ray
     result = propagateRay(ray, dist, params);
     updateRayIS(ray, dist, params, hit.valid);
@@ -164,6 +166,8 @@ ResultCode trace(
     //done
     return result;
 }
+
+#ifndef SCENE_TRAVERSE_BACKWARD_DISABLE_SHADOW_RAYS
 
 /**
  * Samples the light to create a shadow ray. If successful creates a hit.
@@ -191,6 +195,8 @@ void traceShadowRay(
     }
 }
 
+#endif
+
 /**
  * Processes the interaction indicated by hit, i.e. either surface hit or
  * volume scatter. Samples surface interaction, i.e. transmission/reflection.
@@ -213,8 +219,10 @@ ResultCode processInteraction(
         dim++;
     }
     else {
+        #ifndef SCENE_TRAVERSE_BACKWARD_DISABLE_SHADOW_RAYS
         //trace shadow ray
         traceShadowRay(ray, idx, dim, camera, params);
+        #endif
 
         //sample new direction
         scatterRay(ray, random2D(idx, dim));

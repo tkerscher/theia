@@ -822,6 +822,183 @@ def test_VolumeBackwardTracer_Crosscheck(
     assert np.abs(log_err).max() < 5e-6
 
 
+# Unfortunately, this tracer converges rather slowly needing a large amount of
+# samples. To speed things up, we tune the number of batches and error for each
+# test
+@pytest.mark.parametrize(
+    "mu_a,mu_s,g,polarized,n_batches,err",
+    [
+        (0.0, 0.005, 0.0, False, 200, 0.035),
+        (0.05, 0.01, 0.0, True, 200, 0.025),
+        (0.0, 0.02, -0.4, False, 200, 2e-3),
+        (0.05, 0.01, 0.6, False, 250, 0.025),
+    ],
+)
+def test_BidirectionalPathTracer(
+    mu_a: float, mu_s: float, g: float, polarized: bool, n_batches: int, err: float
+):
+    """
+    Here we have to work around the fact, that BidirectionalPathTracer does not
+    sample direct and single scatter paths. Since we use SceneBackwardTracer for
+    cross check we simply disable the former, but need a second tracer to
+    estimate the difference from the second.
+    """
+    if not hp.isRaytracingEnabled():
+        pytest.skip("ray tracing is not supported")
+
+    # Scene settings
+    position = (12.0, 15.0, 0.2) * u.m
+    radius = 100.0 * u.m
+    # Light settings
+    budget = 1e9
+    t0 = 10.0 * u.ns
+    lam = 400.0 * u.nm  # doesn't really matter
+    # tracer settings
+    cam_length = 10
+    light_length = 10
+    scatter_coef = 0.05
+    maxTime = float("inf")
+    # simulation settings
+    batch_size = 256 * 1024
+
+    # create materials
+    model = MediumModel(mu_a, mu_s, g)
+    medium = model.createMedium()
+    material = theia.material.Material("det", medium, None, flags="DB")
+    matStore = theia.material.MaterialStore([material])
+    # load meshes
+    meshStore = theia.scene.MeshStore({"sphere": "assets/sphere.stl"})
+    # the mesh is not really a sphere
+    # to prevent all camera rays to be produced outside, we need to scale camera
+    r_scale = 0.99547149974733 * u.m  # radius of inscribed sphere (icosphere)
+    r_insc = radius * r_scale
+
+    # create scene
+    targets = [theia.scene.SphereBBox(position, radius)]
+    trafo = theia.scene.Transform.Scale(radius, radius, radius).translate(*position)
+    target = meshStore.createInstance("sphere", "det", transform=trafo, detectorId=0)
+    scene = theia.scene.Scene(
+        [target],
+        matStore.material,
+        medium=matStore.media["homogenous"],
+        targets=targets,
+    )
+
+    # create light (delta pulse)
+    photons = theia.light.UniformWavelengthSource(lambdaRange=(lam, lam))
+    light = theia.light.SphericalLightSource(
+        position=position, timeRange=(t0, t0), budget=budget
+    )
+    # create camera
+    camera = theia.camera.SphereCameraRaySource(
+        position=position,
+        radius=-r_insc,
+    )
+    # create tracer
+    rng = theia.random.PhiloxRNG(key=0xC0FFEE)
+    recorder = theia.estimator.HitRecorder(polarized=polarized)
+    tracer = theia.trace.BidirectionalPathTracer(
+        batch_size,
+        light,
+        camera,
+        photons,
+        recorder,
+        rng,
+        scene,
+        lightPathLength=light_length,
+        cameraPathLength=cam_length,
+        scatterCoefficient=scatter_coef,
+        maxTime=maxTime,
+        polarized=polarized,
+    )
+    rng.autoAdvance = tracer.nRNGSamples
+
+    # create pipeline + scheduler
+    total = 0
+    # stokes = []
+
+    def process(config: int, task: int) -> None:
+        nonlocal total
+        result = recorder.view(config)
+        result = result[: result.count]
+        # undo attenuation
+        vg = 1.0 / model.ng * u.c
+        d = vg * (result["time"] - t0)
+        value0 = result["contrib"] * np.exp(mu_a * d)
+        # add to sum
+        total += value0.sum()
+
+        # copy stokes vector if polarized
+        # if polarized:
+        #     stokes.append(result["stokes"].copy())
+
+    pipeline = pl.Pipeline([rng, photons, light, camera, tracer, recorder])
+    scheduler = pl.PipelineScheduler(pipeline, processFn=process)
+
+    # create batches
+    tasks = [
+        {},
+    ] * n_batches  # rng advances on its own, so we dont have to update any params
+    scheduler.schedule(tasks)
+    scheduler.wait()
+
+    # estimate for single scatter contributions
+    rng = theia.random.PhiloxRNG(key=0xC0FFEE)
+    recorder = theia.estimator.HitRecorder(polarized=polarized)
+    tracer = theia.trace.SceneBackwardTracer(
+        batch_size,
+        light,
+        camera,
+        photons,
+        recorder,
+        rng,
+        scene,
+        maxPathLength=2,
+        maxTime=maxTime,
+        scatterCoefficient=scatter_coef,
+        polarized=polarized,
+        disableDirectLighting=False,
+    )
+    rng.autoAdvance = tracer.nRNGSamples
+
+    singleTotal = 0
+
+    def process(config: int, task: int) -> None:
+        nonlocal singleTotal
+        result = recorder.view(config)
+        result = result[: result.count]
+        # undo attenuation
+        vg = 1.0 / model.ng * u.c
+        d = vg * (result["time"] - t0)
+        value0 = result["contrib"] * np.exp(mu_a * d)
+        # add to sum
+        singleTotal += value0.sum()
+
+    pipeline = pl.Pipeline([rng, photons, light, camera, tracer, recorder])
+    scheduler = pl.PipelineScheduler(pipeline, processFn=process)
+
+    # create batches
+    tasks = [
+        {},
+    ] * 50  # rng advances on its own, so we dont have to update any params
+    scheduler.schedule(tasks)
+    scheduler.wait()
+
+    # check for energy conservation
+    singleEstimate = singleTotal / (batch_size * 50)
+    estimate = total / (batch_size * n_batches)
+    expected = budget - singleEstimate
+    assert np.abs(estimate / expected - 1.0) < err
+
+    # if polarized: check stokes vector is valid
+    # if polarized:
+    #     stokes = np.concatenate(stokes)
+    #     assert np.abs(stokes[:, 0] - 1.0).max() < 1e-5
+    #     assert stokes[:, 1:].max() <= 1.0
+    #     assert stokes[:, 1:].min() >= -1.0
+    #     assert np.all(np.square(stokes[:, 1:]).sum(-1) <= 1.0)
+
+
 @pytest.mark.parametrize(
     "mu_a,mu_s,g,polarized",
     [
