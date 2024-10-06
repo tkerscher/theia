@@ -242,7 +242,7 @@ void simulateCamera(
 
 }
 
-void main() {
+void traceMain() {
     uint dim = 0;
     uint idx = gl_GlobalInvocationID.x;
     uint pathIdx = 0;
@@ -255,4 +255,10 @@ void main() {
     createLightSubPath(photon, pathIdx, idx, dim);
     //trace camera path
     simulateCamera(photon.wavelength, pathIdx, idx, dim);    
+}
+
+void main() {
+    initResponse();
+    traceMain();
+    finalizeResponse();
 }

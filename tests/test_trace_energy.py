@@ -242,7 +242,10 @@ def test_SceneForwardTracer_Crosscheck(
     # create tracer
     # rng = theia.random.SobolQRNG(seed=0xC0FFEE)
     rng = theia.random.PhiloxRNG(key=0xC0FFEE)
-    response = theia.estimator.UniformHitResponse()
+    value = theia.estimator.UniformValueResponse()
+    response = theia.estimator.HistogramHitResponse(
+        value, nBins=n_bins, binSize=bin_size, t0=bin_t0, normalization=1 / batch_size
+    )
     tracer = theia.trace.SceneForwardTracer(
         batch_size,
         light,
@@ -256,21 +259,14 @@ def test_SceneForwardTracer_Crosscheck(
         maxTime=maxTime,
         polarized=polarized,
     )
-    estimator = theia.estimator.HistogramEstimator(
-        response.queue,
-        nBins=n_bins,
-        binSize=bin_size,
-        t0=bin_t0,
-        normalization=1 / batch_size,
-    )
     rng.autoAdvance = tracer.nRNGSamples
     # create pipeline + scheduler
     hists = []
 
     def process(config: int, task: int) -> None:
-        hists.append(estimator.result(config).copy())
+        hists.append(response.result(config).copy())
 
-    pipeline = pl.Pipeline([rng, photons, light, tracer, estimator])
+    pipeline = pl.Pipeline([rng, photons, light, tracer, response])
     scheduler = pl.PipelineScheduler(pipeline, processFn=process)
     # create batches
     tasks = [
@@ -285,7 +281,14 @@ def test_SceneForwardTracer_Crosscheck(
     # create estimate
 
     # create tracer
-    response = theia.estimator.UniformHitResponse()
+    value = theia.estimator.UniformValueResponse()
+    response = theia.estimator.HistogramHitResponse(
+        value,
+        nBins=n_bins,
+        binSize=bin_size,
+        t0=bin_t0,
+        normalization=1 / batch_size,
+    )
     tracer = theia.trace.SceneForwardTracer(
         batch_size,
         light,
@@ -299,21 +302,14 @@ def test_SceneForwardTracer_Crosscheck(
         maxTime=maxTime,
         polarized=polarized,
     )
-    estimator = theia.estimator.HistogramEstimator(
-        response.queue,
-        nBins=n_bins,
-        binSize=bin_size,
-        t0=bin_t0,
-        normalization=1 / batch_size,
-    )
     rng.autoAdvance = tracer.nRNGSamples
     # create pipeline + scheduler
     hists = []
 
     def process(config: int, task: int) -> None:
-        hists.append(estimator.result(config).copy())
+        hists.append(response.result(config).copy())
 
-    pipeline = pl.Pipeline([rng, photons, light, tracer, estimator])
+    pipeline = pl.Pipeline([rng, photons, light, tracer, response])
     scheduler = pl.PipelineScheduler(pipeline, processFn=process)
     # create batches
     tasks = [
@@ -326,6 +322,7 @@ def test_SceneForwardTracer_Crosscheck(
     estimate = hist.sum()
 
     # check estimate
+    assert truth > 0.0  # just to be safe
     assert abs(estimate / truth - 1.0) < 0.02
     # Compare early part of light curves
     # The ground truth algorithm suffers from high variance especially at later
@@ -548,7 +545,13 @@ def test_VolumeForwardTracer_Crosscheck(
     # create tracer
     # rng = theia.random.SobolQRNG(seed=0xC0FFEE)
     rng = theia.random.PhiloxRNG(key=0xC0FFEE)
-    response = theia.estimator.UniformHitResponse()
+    response = theia.estimator.HistogramHitResponse(
+        theia.estimator.UniformValueResponse(),
+        nBins=n_bins,
+        binSize=bin_size,
+        t0=bin_t0,
+        normalization=1 / batch_size,
+    )
     tracer = theia.trace.SceneForwardTracer(
         batch_size,
         light,
@@ -562,21 +565,14 @@ def test_VolumeForwardTracer_Crosscheck(
         maxTime=maxTime,
         polarized=polarized,
     )
-    estimator = theia.estimator.HistogramEstimator(
-        response.queue,
-        nBins=n_bins,
-        binSize=bin_size,
-        t0=bin_t0,
-        normalization=1 / batch_size,
-    )
     rng.autoAdvance = tracer.nRNGSamples
     # create pipeline + scheduler
     hists = []
 
     def process(config: int, task: int) -> None:
-        hists.append(estimator.result(config).copy())
+        hists.append(response.result(config).copy())
 
-    pipeline = pl.Pipeline([rng, photons, light, tracer, estimator])
+    pipeline = pl.Pipeline([rng, photons, light, tracer, response])
     scheduler = pl.PipelineScheduler(pipeline, processFn=process)
     # create batches
     tasks = [
@@ -591,7 +587,13 @@ def test_VolumeForwardTracer_Crosscheck(
     # create estimate
 
     # create tracer
-    response = theia.estimator.UniformHitResponse()
+    response = theia.estimator.HistogramHitResponse(
+        theia.estimator.UniformValueResponse(),
+        nBins=n_bins,
+        binSize=bin_size,
+        t0=bin_t0,
+        normalization=1 / batch_size,
+    )
     tracer = theia.trace.VolumeForwardTracer(
         batch_size,
         light,
@@ -606,21 +608,14 @@ def test_VolumeForwardTracer_Crosscheck(
         polarized=polarized,
         medium=matStore.media["homogenous"],
     )
-    estimator = theia.estimator.HistogramEstimator(
-        response.queue,
-        nBins=n_bins,
-        binSize=bin_size,
-        t0=bin_t0,
-        normalization=1 / batch_size,
-    )
     rng.autoAdvance = tracer.nRNGSamples
     # create pipeline + scheduler
     hists = []
 
     def process(config: int, task: int) -> None:
-        hists.append(estimator.result(config).copy())
+        hists.append(response.result(config).copy())
 
-    pipeline = pl.Pipeline([rng, photons, light, tracer, estimator])
+    pipeline = pl.Pipeline([rng, photons, light, tracer, response])
     scheduler = pl.PipelineScheduler(pipeline, processFn=process)
     # create batches
     tasks = [
@@ -721,7 +716,13 @@ def test_VolumeBackwardTracer_Crosscheck(
 
     # create tracer
     rng = theia.random.PhiloxRNG(key=0xC0FFEE)
-    response = theia.estimator.UniformHitResponse()
+    response = theia.estimator.HistogramHitResponse(
+        theia.estimator.UniformValueResponse(),
+        nBins=n_bins,
+        binSize=bin_size,
+        t0=bin_t0,
+        normalization=1 / batch_size,
+    )
     tracer = theia.trace.SceneBackwardTracer(
         batch_size,
         light,
@@ -736,21 +737,14 @@ def test_VolumeBackwardTracer_Crosscheck(
         polarized=polarized,
         disableDirectLighting=disableDirect,
     )
-    estimator = theia.estimator.HistogramEstimator(
-        response.queue,
-        nBins=n_bins,
-        binSize=bin_size,
-        t0=bin_t0,
-        normalization=1 / batch_size,
-    )
     rng.autoAdvance = tracer.nRNGSamples
     # create pipeline # scheduler
     hists = []
 
     def process(config: int, task: int) -> None:
-        hists.append(estimator.result(config).copy())
+        hists.append(response.result(config).copy())
 
-    pipeline = pl.Pipeline([rng, photons, light, camera, tracer, estimator])
+    pipeline = pl.Pipeline([rng, photons, light, camera, tracer, response])
     scheduler = pl.PipelineScheduler(pipeline, processFn=process)
     # create batches
     tasks = [
@@ -766,7 +760,13 @@ def test_VolumeBackwardTracer_Crosscheck(
 
     # create tracer
     rng = theia.random.PhiloxRNG(key=0xC0FFEE)
-    response = theia.estimator.UniformHitResponse()
+    response = theia.estimator.HistogramHitResponse(
+        theia.estimator.UniformValueResponse(),
+        nBins=n_bins,
+        binSize=bin_size,
+        t0=bin_t0,
+        normalization=1 / batch_size,
+    )
     tracer = theia.trace.VolumeBackwardTracer(
         batch_size,
         light,
@@ -781,21 +781,14 @@ def test_VolumeBackwardTracer_Crosscheck(
         polarized=polarized,
         disableDirectLighting=disableDirect,
     )
-    estimator = theia.estimator.HistogramEstimator(
-        response.queue,
-        nBins=n_bins,
-        binSize=bin_size,
-        t0=bin_t0,
-        normalization=1 / batch_size,
-    )
     rng.autoAdvance = tracer.nRNGSamples
     # create pipeline + scheduler
     hists = []
 
     def process(config: int, task: int) -> None:
-        hists.append(estimator.result(config).copy())
+        hists.append(response.result(config).copy())
 
-    pipeline = pl.Pipeline([rng, photons, light, tracer, estimator])
+    pipeline = pl.Pipeline([rng, photons, light, tracer, response])
     scheduler = pl.PipelineScheduler(pipeline, processFn=process)
     # create batches
     tasks = [

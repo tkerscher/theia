@@ -23,9 +23,13 @@ layout(scalar) writeonly buffer HitQueueOut {
 //     SAVE_HIT(item, hitQueueOut.queue, begin + offset)
 // }
 
+void initResponse() {}
+
 void response(HitItem item) {
     uint id = atomicAdd(hitQueueOut.count, 1);
     SAVE_HIT(item, hitQueueOut.queue, id)
 }
+
+void finalizeResponse() {}
 
 #endif

@@ -22,10 +22,16 @@ void main() {
         return;
     
     //add same bin accross all inputs and save in input
-    float result = 0.0;
+   //use compensated Kahan summation to reduce error
+   //See https://en.wikipedia.org/wiki/Kahan_summation_algorithm
     uint i = idx;
+    precise float result = 0.0;
+    precise float c = 0.0;
     for (uint n = 0; n < nHist; ++n, i += N_BINS) {
-        result += histIn[i] * norm;
+        precise float y = histIn[i] - c;
+        precise float t = result + y;
+        c = (t - result) - y;
+        result = t;
     }
-    histOut[idx] = result;
+    histOut[idx] = result * norm;
 }

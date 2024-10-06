@@ -7,7 +7,7 @@ from ctypes import Structure, c_float, c_int32, c_uint32, addressof, memset, siz
 from numpy.ctypeslib import as_array
 
 from theia.camera import CameraRaySource
-from theia.estimator import HitResponse
+from theia.estimator import HitResponse, TraceConfig
 from theia.light import LightSource, WavelengthSource
 from theia.random import RNG
 from theia.scene import RectBBox, Scene, SphereBBox
@@ -329,6 +329,8 @@ class Tracer(PipelineStage):
         params: Dict[str, type[Structure]] = {},
         extra: Set[str] = set(),
         *,
+        batchSize: int,
+        blockSize: int,
         maxHits: int,
         normalization: float,
         nRNGSamples: int,
@@ -336,13 +338,26 @@ class Tracer(PipelineStage):
     ) -> None:
         super().__init__(params, extra)
         # save props
+        self._batchSize = batchSize
+        self._blockSize = blockSize
         self._response = response
         self._maxHits = maxHits
         self._normalization = normalization
         self._nRNGSamples = nRNGSamples
         self._polarized = polarized
         # prepare response
-        response.prepare(maxHits, polarized)
+        c = TraceConfig(batchSize, blockSize, maxHits, normalization, polarized)
+        response.prepare(c)
+
+    @property
+    def batchSize(self) -> int:
+        """Number of rays to simulate per run"""
+        return self._batchSize
+
+    @property
+    def blockSize(self) -> int:
+        """Number of threads in a single work group"""
+        return self._blockSize
 
     @property
     def maxHits(self) -> int:
@@ -504,13 +519,14 @@ class VolumeForwardTracer(Tracer):
         super().__init__(
             response,
             {"TraceParams": self.TraceParams},
+            batchSize=batchSize,
+            blockSize=blockSize,
             maxHits=maxHits,
             normalization=1.0 / batchSize,
             nRNGSamples=nRNG,
             polarized=polarized,
         )
         # save params
-        self._batchSize = batchSize
         self._source = source
         self._wavelengthSource = wavelengthSource
         self._rng = rng
@@ -518,7 +534,6 @@ class VolumeForwardTracer(Tracer):
         self._nScattering = nScattering
         self._directLightingDisabled = disableDirectLighting
         self._targetSamplingDisabled = disableTargetSampling
-        self._blockSize = blockSize
         self.setParams(
             targetPosition=target.center,
             targetRadius=target.radius,
@@ -553,16 +568,6 @@ class VolumeForwardTracer(Tracer):
         self._code = code
         # create program
         self._program = hp.Program(self._code)
-
-    @property
-    def batchSize(self) -> int:
-        """Number of rays to simulate per run"""
-        return self._batchSize
-
-    @property
-    def blockSize(self) -> int:
-        """Number of threads in a single work group"""
-        return self._blockSize
 
     @property
     def callback(self) -> TraceEventCallback:
@@ -782,13 +787,14 @@ class VolumeBackwardTracer(Tracer):
         super().__init__(
             response,
             {"TraceParams": self.TraceParams},
+            batchSize=batchSize,
+            blockSize=blockSize,
             maxHits=maxHits,
             normalization=1.0 / batchSize,
             nRNGSamples=nRNG,
             polarized=polarized,
         )
         # save params
-        self._batchSize = batchSize
         self._source = source
         self._camera = camera
         self._wavelengthSource = wavelengthSource
@@ -796,7 +802,6 @@ class VolumeBackwardTracer(Tracer):
         self._callback = callback
         self._nScattering = nScattering
         self._directLightingDisabled = disableDirectLighting
-        self._blockSize = blockSize
         self.setParams(
             targetPosition=target.center if target is not None else (0.0, 0.0, 0.0),
             targetRadius=target.radius if target is not None else 0.0,
@@ -832,16 +837,6 @@ class VolumeBackwardTracer(Tracer):
         self._code = code
         # create program
         self._program = hp.Program(self._code)
-
-    @property
-    def batchSize(self) -> int:
-        """Number of rays to simulate per run"""
-        return self._batchSize
-
-    @property
-    def blockSize(self) -> int:
-        """Number of threads in a single work group"""
-        return self._blockSize
 
     @property
     def callback(self) -> TraceEventCallback:
@@ -1049,6 +1044,8 @@ class SceneForwardTracer(Tracer):
         super().__init__(
             response,
             {"TraceParams": self.TraceParams},
+            batchSize=batchSize,
+            blockSize=blockSize,
             maxHits=maxHits,
             normalization=1.0 / batchSize,
             nRNGSamples=nRNG,
@@ -1056,13 +1053,11 @@ class SceneForwardTracer(Tracer):
         )
 
         # save params
-        self._batchSize = batchSize
         self._source = source
         self._wavelengthSource = wavelengthSource
         self._callback = callback
         self._rng = rng
         self._scene = scene
-        self._blockSize = blockSize
         self._maxPathLength = maxPathLength
         self._directLightingDisabled = disableDirectLighting
         self._transmissionDisabled = disableTransmission
@@ -1107,16 +1102,6 @@ class SceneForwardTracer(Tracer):
         self._program.bindParams(Geometries=scene.geometries, tlas=scene.tlas)
         if not disableTargetSampling:
             self._program.bindParams(Targets=scene.targets)
-
-    @property
-    def batchSize(self) -> int:
-        """Number of rays to simulate per run"""
-        return self._batchSize
-
-    @property
-    def blockSize(self) -> int:
-        """Number of threads in a single work group"""
-        return self._blockSize
 
     @property
     def callback(self) -> TraceEventCallback:
@@ -1308,13 +1293,14 @@ class SceneBackwardTracer(Tracer):
         super().__init__(
             response,
             {"TraceParams": self.TraceParams},
+            batchSize=batchSize,
+            blockSize=blockSize,
             maxHits=maxHits,
             normalization=1.0 / batchSize,
             nRNGSamples=nRNG,
             polarized=polarized,
         )
         # save params
-        self._batchSize = batchSize
         self._source = source
         self._camera = camera
         self._wavelengthSource = wavelengthSource
@@ -1325,7 +1311,6 @@ class SceneBackwardTracer(Tracer):
         self._directLightingDisabled = disableDirectLighting
         self._transmissionDisabled = disableTransmission
         self._volumeBorderDisabled = disableVolumeBorder
-        self._blockSize = blockSize
         self.setParams(
             scatterCoefficient=scatterCoefficient,
             _medium=scene.medium if medium is None else medium,
@@ -1362,16 +1347,6 @@ class SceneBackwardTracer(Tracer):
         self._program = hp.Program(self._code)
         # bind scene
         self._program.bindParams(Geometries=scene.geometries, tlas=scene.tlas)
-
-    @property
-    def batchSize(self) -> int:
-        """Number of rays to simulate per run"""
-        return self._batchSize
-
-    @property
-    def blockSize(self) -> int:
-        """Number of threads in a single work group"""
-        return self._blockSize
 
     @property
     def callback(self) -> TraceEventCallback:
@@ -1536,6 +1511,8 @@ class DirectLightTracer(Tracer):
         super().__init__(
             response,
             {"TraceParams": self.TraceParams},
+            batchSize=batchSize,
+            blockSize=blockSize,
             maxHits=batchSize,
             normalization=1.0 / batchSize,
             nRNGSamples=source.nRNGBackward + camera.nRNGDirect,
@@ -1543,14 +1520,12 @@ class DirectLightTracer(Tracer):
         )
 
         # save params
-        self._batchSize = batchSize
         self._source = source
         self._camera = camera
         self._wavelengthSource = wavelengthSource
         self._rng = rng
         self._scene = scene
         self._callback = callback
-        self._blockSize = blockSize
         # assemble scene
         bbox = RectBBox((float("-inf"),) * 3, (float("inf"),) * 3)
         maxDist = float("inf")
@@ -1596,16 +1571,6 @@ class DirectLightTracer(Tracer):
         # bind scene if present
         if scene is not None:
             self._program.bindParams(tlas=scene.tlas)
-
-    @property
-    def batchSize(self) -> int:
-        """Number of rays to simulate per run"""
-        return self._batchSize
-
-    @property
-    def blockSize(self) -> int:
-        """Number of threads in a single work group"""
-        return self._blockSize
 
     @property
     def callback(self) -> TraceEventCallback:
@@ -1779,6 +1744,8 @@ class BidirectionalPathTracer(Tracer):
         super().__init__(
             response,
             {"TraceParams": self.TraceParams},
+            batchSize=batchSize,
+            blockSize=blockSize,
             maxHits=maxHits,
             normalization=(1.0 / batchSize),
             nRNGSamples=nRNG,
@@ -1786,14 +1753,12 @@ class BidirectionalPathTracer(Tracer):
         )
 
         # save params
-        self._batchSize = batchSize
         self._wavelengthSource = wavelengthSource
         self._source = source
         self._camera = camera
         self._callback = callback
         self._rng = rng
         self._scene = scene
-        self._blockSize = blockSize
         self._lightPathLength = lightPathLength
         self._cameraPathLength = cameraPathLength
         self._callbackScope = callbackScope
@@ -1838,16 +1803,6 @@ class BidirectionalPathTracer(Tracer):
         self._program = hp.Program(self._code)
         # bind scene
         self._program.bindParams(Geometries=scene.geometries, tlas=scene.tlas)
-
-    @property
-    def batchSize(self) -> int:
-        """Number of rays to simulate per run"""
-        return self._batchSize
-
-    @property
-    def blockSize(self) -> int:
-        """Number of threads in a single work group"""
-        return self._blockSize
 
     @property
     def callback(self) -> TraceEventCallback:

@@ -53,7 +53,41 @@ def test_hitPolarizationMismatch():
         replay = theia.estimator.HitReplay(128, record, polarized=True)
 
 
-def test_histogram(rng):
+def test_histogramResponse(rng):
+    N = 256 * 1024
+    N_BINS = 50
+    BIN_SIZE = 4.0 * u.ns
+    T0 = 20.0 * u.ns
+    T1 = T0 + N_BINS * BIN_SIZE
+    NORM = 1e-5
+
+    value = theia.estimator.UniformValueResponse()
+    response = theia.estimator.HistogramHitResponse(
+        value, nBins=N_BINS, t0=T0, binSize=BIN_SIZE, normalization=NORM
+    )
+    replay = theia.estimator.HitReplay(N, response, blockSize=128)
+
+    samples = replay.view(0)
+    samples["position"] = (10.0 * rng.random((N, 3)) - 5.0) * u.m
+    samples["direction"] = rng.random((N, 3))
+    samples["normal"] = rng.random((N, 3))
+    samples["wavelength"] = (rng.random((N,)) * 100.0 + 400.0) * u.nm
+    samples["time"] = rng.random((N,)) * T1
+    samples["contrib"] = rng.random((N,)) * 10.0
+
+    runPipeline([replay, response])
+
+    result = response.result(0)
+    # calculate expected results
+    bin_edge = np.arange(N_BINS + 1) * BIN_SIZE + T0
+    exp_hist, _ = np.histogram(samples["time"], bin_edge, weights=samples["contrib"])
+    exp_hist *= NORM
+    # check result
+    # TODO: Somewhat large error. Check if this is really only due to double vs float
+    assert np.allclose(result, exp_hist, rtol=1e-4)
+
+
+def test_histogramEstimator(rng):
     N = 32 * 1024
     N_BINS = 50
     BIN_SIZE = 4.0 * u.ns
@@ -88,8 +122,9 @@ def test_uniformResponse(rng):
     N = 32 * 1024
 
     queue = QueueTensor(theia.estimator.ValueItem, N)
-    uniform = theia.estimator.UniformHitResponse(queue)
-    replay = theia.estimator.HitReplay(N, uniform)
+    value = theia.estimator.UniformValueResponse()
+    response = theia.estimator.StoreValueHitResponse(value, queue)
+    replay = theia.estimator.HitReplay(N, response)
     fetch = RetrieveTensorStage(queue)
 
     hits = replay.view(0)

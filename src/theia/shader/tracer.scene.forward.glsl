@@ -61,7 +61,7 @@ layout(scalar) uniform TraceParams {
 #define ALLOW_RESPONSE_INIT false
 #endif
 
-void main() {
+void traceMain() {
     uint dim = 0;
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= BATCH_SIZE)
@@ -110,4 +110,10 @@ void main() {
         allowResponse = true;
 #endif
     }
+}
+
+void main() {
+    initResponse();
+    traceMain();
+    finalizeResponse();
 }

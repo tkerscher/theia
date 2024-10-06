@@ -4,8 +4,8 @@
 #extension GL_EXT_shader_atomic_float : require
 
 //check macro settings
-#ifndef BATCH_SIZE
-#error "BATCH_SIZE is not defined"
+#ifndef BLOCK_SIZE
+#error "BLOCK_SIZE is not defined"
 #endif
 #ifndef N_BINS
 #error "N_BINS is not defined"
@@ -14,7 +14,7 @@
 #error "VALUE_QUEUE_SIZE is not defined"
 #endif
 
-layout(local_size_x = BATCH_SIZE) in;
+layout(local_size_x = BLOCK_SIZE) in;
 
 //local histogram
 shared float localHist[N_BINS];
@@ -42,7 +42,7 @@ void main() {
     uint i_local = gl_LocalInvocationID.x;
 
     //clear local hist
-    [[unroll]] for (uint i = i_local; i < N_BINS; i += BATCH_SIZE) {
+    [[unroll]] for (uint i = i_local; i < N_BINS; i += BLOCK_SIZE) {
         localHist[i] = 0.0;
     }
     memoryBarrierShared();
@@ -65,7 +65,7 @@ void main() {
 
     //copy local histogram from shared memory to global memory
     uint histId = gl_WorkGroupID.x;
-    [[unroll]] for (uint i = i_local; i < N_BINS; i += BATCH_SIZE) {
+    [[unroll]] for (uint i = i_local; i < N_BINS; i += BLOCK_SIZE) {
         histsOut[histId].bins[i] = localHist[i];
     }
 }

@@ -120,7 +120,7 @@ ResultCode trace(
     return RESULT_CODE_RAY_SCATTERED;
 }
 
-void main() {
+void traceMain() {
     uint dim = 0;
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= BATCH_SIZE)
@@ -156,4 +156,10 @@ void main() {
             scatterRay(ray, random2D(idx, dim));
         }
     }
+}
+
+void main() {
+    initResponse();
+    traceMain();
+    finalizeResponse();
 }

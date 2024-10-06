@@ -71,8 +71,10 @@ Medium getMedium() {
 void main() {
     uint dim = 0;
     uint idx = gl_GlobalInvocationID.x;
-    if (idx >= BATCH_SIZE)
-        return;
     
-    sampleDirect(idx, dim, Medium(params.medium), params.propagation);
+    initResponse();
+    if (idx < BATCH_SIZE) {
+        sampleDirect(idx, dim, Medium(params.medium), params.propagation);
+    }
+    finalizeResponse();
 }

@@ -54,7 +54,7 @@ layout(scalar) uniform TraceParams {
     PropagateParams propagation;
 } params;
 
-void main() {
+void traceMain() {
     uint dim = 0;
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= BATCH_SIZE)
@@ -99,4 +99,10 @@ void main() {
         if (result < 0)
             return;
     }
+}
+
+void main() {
+    initResponse();
+    traceMain();
+    finalizeResponse();
 }
