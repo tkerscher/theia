@@ -13,14 +13,23 @@ from types import MappingProxyType
 from theia.lookup import *
 import theia.units as u
 
+import json
+from jsonschema import validate
+from pathlib import Path
+from zipfile import Path as ZipPath, ZipFile, is_zipfile
+
 import numpy.typing as npt
 from collections.abc import Iterable
 from enum import IntFlag
-from typing import Final, Union, Tuple
+from io import TextIOBase
+from os import PathLike
+from typing import Dict, Final, Union, Tuple
 
 
 __all__ = [
+    "loadMaterials",
     "parseMaterialFlags",
+    "saveMaterials",
     "speed_of_light",
     "BK7Model",
     "FournierForandPhaseFunction",
@@ -386,6 +395,9 @@ class Medium:
         file: str or file
             Path or open file where the data will be saved.
         """
+        # decline files opened in text mode
+        if isinstance(file, TextIOBase):
+            raise ValueError("file must be opened in binary mode!")
         # collect all non empty arrays
         arrays = {
             p: getattr(self, p) for p in self._PROPS if getattr(self, p) is not None
@@ -410,6 +422,9 @@ class Medium:
         -------
         Deserialized medium loaded from the given file or path.
         """
+        # decline files opened in text mode
+        if isinstance(file, TextIOBase):
+            raise ValueError("file must be opened in binary mode!")
         data = np.load(file)
         lam = data.get("lambda_range")
         if lam is None or lam.shape != (2,):
@@ -648,6 +663,194 @@ class Material:
     @flagsInward.deleter
     def flagsInward(self) -> None:
         self._flagsInward = MaterialFlags(0)
+
+
+# fmt: off
+_materialJsonSchema = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "inside": {"type": ["string", "null"]},
+            "outside": {"type": ["string", "null"]},
+            "flagsInward": {"type": "number", "minimum": 0},
+            "flagsOutward": {"type": "number", "minimum": 0},            
+        },
+        "required": ["name", "inside", "outside", "flagsInward", "flagsOutward"],
+        "additionalProperties": False,
+    },
+}
+# fmt: on
+
+
+def saveMaterials(
+    path: Union[str, bytes, PathLike],
+    material: Iterable[Material],
+    *,
+    media: Iterable[Medium] = [],
+) -> None:
+    """
+    Stores the given materials alongside the referenced media at the given path,
+    which can either point to a file or directory. The former case is equivalent
+    to the latter, but compressed into a zip file.
+
+    Parameters
+    ----------
+    path: Union[str, bytes, PathLike]
+        Where to store the materials
+    material: Iterable[Material]
+        List of materials to store
+    media: Iterable[Medium] = []
+        List of extra media to store. Also used to lookup media referenced in
+        materials by name.
+    """
+    # convert to path to make things easier
+    if not isinstance(path, (Path, ZipPath)):
+        return saveMaterials(Path(path), material, media=media)
+    # create a zip archive if path does not exist
+    if not path.is_dir() and not path.exists():
+        with ZipFile(path, "w") as zip:
+            return saveMaterials(ZipPath(zip), material, media=media)
+    # at this point we expect path to point to a directory (either real or zip)
+    if not path.is_dir():
+        raise ValueError("Invalid path!")
+
+    # collect all media
+    mediaDict = {m.name: m for m in media}
+    # first pass: collect all referenced media in material
+    for mat in material:
+        if isinstance(mat.inside, Medium) and mat.inside.name not in mediaDict:
+            mediaDict[mat.inside.name] = mat.inside
+        if isinstance(mat.outside, Medium) and mat.outside.name not in mediaDict:
+            mediaDict[mat.outside.name] = mat.outside
+    # second pass: check if all name references are met
+    for mat in material:
+        if type(mat.inside) is str and mat.inside not in mediaDict:
+            raise ValueError(
+                f"Material '{mat.name}' references an unknown medium '{mat.inside}'!"
+            )
+        if type(mat.outside) is str and mat.outside not in mediaDict:
+            raise ValueError(
+                f"Material '{mat.name}' references an unknown medium '{mat.outside}'!"
+            )
+
+    # first save all media
+    mediaDir = path.joinpath("media/")
+    if not isinstance(mediaDir, ZipPath):
+        mediaDir.mkdir(exist_ok=True)
+    for name, medium in mediaDict.items():
+        with mediaDir.joinpath(name).open("wb") as file:
+            medium.save(file)
+
+    # build representation of materials suitable for serialization
+    def serializeMedium(med: Union[Medium, str, None]):
+        if isinstance(med, Medium):
+            return med.name
+        else:
+            return med
+
+    def serializeMaterial(mat: Material):
+        return {
+            "name": mat.name,
+            "inside": serializeMedium(mat.inside),
+            "outside": serializeMedium(mat.outside),
+            "flagsInward": int(mat.flagsInward),
+            "flagsOutward": int(mat.flagsOutward),
+        }
+
+    matList = [serializeMaterial(mat) for mat in material]
+    # save material descriptions
+    matFile = path.joinpath("material.json")
+    with matFile.open("w") as file:
+        json.dump(matList, file)
+
+
+def loadMaterials(
+    path: Union[str, bytes, PathLike], *, skipValidation: bool = False
+) -> Tuple[Dict[str, Material], Dict[str, Medium]]:
+    """
+    Loads and returns the materials and media from the given path.
+
+    Parameters
+    ----------
+    path: Union[str, bytes, PathLike]
+        Where to load the materials and media from
+
+    Returns
+    -------
+    materials: Dict[str, Material]
+        Dictionary indexing all loaded materials by their names
+    media: Dict[str, Medium]
+        Dictionary indexing all loaded media by their names
+    """
+    # convert to path to make things easier
+    if not isinstance(path, (Path, ZipPath)):
+        return loadMaterials(Path(path))
+    # check if path points to a zip file
+    if path.is_file():
+        if is_zipfile(path):
+            # open zip file and try again
+            with ZipFile(path) as arc:
+                return loadMaterials(ZipPath(arc))
+        else:
+            raise ValueError("Unexpected file format!")
+    # at this point we expect path to point to a directory (or zip root)
+    if not path.is_dir():
+        raise ValueError("Incompatible path!")
+
+    # begin with loading all media stored in the subdirectory "media"
+    mediaDir = path.joinpath("media")
+    if not mediaDir.exists() or not mediaDir.is_dir():
+        raise ValueError('Subdirectory "media" is missing!')
+    mediaDict = {}
+    for file in mediaDir.iterdir():
+        # encapsulate loading media in try/catch for better error message
+        try:
+            with file.open("rb") as f:
+                mediaDict[file.stem] = Medium.load(f, name=file.stem)
+        except Exception as ex:
+            # needs to a bit funky to handle zip paths correct
+            absPath = Path.cwd() / str(file)
+            raise ValueError(f"Failed to load media file: {absPath}")
+
+    # next load the material description
+    matFile = path.joinpath("material.json")
+    if not matFile.is_file():
+        raise ValueError('Missing file: "material.json"!')
+    # try to load material file
+    materialJson = None
+    with matFile.open() as file:
+        try:
+            materialJson = json.load(file)
+        except Exception as ex:
+            raise ValueError('Invalid material description file: "material.json"!')
+    if not skipValidation:
+        validate(materialJson, _materialJsonSchema)
+    # parse material descriptions
+    matDict = {}
+
+    def getMedium(mat: str, med: Union[str, None]) -> Union[Medium, None]:
+        if med is None:
+            return None
+        if med not in mediaDict:
+            raise ValueError(f"Material '{mat}' references unknown medium: '{med}'!")
+        else:
+            return mediaDict[med]
+
+    for mat in materialJson:
+        name = mat["name"]
+        if name in matDict:
+            raise ValueError(f"Duplicate material '{name}'!")
+        inside = getMedium(name, mat["inside"])
+        outside = getMedium(name, mat["outside"])
+        flagsInward = MaterialFlags(mat["flagsInward"])
+        flagsOutward = MaterialFlags(mat["flagsOutward"])
+        flags = (flagsInward, flagsOutward)
+        matDict[name] = Material(name, inside, outside, flags=flags)
+
+    # Done
+    return matDict, mediaDict
 
 
 class MaterialStore:

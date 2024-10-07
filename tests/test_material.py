@@ -369,3 +369,84 @@ def test_MaterialShader(shaderUtil, rng):
     assert np.abs(gpu["m34"] - cpu[:, 9]).max() < 1e-3
     assert flag_buffer.numpy()[0] == mat_vac_glass.flagsInward
     assert flag_buffer.numpy()[1] == mat_vac_glass.flagsOutward
+
+
+def test_serializeMaterial(tmp_path, rng):
+    """create some dummy media/material and try to save/load them"""
+    # create dummy media
+    med1 = theia.material.Medium(
+        "med1",
+        450.0,
+        750.0,
+        refractive_index=rng.random(456, dtype=np.float32) * 2.0,
+        group_velocity=rng.random(196, dtype=np.float32) * 0.8,
+        absorption_coef=rng.random(233, dtype=np.float32) * 30.0,
+        scattering_coef=rng.random(199, dtype=np.float32) * 30.0,
+        log_phase_function=rng.random(156, dtype=np.float32) * 1.0,
+        phase_sampling=rng.random(648, dtype=np.float32) * 3.14,
+        phase_m12=rng.random(354, dtype=np.float32),
+        phase_m22=rng.random(416, dtype=np.float32),
+        phase_m33=rng.random(422, dtype=np.float32),
+        phase_m34=rng.random(235, dtype=np.float32),
+    )
+    med2 = theia.material.Medium(
+        "med2",
+        500.0,
+        700.0,
+        refractive_index=rng.random(199, dtype=np.float32) * 4.5,
+        group_velocity=rng.random(256, dtype=np.float32) * 0.8,
+        absorption_coef=rng.random(145, dtype=np.float32) * 25.0,
+        scattering_coef=rng.random(263, dtype=np.float32) * 25.0,
+        log_phase_function=rng.random(105, dtype=np.float32),
+        phase_sampling=rng.random(156, dtype=np.float32),
+    )
+    medExtra = theia.material.Medium(
+        "extra",
+        450.0,
+        650.0,
+        refractive_index=rng.random(199, dtype=np.float32),
+        group_velocity=rng.random(156, dtype=np.float32) * 0.8,
+        absorption_coef=rng.random(133, dtype=np.float32) * 25.0,
+        scattering_coef=rng.random(119, dtype=np.float32) * 25.0,
+        log_phase_function=rng.random(107, dtype=np.float32),
+        phase_sampling=rng.random(108, dtype=np.float32),
+    )
+    # dummy material
+    mat1 = theia.material.Material("mat1", "med1", med2, flags=("R", "T"))
+    mat2 = theia.material.Material("mat2", med1, None, flags=("B", "RT"))
+
+    # save
+    path = tmp_path.joinpath("materials.zip")
+    theia.material.saveMaterials(path, [mat1, mat2], media=[medExtra])
+    # load
+    mat, med = theia.material.loadMaterials(path)
+
+    # check if media was restored correctly
+    def checkMedium(test: theia.material.Medium, true: theia.material.Medium):
+        assert test.lambda_min == true.lambda_min
+        assert test.lambda_max == true.lambda_max
+        assert np.all(test.refractive_index == true.refractive_index)
+        assert np.all(test.group_velocity == true.group_velocity)
+        assert np.all(test.absorption_coef == true.absorption_coef)
+        assert np.all(test.scattering_coef == true.scattering_coef)
+        assert np.all(test.log_phase_function == true.log_phase_function)
+        assert np.all(test.phase_sampling == true.phase_sampling)
+        assert np.all(test.phase_m12 == true.phase_m12)
+        assert np.all(test.phase_m22 == true.phase_m22)
+        assert np.all(test.phase_m33 == true.phase_m33)
+        assert np.all(test.phase_m34 == true.phase_m34)
+
+    assert med.keys() == {"med1", "med2", "extra"}
+    checkMedium(med["med1"], med1)
+    checkMedium(med["med2"], med2)
+    checkMedium(med["extra"], medExtra)
+    # check if materials were restored correctly
+    assert mat.keys() == {"mat1", "mat2"}
+    assert mat["mat1"].inside == med["med1"]
+    assert mat["mat1"].outside == med["med2"]
+    assert mat["mat1"].flagsInward == mat1.flagsInward
+    assert mat["mat1"].flagsOutward == mat1.flagsOutward
+    assert mat["mat2"].inside == med["med1"]
+    assert mat["mat2"].outside == None
+    assert mat["mat2"].flagsInward == mat2.flagsInward
+    assert mat["mat2"].flagsOutward == mat2.flagsOutward
