@@ -50,7 +50,7 @@ CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
 }
 
 CameraSample sampleCamera(float wavelength, uint idx, uint dim) {
-    return CameraSample(
+    return createCameraSample(
         cameraRayParams.conePos,
         cameraRayParams.coneDir,
         1.0

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import hephaistos as hp
-from hephaistos.glsl import mat3, vec3
+from hephaistos.glsl import buffer_reference, mat3, mat4x3, vec3
 from hephaistos.pipeline import PipelineStage, SourceCodeMixin
 from hephaistos.queue import QueueBuffer, QueueTensor, QueueView
 
@@ -11,7 +11,7 @@ from ctypes import Structure, c_float, c_uint32
 import theia.units as u
 from theia.light import WavelengthSampleItem, WavelengthSource
 from theia.random import RNG
-from theia.scene import Transform
+from theia.scene import MeshInstance
 from theia.util import ShaderLoader, compileShader, createPreamble
 
 from typing import Callable, Dict, List, Optional, Set, Tuple, Type, Union
@@ -22,9 +22,11 @@ __all__ = [
     "ConeCameraRaySource",
     "FlatCameraRaySource",
     "HostCameraRaySource",
+    "MeshCameraRaySource",
     "PencilCameraRaySource",
     "PointCameraRaySource",
     "PolarizedCameraRayItem",
+    "SphereCameraRaySource",
 ]
 
 
@@ -788,3 +790,98 @@ class PointCameraRaySource(CameraRaySource):
 
     # source code via descriptor
     sourceCode = ShaderLoader("camera.point.glsl")
+
+
+class MeshCameraRaySource(CameraRaySource):
+    """
+    Camera producing rays at the surface of the given mesh.
+
+    Parameters
+    ----------
+    mesh: MeshInstance
+        Mesh to produce rays from
+    timeDelta: float, default=0.0
+        Time offset applied to camera rays.
+    inward: bool, default=False
+        If True, creates rays pointing inwards, i.e. opposite to the surface
+        normal.
+
+    Stage Parameters
+    ----------------
+    mesh: MeshInstance
+        Mesh to produce rays from
+    timeDelta: float, default=0.0
+        Time offset applied to camera rays.
+    inward: bool, default=False
+        If True, creates rays pointing inwards, i.e. opposite to the surface
+        normal.
+
+    Note
+    ----
+    For the sampled rays the Mesh's normal will be flipped according to the
+    inward flag, i.e. the normal of valid hits will always oppose the ray
+    direction regardless of the outwards direction of the Mesh.
+    """
+
+    name = "Mesh Camera Ray Source"
+
+    class CameraRayParams(Structure):
+        _fields_ = [
+            ("_verticesAddress", buffer_reference),
+            ("_indicesAddress", buffer_reference),
+            ("_triangleCount", c_uint32),
+            ("_outward", c_float),
+            ("timeDelta", c_float),
+            ("_objToWorld", mat4x3),
+            ("_worldToObj", mat4x3),
+        ]
+
+    def __init__(
+        self,
+        mesh: MeshInstance,
+        *,
+        timeDelta: float = 0.0,
+        inward: bool = False,
+    ) -> None:
+        super().__init__(
+            nRNGSamples=5,
+            nRNGDirect=3,
+            supportDirect=True,
+            params={"CameraRayParams": self.CameraRayParams},
+            extra={"inward", "mesh"},
+        )
+        self.setParams(
+            inward=inward,
+            timeDelta=timeDelta,
+            mesh=mesh,
+        )
+
+    @property
+    def inward(self) -> bool:
+        """Whether rays are created inward, i.e. opposite to surface normal"""
+        return self._inward
+
+    @inward.setter
+    def inward(self, value: bool) -> None:
+        self._inward = value
+        self.setParam("_outward", -1.0 if value else 1.0)
+
+    @property
+    def mesh(self) -> MeshInstance:
+        """Mesh from which rays are produced"""
+        return self._mesh
+
+    @mesh.setter
+    def mesh(self, value: MeshInstance) -> None:
+        self._mesh = value
+        self.setParams(
+            _verticesAddress=value.vertices,
+            _indicesAddress=value.indices,
+            _triangleCount=value.triangleCount,
+            # GLSL expects column major -> transpose matrices
+            _objToWorld=value.transform.numpy().T,
+            _worldToObj=value.transform.inverse().numpy().T,
+        )
+
+    # source code via descriptor
+    sourceCode = ShaderLoader("camera.mesh.glsl")

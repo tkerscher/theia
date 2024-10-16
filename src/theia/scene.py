@@ -5,6 +5,7 @@ import numpy as np
 import hephaistos as hp
 from hephaistos.glsl import vec2, vec3
 
+import itertools
 import os.path
 import trimesh
 
@@ -35,8 +36,13 @@ def __dir__():
 class Transform:
     """Util class for creating transformation matrices"""
 
-    def __init__(self) -> None:
+    def __init__(self, matrix: Optional[NDArray[np.float32]] = None) -> None:
         self._arr = np.identity(4)
+        if matrix is not None:
+            # check shape
+            if matrix.shape != (3, 4):
+                raise ValueError("matrix must be of shape (3,4)!")
+            self._arr[:3, :] = matrix
 
     def apply(self, points: NDArray) -> NDArray:
         """Applies the transformation to the given points of shape (N,3)"""
@@ -125,148 +131,6 @@ class Transform:
         return self
 
 
-def loadMesh(filepath: str) -> hp.Mesh:
-    """
-    Loads the mesh stored at the given file path and returns a
-    `hephaistos.Mesh` to be used in MeshStore.
-    """
-    result = hp.Mesh()
-    mesh = trimesh.load_mesh(filepath)
-    vertices = np.concatenate((mesh.vertices, mesh.vertex_normals), axis=-1)
-    result.vertices = np.ascontiguousarray(vertices, dtype=np.float32)
-    result.indices = np.ascontiguousarray(mesh.faces, dtype=np.uint32)
-    return result
-
-
-class MeshInstance:
-    """
-    Instance of a mesh by referencing the corresponding one stored in a
-    MeshStore. It can also be assigned a material by name, which will get
-    resolved during compilation of the scene.
-    """
-
-    def __init__(
-        self,
-        instance: hp.GeometryInstance,
-        vertices: int,
-        indices: int,
-        material: Union[str, None],
-    ) -> None:
-        self._instance = instance
-        self._vertices = vertices
-        self._indices = indices
-        self.material = material
-
-    @property
-    def instance(self) -> hp.GeometryInstance:
-        """The underlying geometry instance"""
-        return self._instance
-
-    @property
-    def vertices(self) -> int:
-        """Device address on the gpu where the vertex data is stored"""
-        return self._vertices
-
-    @property
-    def indices(self) -> int:
-        """Device address on the gpu where the index data is stored"""
-        return self._indices
-
-    @property
-    def material(self) -> str:
-        """Name of the material this mesh instance consists of"""
-        return self._material
-
-    @material.setter
-    def material(self, value: str) -> None:
-        self._material = value
-
-    @property
-    def transform(self) -> NDArray[np.float32]:
-        """
-        The 3x4 transformation matrix applied on the underlying mesh to
-        create this instance
-        """
-        return self.instance.transform
-
-    @transform.setter
-    def transform(self, value: ArrayLike) -> None:
-        self.instance.transform = value
-
-
-class MeshStore:
-    """
-    Class managing the lifetime of single meshes allowing to reuse them.
-    """
-
-    def __init__(self, meshes: dict[str, Union[hp.Mesh, str]]) -> None:
-        """
-        Creates a new MeshStore managing the lifetime of meshes.
-
-        Parameters
-        ----------
-        meshes: dict of named meshes (hephaistos.Mesh or filepath)
-        """
-        # load all meshes that are specified as file paths
-        self._keys = list(meshes.keys())
-        values = [loadMesh(v) if type(v) == str else v for v in meshes.values()]
-        # pass meshes to hephaistos to build blas
-        self._store = hp.GeometryStore(values)
-
-    def createInstance(
-        self,
-        key: str,
-        material: Union[str, None] = None,
-        *,
-        transform: Union[Transform, None] = None,
-        detectorId: int = 0,
-        scale: Union[float, None] = None,
-    ) -> MeshInstance:
-        """
-        Creates and returns a new MeshInstance of a mesh specified via its name.
-        Optionally, a material can be assigned to the new instance.
-
-        Parameters
-        ----------
-        key: str
-            Name of the mesh as specified during init of store
-        material: Optional[str], default = None
-            Name of the assigned material. The actual material will get resolved
-            during compilation of the scene.
-        transform: Optional[Transform], default = None
-            The transformation to apply on the instance.
-            If None, identity transformation is applied.
-        detectorId: int, default = 0
-            Id of the instance if used as a detector/target.
-        scale: float | None, default=None
-            Dimension of the vertex positions. Defaults to 1m.
-
-        Returns
-        -------
-        instance: MeshInstance
-            The new created instance
-        """
-        idx = self._keys.index(key)
-        geo = self._store.geometries[idx]
-        instance = MeshInstance(
-            self._store.createInstance(idx),
-            geo.vertices_address,
-            geo.indices_address,
-            material,
-        )
-        instance.instance.customIndex = detectorId
-        if scale is None:
-            # default to 1m
-            scale = 1.0 * u.m
-        if scale != 1.0 or transform is not None:
-            trafo = Transform.Scale(scale, scale, scale)
-            if transform is not None:
-                # scale first
-                trafo = transform @ trafo
-            instance.transform = trafo.numpy()
-        return instance
-
-
 class RectBBox:
     """
     Rectangular bounding box defined by two opposite corners
@@ -335,6 +199,19 @@ class RectBBox:
         self._glsl.upperCorner.y = value[1]
         self._glsl.upperCorner.z = value[2]
 
+    def transform(self, trafo: Transform) -> RectBBox:
+        """
+        Returns new boundary box encompassing this one after applying the given
+        transformation to it.
+        """
+        # apply trafo to all corners and use them to get new one
+        x = [self.upperCorner[0], self.lowerCorner[0]]
+        y = [self.upperCorner[1], self.lowerCorner[1]]
+        z = [self.upperCorner[2], self.lowerCorner[2]]
+        corners = np.array(list(itertools.product(x, y, z)))
+        corners = trafo.apply(corners)
+        return RectBBox(tuple(corners.min(0)), tuple(corners.max(0)))
+
 
 class SphereBBox:
     """
@@ -387,6 +264,175 @@ class SphereBBox:
     @radius.setter
     def radius(self, value: float) -> None:
         self._glsl.radius = value
+
+
+def loadMesh(filepath: str) -> hp.Mesh:
+    """
+    Loads the mesh stored at the given file path and returns a
+    `hephaistos.Mesh` to be used in MeshStore.
+    """
+    result = hp.Mesh()
+    mesh = trimesh.load_mesh(filepath)
+    vertices = np.concatenate((mesh.vertices, mesh.vertex_normals), axis=-1)
+    result.vertices = np.ascontiguousarray(vertices, dtype=np.float32)
+    result.indices = np.ascontiguousarray(mesh.faces, dtype=np.uint32)
+    return result
+
+
+class MeshInstance:
+    """
+    Instance of a mesh by referencing the corresponding one stored in a
+    MeshStore. It can also be assigned a material by name, which will get
+    resolved during compilation of the scene.
+    """
+
+    def __init__(
+        self,
+        instance: hp.GeometryInstance,
+        vertices: int,
+        indices: int,
+        triangleCount: int,
+        bbox: RectBBox,
+        material: str,
+    ) -> None:
+        self._instance = instance
+        self._vertices = vertices
+        self._indices = indices
+        self._triangleCount = triangleCount
+        self._localBbox = bbox
+        self._bbox = self.localBBox.transform(self.transform)
+        self.material = material
+
+    @property
+    def bbox(self) -> RectBBox:
+        """Rectangular boundary box encompassing the mesh after transformation"""
+        return self._bbox
+
+    @property
+    def localBBox(self) -> RectBBox:
+        """Rectangular boundary box encompassing the mesh before transformation."""
+        return self._localBbox
+
+    @property
+    def instance(self) -> hp.GeometryInstance:
+        """The underlying geometry instance"""
+        return self._instance
+
+    @property
+    def vertices(self) -> int:
+        """Device address on the gpu where the vertex data is stored"""
+        return self._vertices
+
+    @property
+    def indices(self) -> int:
+        """Device address on the gpu where the index data is stored"""
+        return self._indices
+
+    @property
+    def material(self) -> str:
+        """Name of the material this mesh instance consists of"""
+        return self._material
+
+    @material.setter
+    def material(self, value: str) -> None:
+        self._material = value
+
+    @property
+    def triangleCount(self) -> int:
+        """Amount of triangles the referenced Mesh consists of"""
+        return self._triangleCount
+
+    @property
+    def transform(self) -> Transform:
+        """
+        The 3x4 transformation matrix applied on the underlying mesh to
+        create this instance
+        """
+        return Transform(self.instance.transform)
+
+    @transform.setter
+    def transform(self, value: ArrayLike) -> None:
+        self.instance.transform = value
+        self._bbox = self.localBBox.transform(self.transform)
+
+
+class MeshStore:
+    """
+    Class managing the lifetime of single meshes allowing to reuse them.
+    """
+
+    def __init__(self, meshes: dict[str, Union[hp.Mesh, str]]) -> None:
+        """
+        Creates a new MeshStore managing the lifetime of meshes.
+
+        Parameters
+        ----------
+        meshes: dict of named meshes (hephaistos.Mesh or filepath)
+        """
+        # load all meshes that are specified as file paths
+        self._keys = list(meshes.keys())
+        values = [loadMesh(v) if type(v) == str else v for v in meshes.values()]
+        self._triangleCounts = [len(mesh.indices) for mesh in values]
+        _lower = [tuple(mesh.vertices[:, :3].min(0)) for mesh in values]
+        _upper = [tuple(mesh.vertices[:, :3].max(0)) for mesh in values]
+        self._bbox = [RectBBox(l, u) for l, u in zip(_lower, _upper)]
+        # pass meshes to hephaistos to build blas
+        self._store = hp.GeometryStore(values)
+
+    def createInstance(
+        self,
+        key: str,
+        material: str,
+        *,
+        transform: Union[Transform, None] = None,
+        detectorId: int = 0,
+        scale: Union[float, None] = None,
+    ) -> MeshInstance:
+        """
+        Creates and returns a new MeshInstance of a mesh specified via its name.
+        Optionally, a material can be assigned to the new instance.
+
+        Parameters
+        ----------
+        key: str
+            Name of the mesh as specified during init of store
+        material: Optional[str], default = None
+            Name of the assigned material. The actual material will get resolved
+            during compilation of the scene.
+        transform: Optional[Transform], default = None
+            The transformation to apply on the instance.
+            If None, identity transformation is applied.
+        detectorId: int, default = 0
+            Id of the instance if used as a detector/target.
+        scale: float | None, default=None
+            Dimension of the vertex positions. Defaults to 1m.
+
+        Returns
+        -------
+        instance: MeshInstance
+            The new created instance
+        """
+        idx = self._keys.index(key)
+        geo = self._store.geometries[idx]
+        instance = MeshInstance(
+            self._store.createInstance(idx),
+            geo.vertices_address,
+            geo.indices_address,
+            self._triangleCounts[idx],
+            self._bbox[idx],
+            material,
+        )
+        instance.instance.customIndex = detectorId
+        if scale is None:
+            # default to 1m
+            scale = 1.0 * u.m
+        if scale != 1.0 or transform is not None:
+            trafo = Transform.Scale(scale, scale, scale)
+            if transform is not None:
+                # scale first
+                trafo = transform @ trafo
+            instance.transform = trafo.numpy()
+        return instance
 
 
 class Scene:

@@ -24,9 +24,6 @@
 
 layout(local_size_x = BLOCK_SIZE) in;
 
-//Top level acceleration structure containing the scene
-uniform accelerationStructureEXT tlas;
-
 #include "ray.propagate.glsl"
 #include "scene.intersect.glsl"
 #include "scene.traverse.backward.glsl"

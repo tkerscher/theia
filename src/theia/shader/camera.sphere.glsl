@@ -78,7 +78,7 @@ CameraSample sampleCamera(float wavelength, uint idx, inout uint dim) {
     //derive ray pos from normal
     vec3 rayPos = cameraRayParams.radius * normal + cameraRayParams.position;
 
-    return CameraSample(rayPos, normal, cameraRayParams.contribBwd);
+    return createCameraSample(rayPos, normal, cameraRayParams.contribBwd);
 }
 
 CameraRay createCameraRay(CameraSample cam, vec3 lightDir, float wavelength) {

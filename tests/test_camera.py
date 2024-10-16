@@ -7,6 +7,7 @@ from theia.util import createPreamble
 
 import theia.camera
 import theia.light
+import theia.material
 from theia.random import PhiloxRNG, RNG
 from theia.scene import Transform
 import theia.units as u
@@ -15,6 +16,8 @@ from ctypes import *
 from hephaistos.glsl import mat4, vec3, vec4
 from numpy.lib.recfunctions import structured_to_unstructured
 from numpy.typing import NDArray
+
+from common.models import WaterModel
 
 
 class CameraDirectSampler(PipelineStage):
@@ -27,6 +30,8 @@ class CameraDirectSampler(PipelineStage):
             ("samplePos", vec3),
             ("sampleNrm", vec3),
             ("sampleContrib", c_float),
+            ("sampleHitPos", vec3),
+            ("sampleHitNrm", vec3),
             ("rayPos", vec3),
             ("rayDir", vec3),
             ("rayPolRef", vec3),
@@ -46,6 +51,8 @@ class CameraDirectSampler(PipelineStage):
             ("samplePos", vec3),
             ("sampleNrm", vec3),
             ("sampleContrib", c_float),
+            ("sampleHitPos", vec3),
+            ("sampleHitNrm", vec3),
             ("rayPos", vec3),
             ("rayDir", vec3),
             ("rayContrib", c_float),
@@ -573,3 +580,76 @@ def test_pointCamera(polarized: bool):
         assert np.abs(np.square(rays["polarizationRef"]).sum(-1) - 1.0).max() < 1e-6
         assert (rays["hitDirection"] * rays["hitPolRef"]).sum(-1).max() < 1e-6
         assert np.abs(np.square(rays["hitPolRef"]).sum(-1) - 1.0).max() < 1e-6
+
+
+@pytest.mark.parametrize(
+    "polarized,inward", [(False, False), (False, True), (True, False)]
+)
+def test_meshCamera(polarized: bool, inward: bool):
+    N = 32 * 1024
+    t0 = 12.5
+
+    # create materials
+    water = WaterModel().createMedium()
+    mat = theia.material.Material("mat", None, water)
+    matStore = theia.material.MaterialStore([mat])
+    # create scene
+    store = theia.scene.MeshStore(
+        {"cube": "assets/cube.ply", "sphere": "assets/sphere.stl"}
+    )
+    t1 = (
+        theia.scene.Transform.Scale(3.5, 2.0, 0.5)
+        .rotate(1.0, 1.0, 1.0, 2.0)
+        .translate(12.5, -5.0, 10.0)
+    )
+    t2 = (
+        theia.scene.Transform.Scale(0.5, 4.0, 3.0)
+        .rotate(0.0, -1.0, 0.5, 1.0)
+        .translate(0.5, 10.0, -4.0)
+    )
+    c1 = store.createInstance("cube", "mat", transform=t1)
+    c2 = store.createInstance("cube", "mat", transform=t2)
+    scene = theia.scene.Scene(
+        [c1, c2], matStore.material, medium=matStore.media["water"]
+    )
+
+    # create camera and sampler
+    photon = theia.light.ConstWavelengthSource()
+    camera = theia.camera.MeshCameraRaySource(c2, timeDelta=t0, inward=inward)
+    philox = theia.random.PhiloxRNG(key=0xC0FFEE)
+    sampler = theia.camera.CameraRaySampler(
+        camera, photon, N, rng=philox, polarized=polarized
+    )
+    # run
+    runPipeline([philox, photon, camera, sampler])
+
+    # check result
+    r = sampler.cameraView(0)
+    assert np.abs(np.abs(r["hitPosition"]).max(1) - 1.0).max() < 1e-6
+    assert np.allclose(r["hitPosition"].min(0), (-1, -1, -1))
+    assert np.allclose(r["hitPosition"].max(0), (1, 1, 1))
+    assert np.allclose(np.square(r["hitNormal"]).sum(-1), 1.0)
+    assert np.abs(np.abs(r["hitNormal"]).max(1) - 1.0).max() < 1e-5
+    hit_cos = np.multiply(r["hitNormal"], r["hitDirection"]).sum(-1)
+    assert hit_cos.min() >= -1.0 and hit_cos.min() < -0.999
+    assert hit_cos.max() <= 0.0 and hit_cos.max() > -0.001
+    # if everything's fine, the dot product of hitPos and hitNrm should always
+    # be one
+    pos_dot = np.multiply(r["hitNormal"], r["hitPosition"]).sum(-1)
+    # depending on inward, we either want pos_dot to be 1.0 or -1.0
+    pos_dot -= -1.0 if inward else 1.0
+    assert np.abs(pos_dot).max() < 1e-5
+    assert np.allclose(r["timeDelta"], t0)
+    # larger error since we offset the ray position to prevent self intersection
+    assert np.abs(t2.apply(r["hitPosition"]) - r["position"]).max() < 3e-4
+    expDir = t2.applyVec(r["hitDirection"])
+    expDir /= np.sqrt(np.square(expDir).sum(-1))[:, None]  # normalize
+    assert np.abs(expDir + r["direction"]).max() < 5e-7
+    if polarized:
+        # polarization ref was automatically generated, so just test its properties
+        assert (r["direction"] * r["polarizationRef"]).sum(-1).max() < 1e-6
+        assert np.abs(np.square(r["polarizationRef"]).sum(-1) - 1.0).max() < 1e-6
+        # check if polRef is perpendicular to plane of scattering
+        inc = np.cross(r["hitNormal"], r["hitDirection"])
+        inc /= np.sqrt(np.square(inc).sum(-1))[:, None]
+        assert np.abs(np.abs((r["hitPolRef"] * inc).sum(-1)) - 1.0).max() < 1e-6

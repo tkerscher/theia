@@ -18,6 +18,5 @@ struct Geometry{
     Index indices;      // &indices[0]
     Material material;
 };
-layout(scalar) buffer Geometries{ Geometry geometries[]; };
 
 #endif

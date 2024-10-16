@@ -27,9 +27,6 @@
 
 layout(local_size_x = BLOCK_SIZE) in;
 
-//Top level acceleration structure containing the scene
-uniform accelerationStructureEXT tlas;
-
 //disable shadow rays in scene traverse
 #define SCENE_TRAVERSE_FORWARD_DISABLE_MIS 1
 #define SCENE_TRAVERSE_BACKWARD_DISABLE_SHADOW_RAYS 1

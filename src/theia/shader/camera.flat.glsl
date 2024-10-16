@@ -40,6 +40,7 @@ CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
     vec3 hitPolRef, polRef;
     #ifdef POLARIZATION
     hitPolRef = perpendicularToZand(localDir);
+    //NOTE: This only works because objToWorld is orthogonal
     polRef = objToWorld * hitPolRef;
     #endif
 
@@ -71,7 +72,7 @@ CameraSample sampleCamera(float wavelength, uint idx, inout uint dim) {
     //calculate contribution
     float contrib = cameraRayParams.width * cameraRayParams.height;
     //return sample
-    return CameraSample(rayPos, rayNrm, contrib);
+    return createCameraSample(rayPos, rayNrm, contrib);
 }
 
 CameraRay createCameraRay(CameraSample cam, vec3 lightDir, float wavelength) {

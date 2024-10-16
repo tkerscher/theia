@@ -10,6 +10,11 @@ struct CameraSample {
     vec3 normal;
 
     float contrib;
+
+    //Can be used as cache in camera sampling
+    //May not be used outside camera
+    vec3 hitPosition;
+    vec3 hitNormal;
 };
 
 struct CameraHit {
@@ -36,6 +41,36 @@ struct CameraRay {
 
     CameraHit hit;
 };
+
+CameraSample createCameraSample(
+    vec3 position,
+    vec3 normal,
+    float contrib,
+    vec3 hitPosition,
+    vec3 hitNormal
+) {
+    return CameraSample(
+        position,
+        normal,
+        contrib,
+        hitPosition,
+        hitNormal
+    );
+}
+
+CameraSample createCameraSample(
+    vec3 position,
+    vec3 normal,
+    float contrib
+) {
+    return CameraSample(
+        position,
+        normal,
+        contrib,
+        vec3(0.0),
+        vec3(0.0)
+    );
+}
 
 CameraRay createCameraRay(
     vec3 rayPosition,

@@ -4,7 +4,11 @@
 #include "math.glsl"
 #include "ray.glsl"
 #include "result.glsl"
-#include "scene.glsl"
+#include "scene.types.glsl"
+
+layout(scalar) buffer Geometries{ Geometry geometries[]; };
+//Top level acceleration structure containing the scene
+uniform accelerationStructureEXT tlas;
 
 /**
  * Structure describing the intersection of a ray query with geometry.
