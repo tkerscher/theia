@@ -3,22 +3,22 @@
 
 #include "math.glsl"
 
-layout(scalar) uniform CameraRayParams {
+layout(scalar) uniform CameraParams {
     float width;
     float height; //length
     vec3 offset;
     mat3 view;
-} cameraRayParams;
+} cameraParams;
 
 CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
-    mat3 objToWorld = transpose(cameraRayParams.view); // inverse, since it's orthogonal
+    mat3 objToWorld = transpose(cameraParams.view); // inverse, since it's orthogonal
     //sample position on detector
     vec2 u = random2D(idx, dim);
-    float localX = cameraRayParams.width * (u.x - 0.5);
-    float localY = cameraRayParams.height * (u.y - 0.5);
+    float localX = cameraParams.width * (u.x - 0.5);
+    float localY = cameraParams.height * (u.y - 0.5);
     vec3 localPos = vec3(localX, localY, 0.0);
     //transform to sceen coord space
-    vec3 rayPos = objToWorld * localPos + cameraRayParams.offset;
+    vec3 rayPos = objToWorld * localPos + cameraParams.offset;
 
     //sample direction
     u = random2D(idx, dim);
@@ -34,7 +34,7 @@ CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
     //flip local dir as it should hit the detector
     localDir *= -1.0;
     //calculate contribution
-    float contrib = TWO_PI * cameraRayParams.width * cameraRayParams.height * cos_theta;
+    float contrib = TWO_PI * cameraParams.width * cameraParams.height * cos_theta;
 
     //polarization
     vec3 hitPolRef, polRef;
@@ -60,25 +60,25 @@ CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
 }
 
 CameraSample sampleCamera(float wavelength, uint idx, inout uint dim) {
-    mat3 objToWorld = transpose(cameraRayParams.view); // inverse, since it's orthogonal
+    mat3 objToWorld = transpose(cameraParams.view); // inverse, since it's orthogonal
     //sample position on detector
     vec2 u = random2D(idx, dim);
-    float localX = cameraRayParams.width * (u.x - 0.5);
-    float localY = cameraRayParams.height * (u.y - 0.5);
+    float localX = cameraParams.width * (u.x - 0.5);
+    float localY = cameraParams.height * (u.y - 0.5);
     vec3 localPos = vec3(localX, localY, 0.0);
     //transform to sceen coord space
-    vec3 rayPos = objToWorld * localPos + cameraRayParams.offset;
-    vec3 rayNrm = transpose(cameraRayParams.view) * vec3(0.0, 0.0, 1.0);
+    vec3 rayPos = objToWorld * localPos + cameraParams.offset;
+    vec3 rayNrm = transpose(cameraParams.view) * vec3(0.0, 0.0, 1.0);
     //calculate contribution
-    float contrib = cameraRayParams.width * cameraRayParams.height;
+    float contrib = cameraParams.width * cameraParams.height;
     //return sample
     return createCameraSample(rayPos, rayNrm, contrib);
 }
 
 CameraRay createCameraRay(CameraSample cam, vec3 lightDir, float wavelength) {
     //get local coordinates
-    vec3 localPos = cameraRayParams.view * (cam.position - cameraRayParams.offset);
-    vec3 localDir = cameraRayParams.view * lightDir;
+    vec3 localPos = cameraParams.view * (cam.position - cameraParams.offset);
+    vec3 localDir = cameraParams.view * lightDir;
     //calculate contribution
     float cos_theta = -localDir.z; //dot(-localDir, vec3(0.0, 0.0, 1.0));
     float contrib = cam.contrib * cos_theta;
@@ -89,7 +89,7 @@ CameraRay createCameraRay(CameraSample cam, vec3 lightDir, float wavelength) {
     vec3 hitPolRef, polRef;
     #ifdef POLARIZATION
     hitPolRef = perpendicularToZand(localDir);
-    polRef = transpose(cameraRayParams.view) * hitPolRef;
+    polRef = transpose(cameraParams.view) * hitPolRef;
     #endif
 
     //assemble camera ray

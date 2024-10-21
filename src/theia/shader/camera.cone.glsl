@@ -3,17 +3,17 @@
 
 #include "math.glsl"
 
-layout(scalar) uniform CameraRayParams {
+layout(scalar) uniform CameraParams {
     vec3 conePos;
     vec3 coneDir;
     float cosOpeningAngle;
-} cameraRayParams;
+} cameraParams;
 
 CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
     //sample cone
     vec2 u = random2D(idx, dim);
     float phi = TWO_PI * u.x;
-    float cos_theta = 1.0 - cameraRayParams.cosOpeningAngle * u.y;
+    float cos_theta = 1.0 - cameraParams.cosOpeningAngle * u.y;
     float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
     //construct local ray dir
     vec3 localDir = vec3(
@@ -22,7 +22,7 @@ CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
         cos_theta
     );
     //convert to global space
-    mat3 trafo = createLocalCOSY(cameraRayParams.coneDir);
+    mat3 trafo = createLocalCOSY(cameraParams.coneDir);
     vec3 rayDir = trafo * localDir;
     //flip local dir as it should point towards the detector
     localDir *= -1.0;
@@ -36,11 +36,11 @@ CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
 
     //assemble camera ray
     return createCameraRay(
-        cameraRayParams.conePos,                    //ray position
+        cameraParams.conePos,                    //ray position
         rayDir,                                     //ray direction
         polRef,                                     //ray polRef
         mat4(1.0),                                  //ray mueller matrix
-        TWO_PI * cameraRayParams.cosOpeningAngle,   //contrib
+        TWO_PI * cameraParams.cosOpeningAngle,   //contrib
         0.0,                                        //time delta
         vec3(0.0, 0.0, 0.0),                        //hit position
         localDir,                                   //hit direction
@@ -51,19 +51,19 @@ CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
 
 CameraSample sampleCamera(float wavelength, uint idx, uint dim) {
     return createCameraSample(
-        cameraRayParams.conePos,
-        cameraRayParams.coneDir,
+        cameraParams.conePos,
+        cameraParams.coneDir,
         1.0
     );
 }
 
 CameraRay createCameraRay(CameraSample cam, vec3 lightDir, float wavelength) {
     //check if ray is within opening cone
-    float cosAngle = dot(cameraRayParams.coneDir, -lightDir);
-    float contrib = float(cosAngle >= 1.0 - cameraRayParams.cosOpeningAngle);
+    float cosAngle = dot(cameraParams.coneDir, -lightDir);
+    float contrib = float(cosAngle >= 1.0 - cameraParams.cosOpeningAngle);
 
     //convert lightDir to local space
-    mat3 trafo = createLocalCOSY(cameraRayParams.coneDir);
+    mat3 trafo = createLocalCOSY(cameraParams.coneDir);
     vec3 hitDir = transpose(trafo) * lightDir;
 
     //create reference frame
@@ -75,7 +75,7 @@ CameraRay createCameraRay(CameraSample cam, vec3 lightDir, float wavelength) {
 
     //assemble camera ray
     return createCameraRay(
-        cameraRayParams.conePos,    //ray position
+        cameraParams.conePos,    //ray position
         -lightDir,                  //ray direction
         polRef,                     //polarization reference frame
         mat4(1.0),                  //mueller matrix

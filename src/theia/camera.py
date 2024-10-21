@@ -17,16 +17,17 @@ from theia.util import ShaderLoader, compileShader, createPreamble
 from typing import Callable, Dict, List, Optional, Set, Tuple, Type, Union
 
 __all__ = [
+    "Camera",
+    "CameraRayItem",
     "CameraRaySampler",
-    "CameraRaySource",
-    "ConeCameraRaySource",
-    "FlatCameraRaySource",
-    "HostCameraRaySource",
-    "MeshCameraRaySource",
-    "PencilCameraRaySource",
-    "PointCameraRaySource",
+    "ConeCamera",
+    "FlatCamera",
+    "HostCamera",
+    "MeshCamera",
+    "PencilCamera",
+    "PointCamera",
     "PolarizedCameraRayItem",
-    "SphereCameraRaySource",
+    "SphereCamera",
 ]
 
 
@@ -34,13 +35,14 @@ def __dir__():
     return __all__
 
 
-class CameraRaySource(SourceCodeMixin):
+class Camera(SourceCodeMixin):
     """
-    Base class for camera ray sources used in bidirectional path tracing.
+    Base class for camera producing camera rays and samples used in backward,
+    bidirectional and direct tracing.
     Running this stage inside a pipeline updates its usage in following stages.
     """
 
-    name = "Camera Ray Source"
+    name = "Camera"
 
     def __init__(
         self,
@@ -101,12 +103,12 @@ class PolarizedCameraRayItem(Structure):
 
 class CameraRaySampler(PipelineStage):
     """
-    Utility class for sampling a `CameraRaySource` and storing the result in a
-    queue.
+    Utility class for sampling a camera rays from the given `Camera` and
+    storing the result in a queue.
 
     Parameters
     ----------
-    camera: CameraRaySource
+    camera: Camera
         Camera to sample
     wavelengthSource: WavelengthSource
         Source to sample wavelengths from
@@ -141,7 +143,7 @@ class CameraRaySampler(PipelineStage):
 
     def __init__(
         self,
-        camera: CameraRaySource,
+        camera: Camera,
         wavelengthSource: WavelengthSource,
         capacity: int,
         *,
@@ -211,7 +213,7 @@ class CameraRaySampler(PipelineStage):
         return self._batchSize
 
     @property
-    def camera(self) -> CameraRaySource:
+    def camera(self) -> Camera:
         """Camera that is sampled"""
         return self._camera
 
@@ -300,9 +302,9 @@ class CameraRaySampler(PipelineStage):
         return cmds
 
 
-class HostCameraRaySource(CameraRaySource):
+class HostCamera(Camera):
     """
-    Camera ray source passing samples from the CPU to the GPU.
+    Camera passing camera ray samples from the CPU to the GPU.
 
     Parameters
     ----------
@@ -310,7 +312,7 @@ class HostCameraRaySource(CameraRaySource):
         Maximum number of samples that can be drawn per run
     polarized: bool, default=False
         Whether the host also provides polarization information
-    updateFn: (HostCameraRaySource, int) -> None | None, default=None
+    updateFn: (HostCamera, int) -> None | None, default=None
         Optional update function called before the pipeline processes a task.
         `i` is the i-th configuration the update should affect.
         Can be used to stream in new samples on demand.
@@ -321,7 +323,7 @@ class HostCameraRaySource(CameraRaySource):
     which gets ignored.
     """
 
-    name = "Host Camera Ray Source"
+    name = "Host Camera"
 
     _sourceCode = ShaderLoader("camera.host.glsl")
 
@@ -330,7 +332,7 @@ class HostCameraRaySource(CameraRaySource):
         capacity: int,
         *,
         polarized: bool = False,
-        updateFn: Optional[Callable[[HostCameraRaySource, int], None]] = None,
+        updateFn: Optional[Callable[[HostCamera, int], None]] = None,
     ) -> None:
         super().__init__(nRNGSamples=0, supportDirect=False)
         # save params
@@ -388,7 +390,7 @@ class HostCameraRaySource(CameraRaySource):
         return [hp.updateTensor(self.buffer(i), self._tensor), *super().run(i)]
 
 
-class PencilCameraRaySource(CameraRaySource):
+class PencilCamera(Camera):
     """
     Sampler outputting a constant camera ray with independent hit
     parameterization.
@@ -443,7 +445,7 @@ class PencilCameraRaySource(CameraRaySource):
 
     name = "Pencil Camera Beam"
 
-    class CameraRayParams(Structure):
+    class CameraParams(Structure):
         _fields_ = [
             ("rayPosition", vec3),
             ("rayDirection", vec3),
@@ -470,7 +472,7 @@ class PencilCameraRaySource(CameraRaySource):
         super().__init__(
             nRNGSamples=0,
             supportDirect=False,
-            params={"CameraRayParams": self.CameraRayParams},
+            params={"CameraParams": self.CameraParams},
         )
         # create polarization reference frame if not specified
         if polarizationRef is None:
@@ -506,10 +508,10 @@ class PencilCameraRaySource(CameraRaySource):
     sourceCode = ShaderLoader("camera.pencil.glsl")
 
 
-class FlatCameraRaySource(CameraRaySource):
+class FlatCamera(Camera):
     """
-    Camera ray source simulating a rectangle as detector surface, i.e. samples
-    first a point on the rectangle followed by a random direction in the upper
+    Camera simulating a rectangle as detector surface, i.e. samples first a
+    point on the rectangle followed by a random direction in the upper
     hemisphere.
 
     In the local coordinates system of hits the rectangle lies in the xy plane
@@ -557,9 +559,9 @@ class FlatCameraRaySource(CameraRaySource):
     `direction` and `up` may not be parallel.
     """
 
-    name = "Flat Camera Ray Source"
+    name = "Flat Camera"
 
-    class CameraRayParams(Structure):
+    class CameraParams(Structure):
         _fields_ = [
             ("width", c_float),
             ("length", c_float),
@@ -580,7 +582,7 @@ class FlatCameraRaySource(CameraRaySource):
             nRNGSamples=4,
             nRNGDirect=2,
             supportDirect=True,
-            params={"CameraRayParams": self.CameraRayParams},
+            params={"CameraParams": self.CameraParams},
             extra={"direction", "up"},
         )
         # save params
@@ -626,7 +628,7 @@ class FlatCameraRaySource(CameraRaySource):
         self.setParam("_view", view)
 
 
-class ConeCameraRaySource(CameraRaySource):
+class ConeCamera(Camera):
     """
     Sampling camera rays from a cone positioned at a single point.
 
@@ -649,9 +651,9 @@ class ConeCameraRaySource(CameraRaySource):
         Cosine of the cones opening angle
     """
 
-    name = "Cone Camera Ray Source"
+    name = "Cone Camera"
 
-    class CameraRayParams(Structure):
+    class CameraParams(Structure):
         _fields_ = [
             ("position", vec3),
             ("direction", vec3),
@@ -669,7 +671,7 @@ class ConeCameraRaySource(CameraRaySource):
             nRNGSamples=2,
             nRNGDirect=0,
             supportDirect=True,
-            params={"CameraRayParams": self.CameraRayParams},
+            params={"CameraParams": self.CameraParams},
         )
         self.setParams(
             position=position,
@@ -681,10 +683,11 @@ class ConeCameraRaySource(CameraRaySource):
     sourceCode = ShaderLoader("camera.cone.glsl")
 
 
-class SphereCameraRaySource(CameraRaySource):
+class SphereCamera(Camera):
     """
-    Camera ray source simulating an isotropic spherical detector of given
-    radius. Always uses a unit sphere in object space regardless of size.
+    Camera simulating an isotropic spherical detector of given radius accepting
+    light from all visible directions at any position on it. Always uses a unit
+    sphere in object space regardless of size.
 
     Parameters
     ----------
@@ -710,9 +713,9 @@ class SphereCameraRaySource(CameraRaySource):
     (positive) or inward (negative).
     """
 
-    name = "Spherical Camera Ray Source"
+    name = "Spherical Camera"
 
-    class CameraRayParams(Structure):
+    class CameraParams(Structure):
         _fields_ = [
             ("position", vec3),
             ("radius", c_float),
@@ -732,7 +735,7 @@ class SphereCameraRaySource(CameraRaySource):
             nRNGSamples=4,
             nRNGDirect=2,
             supportDirect=True,
-            params={"CameraRayParams": self.CameraRayParams},
+            params={"CameraParams": self.CameraParams},
         )
         self.setParams(position=position, radius=radius, timeDelta=timeDelta)
 
@@ -747,10 +750,9 @@ class SphereCameraRaySource(CameraRaySource):
         self.setParam("_contribBwd", contribBwd)
 
 
-class PointCameraRaySource(CameraRaySource):
+class PointCamera(Camera):
     """
-    Camera ray source producing rays isotropic in all directions from a single
-    point.
+    Camera producing rays isotropic in all directions from a single point.
 
     Parameters
     ----------
@@ -767,9 +769,9 @@ class PointCameraRaySource(CameraRaySource):
         Time offset applied to camera rays.
     """
 
-    name = "Point Camera Ray Source"
+    name = "Point Camera"
 
-    class CameraRayParams(Structure):
+    class CameraParams(Structure):
         _fields_ = [
             ("position", vec3),
             ("timeDelta", c_float),
@@ -784,7 +786,7 @@ class PointCameraRaySource(CameraRaySource):
         super().__init__(
             nRNGSamples=2,
             supportDirect=False,
-            params={"CameraRayParams": self.CameraRayParams},
+            params={"CameraParams": self.CameraParams},
         )
         self.setParams(position=position, timeDelta=timeDelta)
 
@@ -792,7 +794,7 @@ class PointCameraRaySource(CameraRaySource):
     sourceCode = ShaderLoader("camera.point.glsl")
 
 
-class MeshCameraRaySource(CameraRaySource):
+class MeshCamera(Camera):
     """
     Camera producing rays at the surface of the given mesh.
 
@@ -823,9 +825,9 @@ class MeshCameraRaySource(CameraRaySource):
     direction regardless of the outwards direction of the Mesh.
     """
 
-    name = "Mesh Camera Ray Source"
+    name = "Mesh Camera"
 
-    class CameraRayParams(Structure):
+    class CameraParams(Structure):
         _fields_ = [
             ("_verticesAddress", buffer_reference),
             ("_indicesAddress", buffer_reference),
@@ -847,7 +849,7 @@ class MeshCameraRaySource(CameraRaySource):
             nRNGSamples=5,
             nRNGDirect=3,
             supportDirect=True,
-            params={"CameraRayParams": self.CameraRayParams},
+            params={"CameraParams": self.CameraParams},
             extra={"inward", "mesh"},
         )
         self.setParams(

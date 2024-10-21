@@ -1,7 +1,7 @@
 #ifndef _INCLUDE_CAMERARAYSOURCE_PENCIL
 #define _INCLUDE_CAMERARAYSOURCE_PENCIL
 
-layout(scalar) uniform CameraRayParams {
+layout(scalar) uniform CameraParams {
     vec3 rayPosition;
     vec3 rayDirection;
     
@@ -13,20 +13,20 @@ layout(scalar) uniform CameraRayParams {
     vec3 hitDirection;
     vec3 hitNormal;
     vec3 hitPolRef;
-} cameraRayParams;
+} cameraParams;
 
 CameraRay sampleCameraRay(float wavelength, uint idx, uint dim) {
     return createCameraRay(
-        cameraRayParams.rayPosition,
-        cameraRayParams.rayDirection,
-        cameraRayParams.rayPolRef,
+        cameraParams.rayPosition,
+        cameraParams.rayDirection,
+        cameraParams.rayPolRef,
         mat4(1.0),
         1.0,
-        cameraRayParams.timeDelta,
-        cameraRayParams.hitPosition,
-        cameraRayParams.hitDirection,
-        cameraRayParams.hitNormal,
-        cameraRayParams.hitPolRef
+        cameraParams.timeDelta,
+        cameraParams.hitPosition,
+        cameraParams.hitDirection,
+        cameraParams.hitNormal,
+        cameraParams.hitPolRef
     );
 }
 

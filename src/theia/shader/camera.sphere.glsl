@@ -3,7 +3,7 @@
 
 #include "math.glsl"
 
-layout(scalar) uniform CameraRayParams {
+layout(scalar) uniform CameraParams {
     vec3 position;
     float radius;
 
@@ -12,7 +12,7 @@ layout(scalar) uniform CameraRayParams {
     //constant factor calculated on cpu
     float contribFwd;
     float contribBwd;
-} cameraRayParams;
+} cameraParams;
 
 CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
     //sample normal
@@ -26,7 +26,7 @@ CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
         cos_theta
     );
     //derive ray pos from normal
-    vec3 rayPos = cameraRayParams.radius * normal + cameraRayParams.position;
+    vec3 rayPos = cameraParams.radius * normal + cameraParams.position;
 
     //sample direction
     u = random2D(idx, dim);
@@ -44,7 +44,7 @@ CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
     //local dir is opposite (hits sphere)
     vec3 localDir = -rayDir;
     
-    float contrib = cos_theta * cameraRayParams.contribFwd;
+    float contrib = cos_theta * cameraParams.contribFwd;
 
     //create polarization reference frame in plane of incidence
     vec3 polRef = perpendicularTo(localDir, normal);
@@ -56,7 +56,7 @@ CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
         polRef,                     //ray polRef
         mat4(1.0),                  //ray mueller matrix
         contrib,                    //contribution
-        cameraRayParams.timeDelta,  //time delta
+        cameraParams.timeDelta,  //time delta
         normal,                     //hit pos on unit sphere
         localDir,                   //local dir (opposite dir than normal)
         normal,                     //normal on unit sphere
@@ -76,9 +76,9 @@ CameraSample sampleCamera(float wavelength, uint idx, inout uint dim) {
         cos_theta
     );
     //derive ray pos from normal
-    vec3 rayPos = cameraRayParams.radius * normal + cameraRayParams.position;
+    vec3 rayPos = cameraParams.radius * normal + cameraParams.position;
 
-    return createCameraSample(rayPos, normal, cameraRayParams.contribBwd);
+    return createCameraSample(rayPos, normal, cameraParams.contribBwd);
 }
 
 CameraRay createCameraRay(CameraSample cam, vec3 lightDir, float wavelength) {
@@ -97,7 +97,7 @@ CameraRay createCameraRay(CameraSample cam, vec3 lightDir, float wavelength) {
         polRef,                     //ray polRef
         mat4(1.0),                  //ray mueller matrix
         contrib,                    //contrib
-        cameraRayParams.timeDelta,  //time delta
+        cameraParams.timeDelta,  //time delta
         cam.normal,                 //hit position
         lightDir,                   //hit direction
         cam.normal,                 //hit normal

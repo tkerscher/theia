@@ -13,7 +13,7 @@ from theia.scene import Transform
 import theia.units as u
 
 from ctypes import *
-from hephaistos.glsl import mat4, vec3, vec4
+from hephaistos.glsl import mat4, vec3
 from numpy.lib.recfunctions import structured_to_unstructured
 from numpy.typing import NDArray
 
@@ -64,7 +64,7 @@ class CameraDirectSampler(PipelineStage):
 
     def __init__(
         self,
-        camera: theia.camera.CameraRaySource,
+        camera: theia.camera.Camera,
         capacity: int,
         *,
         rng: RNG,
@@ -124,7 +124,7 @@ def test_cameraRaySource(rng, polarized: bool):
 
     # create camera and sampler
     photons = theia.light.HostWavelengthSource(N)
-    camera = theia.camera.HostCameraRaySource(N, polarized=polarized)
+    camera = theia.camera.HostCamera(N, polarized=polarized)
     sampler = theia.camera.CameraRaySampler(camera, photons, N, polarized=polarized)
 
     # fill input buffer with random numbers
@@ -152,10 +152,10 @@ def test_cameraRaySource(rng, polarized: bool):
 def test_cameraSamplerMismatch():
     photon = theia.light.ConstWavelengthSource()
     with pytest.raises(RuntimeError):
-        camera = theia.camera.HostCameraRaySource(128, polarized=True)
+        camera = theia.camera.HostCamera(128, polarized=True)
         sampler = theia.camera.CameraRaySampler(camera, photon, 128, polarized=False)
     with pytest.raises(RuntimeError):
-        camera = theia.camera.HostCameraRaySource(128, polarized=False)
+        camera = theia.camera.HostCamera(128, polarized=False)
         sampler = theia.camera.CameraRaySampler(camera, photon, 128, polarized=True)
 
 
@@ -174,7 +174,7 @@ def test_pencilCamera(polarized: bool):
 
     # create camera and sampler
     photon = theia.light.ConstWavelengthSource()
-    camera = theia.camera.PencilCameraRaySource(
+    camera = theia.camera.PencilCamera(
         rayPosition=pos,
         rayDirection=dir,
         timeDelta=delta,
@@ -231,7 +231,7 @@ def test_flatCamera(polarized: bool):
 
     # create camera and sampler
     photon = theia.light.ConstWavelengthSource()
-    camera = theia.camera.FlatCameraRaySource(
+    camera = theia.camera.FlatCamera(
         width=width,
         length=length,
         position=camPos,
@@ -301,7 +301,7 @@ def test_flatCamera_direct(shaderUtil, polarized: bool):
     lowerCorner = corners.min(0)
 
     # create camera and sampler
-    camera = theia.camera.FlatCameraRaySource(
+    camera = theia.camera.FlatCamera(
         width=width,
         length=length,
         position=camPos,
@@ -357,7 +357,7 @@ def test_coneCamera(polarized: bool):
 
     # create camera and sampler
     photon = theia.light.ConstWavelengthSource()
-    camera = theia.camera.ConeCameraRaySource(
+    camera = theia.camera.ConeCamera(
         position=pos, direction=dir, cosOpeningAngle=theta
     )
     philox = PhiloxRNG(key=0xC0FFEE)
@@ -399,7 +399,7 @@ def test_coneCamera_direct(shaderUtil, polarized: bool):
 
     # create camera and sampler
     philox = PhiloxRNG(key=0xC0FFEE)
-    camera = theia.camera.ConeCameraRaySource(
+    camera = theia.camera.ConeCamera(
         position=pos, direction=dir, cosOpeningAngle=theta
     )
     sampler = CameraDirectSampler(
@@ -453,7 +453,7 @@ def test_sphericalCamera(polarized: bool):
 
     # create camera and sampler
     photon = theia.light.ConstWavelengthSource()
-    camera = theia.camera.SphereCameraRaySource(
+    camera = theia.camera.SphereCamera(
         position=position, radius=radius, timeDelta=t0
     )
     philox = PhiloxRNG(key=0xC0FFEE)
@@ -501,7 +501,7 @@ def test_sphericalCamera_direct(shaderUtil, polarized: bool):
 
     # create camera and sampler
     philox = PhiloxRNG(key=0xC0FFEE)
-    camera = theia.camera.SphereCameraRaySource(
+    camera = theia.camera.SphereCamera(
         position=position, radius=radius, timeDelta=t0
     )
     sampler = CameraDirectSampler(
@@ -557,7 +557,7 @@ def test_pointCamera(polarized: bool):
 
     # create camera and sampler
     photons = theia.light.ConstWavelengthSource()
-    camera = theia.camera.PointCameraRaySource(position=position, timeDelta=t0)
+    camera = theia.camera.PointCamera(position=position, timeDelta=t0)
     philox = PhiloxRNG(key=0xC0FFEE)
     sampler = theia.camera.CameraRaySampler(
         camera, photons, N, rng=philox, polarized=polarized
@@ -615,7 +615,7 @@ def test_meshCamera(polarized: bool, inward: bool):
 
     # create camera and sampler
     photon = theia.light.ConstWavelengthSource()
-    camera = theia.camera.MeshCameraRaySource(c2, timeDelta=t0, inward=inward)
+    camera = theia.camera.MeshCamera(c2, timeDelta=t0, inward=inward)
     philox = theia.random.PhiloxRNG(key=0xC0FFEE)
     sampler = theia.camera.CameraRaySampler(
         camera, photon, N, rng=philox, polarized=polarized

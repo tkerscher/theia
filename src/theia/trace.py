@@ -6,7 +6,7 @@ from hephaistos.pipeline import PipelineStage, SourceCodeMixin
 from ctypes import Structure, c_float, c_int32, c_uint32, addressof, memset, sizeof
 from numpy.ctypeslib import as_array
 
-from theia.camera import CameraRaySource
+from theia.camera import Camera
 from theia.estimator import HitResponse, TraceConfig
 from theia.light import LightSource, WavelengthSource
 from theia.random import RNG
@@ -665,7 +665,7 @@ class VolumeBackwardTracer(Tracer):
         up to nScattering hits plus one if direct lighting is enabled.
     source: LightSource
         Source producing light rays. Must support backward mode.
-    camera: CameraRaySource
+    camera: Camera
         Source producing camera rays. If direct lighting is enabled, must
         support direct mode.
     wavelengthSource: WavelengthSource
@@ -747,7 +747,7 @@ class VolumeBackwardTracer(Tracer):
         self,
         batchSize: int,
         source: LightSource,
-        camera: CameraRaySource,
+        camera: Camera,
         wavelengthSource: WavelengthSource,
         response: HitResponse,
         rng: RNG,
@@ -844,7 +844,7 @@ class VolumeBackwardTracer(Tracer):
         return self._callback
 
     @property
-    def camera(self) -> CameraRaySource:
+    def camera(self) -> Camera:
         """Source producing camera rays"""
         return self._camera
 
@@ -1183,7 +1183,7 @@ class SceneBackwardTracer(Tracer):
         up to `maxPathLength` hits plus one if direct lighting is enabled.
     source: LightSource
         Source producing light rays. Must support backward mode.
-    camera: CameraRaySource
+    camera: Camera
         Source producing camera rays. If direct lighting is enabled must support
         direct mode.
     wavelengthSource: WavelengthSource
@@ -1252,7 +1252,7 @@ class SceneBackwardTracer(Tracer):
         self,
         batchSize: int,
         source: LightSource,
-        camera: CameraRaySource,
+        camera: Camera,
         wavelengthSource: WavelengthSource,
         response: HitResponse,
         rng: RNG,
@@ -1354,7 +1354,7 @@ class SceneBackwardTracer(Tracer):
         return self._callback
 
     @property
-    def camera(self) -> CameraRaySource:
+    def camera(self) -> Camera:
         """Source producing camera rays"""
         return self._camera
 
@@ -1426,7 +1426,7 @@ class DirectLightTracer(Tracer):
         hit.
     source: LightSource
         Source producing light rays. Must support backward mode.
-    camera: CameraRaySource
+    camera: Camera
         Source producing camera rays. Must support direct mode.
     wavelengthSource: WavelengthSource
         Source to sample wavelengths from
@@ -1483,7 +1483,7 @@ class DirectLightTracer(Tracer):
         self,
         batchSize: int,
         source: LightSource,
-        camera: CameraRaySource,
+        camera: Camera,
         wavelengthSource: WavelengthSource,
         response: HitResponse,
         rng: RNG,
@@ -1578,7 +1578,7 @@ class DirectLightTracer(Tracer):
         return self._callback
 
     @property
-    def camera(self) -> CameraRaySource:
+    def camera(self) -> Camera:
         """Source producing camera rays"""
         return self._camera
 
@@ -1633,7 +1633,7 @@ class BidirectionalPathTracer(Tracer):
         responses.
     source: LightSource
         Source producing light rays
-    camera: CameraRaySource
+    camera: Camera
         Source producing camera rays
     wavelengthSource: WavelengthSource
         Source to sample wavelengths from
@@ -1712,7 +1712,7 @@ class BidirectionalPathTracer(Tracer):
         self,
         batchSize: int,
         source: LightSource,
-        camera: CameraRaySource,
+        camera: Camera,
         wavelengthSource: WavelengthSource,
         response: HitResponse,
         rng: RNG,
@@ -1815,7 +1815,7 @@ class BidirectionalPathTracer(Tracer):
         return self._callbackScope
 
     @property
-    def camera(self) -> CameraRaySource:
+    def camera(self) -> Camera:
         """Source generating camera rays"""
         return self._camera
 

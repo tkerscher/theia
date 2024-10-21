@@ -3,10 +3,10 @@
 
 #include "math.glsl"
 
-layout(scalar) uniform CameraRayParams {
+layout(scalar) uniform CameraParams {
     vec3 position;
     float timeDelta;
-} cameraRayParams;
+} cameraParams;
 
 CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
     //sample direction
@@ -23,12 +23,12 @@ CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
 
     //assemble camera ray
     return createCameraRay(
-        cameraRayParams.position,   //ray position
+        cameraParams.position,   //ray position
         dir,                        //ray direction
         polRef,                     //ray polRef
         mat4(1.0),                  //ray mueller matrix
         FOUR_PI,                    //contrib
-        cameraRayParams.timeDelta,  //time delta
+        cameraParams.timeDelta,  //time delta
         vec3(0.0, 0.0, 0.0),        //hit position
         -dir,                       //hit direction
         dir,                        //hit normal

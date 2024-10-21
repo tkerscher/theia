@@ -160,7 +160,7 @@ def test_VolumeBackwardTracer(
         budget=light_budget,
         timeRange=(T0, T1),
     )
-    camera = theia.camera.SphereCameraRaySource(
+    camera = theia.camera.SphereCamera(
         position=target_pos, radius=target_radius
     )
     recorder = theia.estimator.HitRecorder(polarized=polarized)
@@ -411,7 +411,7 @@ def test_SceneBackwardTracer(
         timeRange=(T0, T1),
         budget=light_budget,
     )
-    camera = theia.camera.SphereCameraRaySource(
+    camera = theia.camera.SphereCamera(
         position=target_pos,
         radius=r,
     )
@@ -533,8 +533,8 @@ def test_BidirectionalPathTracer(
 
     # create pipeline
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
-    cam = theia.camera.PencilCameraRaySource(rayPosition=src_pos)
-    # cam = theia.camera.FlatCameraRaySource(transform=det_trafo)
+    cam = theia.camera.PencilCamera(rayPosition=src_pos)
+    # cam = theia.camera.FlatCamera(transform=det_trafo)
     ph = theia.light.UniformWavelengthSource()
     src = theia.light.PencilLightSource(position=det_pos, timeRange=(T0, T1))
     rec = theia.estimator.HitRecorder(polarized=polarized)
@@ -956,7 +956,7 @@ def test_DirectTracer_volume(polarized: bool):
     light = theia.light.SphericalLightSource(
         position=lightPos, budget=lightBudget, timeRange=(T0, T1)
     )
-    camera = theia.camera.FlatCameraRaySource(
+    camera = theia.camera.FlatCamera(
         width=width,
         length=length,
         position=camPos,
@@ -1052,7 +1052,7 @@ def test_DirectTracer_scene(polarized: bool):
     light = theia.light.SphericalLightSource(
         position=lightPos, budget=lightBudget, timeRange=(T0, T1)
     )
-    camera = theia.camera.FlatCameraRaySource(
+    camera = theia.camera.FlatCamera(
         width=width,
         length=length,
         position=camPos,
