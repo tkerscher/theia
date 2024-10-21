@@ -18,12 +18,12 @@ from jsonschema import validate
 from pathlib import Path
 from zipfile import Path as ZipPath, ZipFile, is_zipfile
 
-import numpy.typing as npt
 from collections.abc import Iterable
 from enum import IntFlag
 from io import TextIOBase
 from os import PathLike
-from typing import Dict, Final, Union, Tuple
+from numpy.typing import ArrayLike, NDArray
+from typing import Final
 
 
 __all__ = [
@@ -145,16 +145,16 @@ class Medium:
         lambda_min: float,
         lambda_max: float,
         *,
-        refractive_index: Union[npt.ArrayLike, None] = None,
-        group_velocity: Union[npt.ArrayLike, None] = None,
-        absorption_coef: Union[npt.ArrayLike, None] = None,
-        scattering_coef: Union[npt.ArrayLike, None] = None,
-        log_phase_function: Union[npt.ArrayLike, None] = None,
-        phase_sampling: Union[npt.ArrayLike, None] = None,
-        phase_m12: Union[npt.ArrayLike, None] = None,
-        phase_m22: Union[npt.ArrayLike, None] = None,
-        phase_m33: Union[npt.ArrayLike, None] = None,
-        phase_m34: Union[npt.ArrayLike, None] = None,
+        refractive_index: ArrayLike | None = None,
+        group_velocity: ArrayLike | None = None,
+        absorption_coef: ArrayLike | None = None,
+        scattering_coef: ArrayLike | None = None,
+        log_phase_function: ArrayLike | None = None,
+        phase_sampling: ArrayLike | None = None,
+        phase_m12: ArrayLike | None = None,
+        phase_m22: ArrayLike | None = None,
+        phase_m33: ArrayLike | None = None,
+        phase_m34: ArrayLike | None = None,
     ) -> None:
         # store properties
         self.name = name
@@ -202,7 +202,7 @@ class Medium:
         self._lambda_max = value
 
     @property
-    def refractive_index(self) -> Union[npt.ArrayLike, None]:
+    def refractive_index(self) -> ArrayLike | None:
         """
         Table containing values of the refractive as a function of wavelength
         sampled at equidistant points on the range defined by lambda min/max.
@@ -211,7 +211,7 @@ class Medium:
         return self._refractive_index
 
     @refractive_index.setter
-    def refractive_index(self, value: Union[npt.ArrayLike, None]) -> None:
+    def refractive_index(self, value: ArrayLike | None) -> None:
         self._refractive_index = value
 
     @refractive_index.deleter
@@ -219,7 +219,7 @@ class Medium:
         self._refractive_index = None
 
     @property
-    def group_velocity(self) -> Union[npt.ArrayLike, None]:
+    def group_velocity(self) -> ArrayLike | None:
         """
         Table containing values of the group velocity as a function of
         wavelength sampled at equidistant points on the range defined by lambda
@@ -229,7 +229,7 @@ class Medium:
         return self._group_velocity
 
     @group_velocity.setter
-    def group_velocity(self, value: Union[npt.ArrayLike, None]) -> None:
+    def group_velocity(self, value: ArrayLike | None) -> None:
         self._group_velocity = value
 
     @group_velocity.deleter
@@ -237,7 +237,7 @@ class Medium:
         self._group_velocity = None
 
     @property
-    def absorption_coef(self) -> Union[npt.ArrayLike, None]:
+    def absorption_coef(self) -> ArrayLike | None:
         """
         Table containing values of the absorption coefficient as a function of
         wavelength sampled at equidistant points on the range defined by lambda
@@ -247,7 +247,7 @@ class Medium:
         return self._absorption_coef
 
     @absorption_coef.setter
-    def absorption_coef(self, value: Union[npt.ArrayLike, None]) -> None:
+    def absorption_coef(self, value: ArrayLike | None) -> None:
         self._absorption_coef = value
 
     @absorption_coef.deleter
@@ -255,7 +255,7 @@ class Medium:
         self._absorption_coef = None
 
     @property
-    def scattering_coef(self) -> Union[npt.ArrayLike, None]:
+    def scattering_coef(self) -> ArrayLike | None:
         """
         Table containing values of the scattering coefficient as a function of
         wavelength sampled at equidistant points on the range defined by lambda
@@ -265,7 +265,7 @@ class Medium:
         return self._scattering_coef
 
     @scattering_coef.setter
-    def scattering_coef(self, value: Union[npt.ArrayLike, None]) -> None:
+    def scattering_coef(self, value: ArrayLike | None) -> None:
         self._scattering_coef = value
 
     @scattering_coef.deleter
@@ -273,7 +273,7 @@ class Medium:
         self._scattering_coef = None
 
     @property
-    def log_phase_function(self) -> Union[npt.ArrayLike, None]:
+    def log_phase_function(self) -> ArrayLike | None:
         """
         Table of logarithmic scattering phase function as a function of the
         cosine of the angle between incoming and outgoing ray in radians over
@@ -283,7 +283,7 @@ class Medium:
         return self._phase_function
 
     @log_phase_function.setter
-    def log_phase_function(self, value: Union[npt.ArrayLike, None]) -> None:
+    def log_phase_function(self, value: ArrayLike | None) -> None:
         self._phase_function = value
 
     @log_phase_function.deleter
@@ -291,7 +291,7 @@ class Medium:
         self._phase_function = None
 
     @property
-    def phase_sampling(self) -> Union[npt.ArrayLike, None]:
+    def phase_sampling(self) -> ArrayLike | None:
         """
         Table containing values of the inverse cumulative density function of
         the phase function used for importance sampling.
@@ -300,7 +300,7 @@ class Medium:
         return self._phase_sampling
 
     @phase_sampling.setter
-    def phase_sampling(self, value: Union[npt.ArrayLike, None]) -> None:
+    def phase_sampling(self, value: ArrayLike | None) -> None:
         self._phase_sampling = value
 
     @phase_sampling.deleter
@@ -308,7 +308,7 @@ class Medium:
         self._phase_sampling = None
 
     @property
-    def phase_m12(self) -> Union[npt.ArrayLike, None]:
+    def phase_m12(self) -> ArrayLike | None:
         """
         Table of normalized m12 element of the phase matrix as function of cos
         theta. Constant zero if None.
@@ -316,7 +316,7 @@ class Medium:
         return self._phase_m12
 
     @phase_m12.setter
-    def phase_m12(self, value: Union[npt.ArrayLike, None]) -> None:
+    def phase_m12(self, value: ArrayLike | None) -> None:
         self._phase_m12 = value
 
     @phase_m12.deleter
@@ -324,7 +324,7 @@ class Medium:
         self._phase_m12 = None
 
     @property
-    def phase_m22(self) -> Union[npt.ArrayLike, None]:
+    def phase_m22(self) -> ArrayLike | None:
         """
         Table of normalized m22 element of the phase matrix as function of cos
         theta. Constant zero if None.
@@ -332,7 +332,7 @@ class Medium:
         return self._phase_m22
 
     @phase_m22.setter
-    def phase_m22(self, value: Union[npt.ArrayLike, None]) -> None:
+    def phase_m22(self, value: ArrayLike | None) -> None:
         self._phase_m22 = value
 
     @phase_m22.deleter
@@ -340,7 +340,7 @@ class Medium:
         self._phase_m22 = None
 
     @property
-    def phase_m33(self) -> Union[npt.ArrayLike, None]:
+    def phase_m33(self) -> ArrayLike | None:
         """
         Table of normalized m33 element of the phase matrix as function of cos
         theta. Constant zero if None.
@@ -348,7 +348,7 @@ class Medium:
         return self._phase_m33
 
     @phase_m33.setter
-    def phase_m33(self, value: Union[npt.ArrayLike, None]) -> None:
+    def phase_m33(self, value: ArrayLike | None) -> None:
         self._phase_m33 = value
 
     @phase_m33.deleter
@@ -356,7 +356,7 @@ class Medium:
         self._phase_m33 = None
 
     @property
-    def phase_m34(self) -> Union[npt.ArrayLike, None]:
+    def phase_m34(self) -> ArrayLike | None:
         """
         Table of normalized m34 element of the phase matrix as function of cos
         theta. Constant zero if None.
@@ -364,7 +364,7 @@ class Medium:
         return self._phase_m34
 
     @phase_m34.setter
-    def phase_m34(self, value: Union[npt.ArrayLike, None]) -> None:
+    def phase_m34(self, value: ArrayLike | None) -> None:
         self._phase_m34 = value
 
     @phase_m34.deleter
@@ -572,11 +572,11 @@ class Material:
     def __init__(
         self,
         name: str,
-        inside: Union[Medium, str, None],
-        outside: Union[Medium, str, None],
+        inside: Medium | str | None,
+        outside: Medium | str | None,
         *,
         flags: (
-            Tuple[MaterialFlags | str, MaterialFlags | str] | MaterialFlags | str
+            tuple[MaterialFlags | str, MaterialFlags | str] | MaterialFlags | str
         ) = MaterialFlags(0),
     ) -> None:
         # store properties
@@ -603,7 +603,7 @@ class Material:
         self._name = value
 
     @property
-    def inside(self) -> Union[Medium, str, None]:
+    def inside(self) -> Medium | str | None:
         """
         Medium in the inside of a geometry. Can also be specified by its name
         which will get resolved during baking/serialization.
@@ -612,11 +612,11 @@ class Material:
         return self._inside
 
     @inside.setter
-    def inside(self, value: Union[Medium, str, None]) -> None:
+    def inside(self, value: Medium | str | None) -> None:
         self._inside = value
 
     @property
-    def outside(self) -> Union[Medium, str, None]:
+    def outside(self) -> Medium | str | None:
         """
         Medium in the outside of a geometry. Can also be specified by its name
         which will get resolved during baking/serialization.
@@ -625,7 +625,7 @@ class Material:
         return self._outside
 
     @outside.setter
-    def outside(self, value: Union[Medium, str, None]) -> None:
+    def outside(self, value: Medium | str | None) -> None:
         self._outside = value
 
     @property
@@ -685,7 +685,7 @@ _materialJsonSchema = {
 
 
 def saveMaterials(
-    path: Union[str, bytes, PathLike],
+    path: str | bytes | PathLike,
     material: Iterable[Material],
     *,
     media: Iterable[Medium] = [],
@@ -697,7 +697,7 @@ def saveMaterials(
 
     Parameters
     ----------
-    path: Union[str, bytes, PathLike]
+    path: str | bytes | PathLike
         Where to store the materials
     material: Iterable[Material]
         List of materials to store
@@ -744,7 +744,7 @@ def saveMaterials(
             medium.save(file)
 
     # build representation of materials suitable for serialization
-    def serializeMedium(med: Union[Medium, str, None]):
+    def serializeMedium(med: Medium | str | None):
         if isinstance(med, Medium):
             return med.name
         else:
@@ -767,21 +767,21 @@ def saveMaterials(
 
 
 def loadMaterials(
-    path: Union[str, bytes, PathLike], *, skipValidation: bool = False
-) -> Tuple[Dict[str, Material], Dict[str, Medium]]:
+    path: str | bytes | PathLike, *, skipValidation: bool = False
+) -> tuple[dict[str, Material], dict[str, Medium]]:
     """
     Loads and returns the materials and media from the given path.
 
     Parameters
     ----------
-    path: Union[str, bytes, PathLike]
+    path: str | bytes | PathLike
         Where to load the materials and media from
 
     Returns
     -------
-    materials: Dict[str, Material]
+    materials: dict[str, Material]
         Dictionary indexing all loaded materials by their names
-    media: Dict[str, Medium]
+    media: dict[str, Medium]
         Dictionary indexing all loaded media by their names
     """
     # convert to path to make things easier
@@ -830,7 +830,7 @@ def loadMaterials(
     # parse material descriptions
     matDict = {}
 
-    def getMedium(mat: str, med: Union[str, None]) -> Union[Medium, None]:
+    def getMedium(mat: str, med: str | None) -> Medium | None:
         if med is None:
             return None
         if med not in mediaDict:
@@ -884,7 +884,7 @@ class MaterialStore:
             return ptr
 
         # alloc methods
-        self._table_ptr: dict[str, Tuple[int, int]] = {}  # (ptr, size)
+        self._table_ptr: dict[str, tuple[int, int]] = {}  # (ptr, size)
         self._media_ptr: dict[str, int] = {}
         self._mat_ptr: dict[str, int] = {}
 
@@ -1086,35 +1086,35 @@ class MediumModel:
     # To be overwritten in base classes
     ModelName = "noname"
 
-    def refractive_index(self, wavelength: npt.ArrayLike) -> Union[npt.NDArray, None]:
+    def refractive_index(self, wavelength: ArrayLike) -> NDArray | None:
         """
         Calculates the refractive index for the given wavelengths.
         Returns None if not defined.
         """
         return None
 
-    def group_velocity(self, wavelength: npt.ArrayLike) -> Union[npt.NDArray, None]:
+    def group_velocity(self, wavelength: ArrayLike) -> NDArray | None:
         """
         Calculates the group velocity for the given wavelengths.
         Returns None if not defined.
         """
         return None
 
-    def absorption_coef(self, wavelength: npt.ArrayLike) -> Union[npt.NDArray, None]:
+    def absorption_coef(self, wavelength: ArrayLike) -> NDArray | None:
         """
         Returns the absorption coefficient for the given wavelengths.
         Returns None if not defined.
         """
         return None
 
-    def scattering_coef(self, wavelength: npt.ArrayLike) -> Union[npt.NDArray, None]:
+    def scattering_coef(self, wavelength: ArrayLike) -> NDArray | None:
         """
         Returns the scattering coefficient for the given wavelengths.
         Returns None if not defined.
         """
         return None
 
-    def log_phase_function(self, cos_theta: npt.ArrayLike) -> Union[npt.NDArray, None]:
+    def log_phase_function(self, cos_theta: ArrayLike) -> NDArray | None:
         """
         Evaluates the log phase functions for the given values of cos theta
         with theta being the angle between incoming and outgoing ray after
@@ -1123,7 +1123,7 @@ class MediumModel:
         """
         return None
 
-    def phase_sampling(self, eta: npt.ArrayLike) -> Union[npt.NDArray, None]:
+    def phase_sampling(self, eta: ArrayLike) -> NDArray | None:
         """
         Returns samples of cos(theta) using the uniform unit random numbers eta
         which follows the phase function as underlying distribution.
@@ -1131,7 +1131,7 @@ class MediumModel:
         """
         return None
 
-    def phase_m12(self, cos_theta: npt.ArrayLike) -> Union[npt.ArrayLike, None]:
+    def phase_m12(self, cos_theta: ArrayLike) -> ArrayLike | None:
         """
         Returns samples of the m12 element of the phase matrix for the given
         values of cos theta with theta being the angle between incoming and
@@ -1140,7 +1140,7 @@ class MediumModel:
         """
         return None
 
-    def phase_m22(self, cos_theta: npt.ArrayLike) -> Union[npt.ArrayLike, None]:
+    def phase_m22(self, cos_theta: ArrayLike) -> ArrayLike | None:
         """
         Returns samples of the m22 element of the phase matrix for the given
         values of cos theta with theta being the angle between incoming and
@@ -1149,7 +1149,7 @@ class MediumModel:
         """
         return None
 
-    def phase_m33(self, cos_theta: npt.ArrayLike) -> Union[npt.ArrayLike, None]:
+    def phase_m33(self, cos_theta: ArrayLike) -> ArrayLike | None:
         """
         Returns samples of the m33 element of the phase matrix for the given
         values of cos theta with theta being the angle between incoming and
@@ -1158,7 +1158,7 @@ class MediumModel:
         """
         return None
 
-    def phase_m34(self, cos_theta: npt.ArrayLike) -> Union[npt.ArrayLike, None]:
+    def phase_m34(self, cos_theta: ArrayLike) -> ArrayLike | None:
         """
         Returns samples of the m34 element of the phase matrix for the given
         values of cos theta with theta being the angle between incoming and
@@ -1174,7 +1174,7 @@ class MediumModel:
         num_lambda=1024,
         num_theta=1024,
         *,
-        name: Union[str, None] = None,
+        name: str | None = None,
     ) -> Medium:
         """
         Creates a medium from this model over the given range of wavelengths
@@ -1235,7 +1235,7 @@ class SellmeierEquation:
         self.C2 = C2
         self.C3 = C3
 
-    def refractive_index(self, wavelength: npt.ArrayLike) -> npt.NDArray:
+    def refractive_index(self, wavelength: ArrayLike) -> NDArray:
         """Calculates the refractive index for the given wavelengths"""
         L2 = np.square(u.convert(wavelength, u.nm))
         # L2 = np.square(wavelength)
@@ -1244,7 +1244,7 @@ class SellmeierEquation:
         S3 = self.B3 * L2 / (L2 - self.C3)
         return np.sqrt(1.0 + S1 + S2 + S3)
 
-    def group_velocity(self, wavelength: npt.ArrayLike) -> npt.NDArray:
+    def group_velocity(self, wavelength: ArrayLike) -> NDArray:
         """
         Calculates the group velocity in for the given wavelengths
         """
@@ -1290,7 +1290,7 @@ class BK7Model(SellmeierEquation, MediumModel):
                 skiprows=2,
             )
 
-    def absorption_coef(self, wavelength: npt.ArrayLike) -> npt.NDArray:
+    def absorption_coef(self, wavelength: ArrayLike) -> NDArray:
         """Returns the absorption coefficient for the given wavelengths"""
         # we can transform the transmission measurements to absorption
         # coefficients via the Beer-Lambert law. Unfortunately, they two
@@ -1343,7 +1343,7 @@ class HenyeyGreensteinPhaseFunction:
                 "Asymmetry parameter outside the valid range (-1,1)!", RuntimeWarning
             )
 
-    def log_phase_function(self, cos_theta: npt.ArrayLike) -> npt.NDArray:
+    def log_phase_function(self, cos_theta: ArrayLike) -> NDArray:
         """
         Evaluates the log phase function for the given angles as cos(theta).
         Normalized with respect to unit sphere.
@@ -1354,7 +1354,7 @@ class HenyeyGreensteinPhaseFunction:
             / (4.0 * np.pi)
         )
 
-    def phase_sampling(self, eta: npt.ArrayLike) -> npt.ArrayLike:
+    def phase_sampling(self, eta: ArrayLike) -> ArrayLike:
         """
         Samples the phase function using provided unit random numbers eta.
         Returns the cosine of the sampled angle.
@@ -1409,7 +1409,7 @@ class FournierForandPhaseFunction:
         self._mu = value
         self._update()
 
-    def log_phase_function(self, cos_theta: npt.ArrayLike) -> npt.NDArray:
+    def log_phase_function(self, cos_theta: ArrayLike) -> NDArray:
         """Evaluates the log phase function for the given angles mu = cos(theta)"""
         # phase functions becomes singular at cos_theta = 1.0
         # clip close before (1 float ulp)
@@ -1428,7 +1428,7 @@ class FournierForandPhaseFunction:
         D = 16 * np.pi * (d_180 - 1) * d_180_nu
         return np.log(A / B + C / D)
 
-    def phase_sampling(self, eta: npt.ArrayLike) -> npt.NDArray:
+    def phase_sampling(self, eta: ArrayLike) -> NDArray:
         """
         Samples the phase function using provided unit random numbers eta.
         Returns the cosine of the sampled angle.
@@ -1533,16 +1533,16 @@ class DispersionFreeMedium:
     def mu_s(self, value: float) -> None:
         self._mu_s = value
 
-    def refractive_index(self, wavelength: npt.ArrayLike) -> Union[npt.NDArray, None]:
+    def refractive_index(self, wavelength: ArrayLike) -> NDArray | None:
         return np.ones_like(wavelength) * self.n
 
-    def group_velocity(self, wavelength: npt.ArrayLike) -> Union[npt.NDArray, None]:
+    def group_velocity(self, wavelength: ArrayLike) -> NDArray | None:
         return np.ones_like(wavelength) / self.ng * u.c
 
-    def absorption_coef(self, wavelength: npt.ArrayLike) -> Union[npt.NDArray, None]:
+    def absorption_coef(self, wavelength: ArrayLike) -> NDArray | None:
         return np.ones_like(wavelength) * self.mu_a
 
-    def scattering_coef(self, wavelength: npt.ArrayLike) -> Union[npt.NDArray, None]:
+    def scattering_coef(self, wavelength: ArrayLike) -> NDArray | None:
         return np.ones_like(wavelength) * self.mu_s
 
 
@@ -1648,7 +1648,7 @@ class WaterBaseModel:
                 "Salinity is outside the models valid range of 0-40 psu", RuntimeWarning
             )
 
-    def refractive_index(self, wavelength: npt.ArrayLike) -> npt.NDArray:
+    def refractive_index(self, wavelength: ArrayLike) -> NDArray:
         """Calculates the refractive index for the given wavelengths"""
         # formula expects wavelengths in micrometers -> convert
         L = u.convert(wavelength, u.um)
@@ -1689,7 +1689,7 @@ class WaterBaseModel:
         N4 = self.P1S * p * S + self.PTS * p * T * S + self.PT2S * p * (T**2) * S
         return N1 + N2 + N3 + N4
 
-    def group_velocity(self, wavelength: npt.ArrayLike) -> npt.NDArray:
+    def group_velocity(self, wavelength: ArrayLike) -> NDArray:
         """
         Calculates the group velocity for the given wavelengths
         """
@@ -1716,7 +1716,7 @@ class WaterBaseModel:
         n = self.refractive_index(wavelength)
         return 1.0 / (n - L * G) * u.c
 
-    def absorption_coef(self, wavelength: npt.ArrayLike) -> npt.NDArray:
+    def absorption_coef(self, wavelength: ArrayLike) -> NDArray:
         """
         Returns the absorption coefficient for the given wavelengths
         """
@@ -1729,7 +1729,7 @@ class WaterBaseModel:
             / u.m
         )
 
-    def scattering_coef(self, wavelength: npt.ArrayLike) -> npt.NDArray:
+    def scattering_coef(self, wavelength: ArrayLike) -> NDArray:
         """
         Returns the scattering coefficient for the given wavelengths
         """
@@ -1808,13 +1808,13 @@ class KokhanovskyOceanWaterPhaseMatrix:
     def xi(self, value: float) -> None:
         self._xi = value
 
-    def phase_m12(self, cos_theta: npt.ArrayLike) -> npt.NDArray:
+    def phase_m12(self, cos_theta: ArrayLike) -> NDArray:
         """m12 element of the phase matrix"""
         cos_theta_sq = np.square(cos_theta)
         sin_theta_sq = 1.0 - cos_theta_sq
         return -self.p90 * sin_theta_sq / (1.0 + self.p90 * cos_theta_sq)
 
-    def phase_m22(self, cos_theta: npt.ArrayLike) -> npt.NDArray:
+    def phase_m22(self, cos_theta: ArrayLike) -> NDArray:
         """m22 element of the phase matrix"""
         theta = np.arccos(cos_theta)
         z = theta - self.theta0
@@ -1822,7 +1822,7 @@ class KokhanovskyOceanWaterPhaseMatrix:
         e = self.xi * np.exp(-self.alpha * theta)
         return (self.p90 * (1.0 + cos_z_sq) + e) / (1.0 + self.p90 * cos_z_sq + e)
 
-    def phase_m33(self, cos_theta: npt.ArrayLike) -> npt.NDArray:
+    def phase_m33(self, cos_theta: ArrayLike) -> NDArray:
         """m33 element of the phase matrix"""
         theta = np.arccos(cos_theta)
         ct_sq = np.square(cos_theta)

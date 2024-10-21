@@ -1,5 +1,6 @@
 from __future__ import annotations
-from typing import Final, Iterable, Literal, TypeVar
+from collections.abc import Iterable
+from typing import Final, Literal, TypeVar
 
 
 T = TypeVar("T")

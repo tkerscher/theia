@@ -11,10 +11,9 @@ import trimesh
 
 import theia.units as u
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from ctypes import Structure, c_float, c_uint64
 from numpy.typing import NDArray, ArrayLike
-from typing import Iterable, Optional, Tuple, Union
 
 
 __all__ = [
@@ -36,7 +35,7 @@ def __dir__():
 class Transform:
     """Util class for creating transformation matrices"""
 
-    def __init__(self, matrix: Optional[NDArray[np.float32]] = None) -> None:
+    def __init__(self, matrix: NDArray[np.float32] | None = None) -> None:
         self._arr = np.identity(4)
         if matrix is not None:
             # check shape
@@ -137,10 +136,10 @@ class RectBBox:
 
     Parameter
     ---------
-    lowerCorner: Tuple[float, float, float]
+    lowerCorner: tuple[float, float, float]
         The corner with minimal coordinate values
 
-    upperCorner: Tuple[float, float, float]
+    upperCorner: tuple[float, float, float]
         The corner with maximal coordinate values
     """
 
@@ -151,8 +150,8 @@ class RectBBox:
 
     def __init__(
         self,
-        lowerCorner: Tuple[float, float, float],
-        upperCorner: Tuple[float, float, float],
+        lowerCorner: tuple[float, float, float],
+        upperCorner: tuple[float, float, float],
     ) -> None:
         self._glsl = self.GLSL()
         self.lowerCorner = lowerCorner
@@ -170,7 +169,7 @@ class RectBBox:
         return np.sqrt(np.square(d).sum())
 
     @property
-    def lowerCorner(self) -> Tuple[float, float, float]:
+    def lowerCorner(self) -> tuple[float, float, float]:
         """The corner with minimal coordinate values"""
         return (
             self._glsl.lowerCorner.x,
@@ -179,13 +178,13 @@ class RectBBox:
         )
 
     @lowerCorner.setter
-    def lowerCorner(self, value: Tuple[float, float, float]) -> None:
+    def lowerCorner(self, value: tuple[float, float, float]) -> None:
         self._glsl.lowerCorner.x = value[0]
         self._glsl.lowerCorner.y = value[1]
         self._glsl.lowerCorner.z = value[2]
 
     @property
-    def upperCorner(self) -> Tuple[float, float, float]:
+    def upperCorner(self) -> tuple[float, float, float]:
         """The corner with maximal coordinate values"""
         return (
             self._glsl.upperCorner.x,
@@ -194,7 +193,7 @@ class RectBBox:
         )
 
     @upperCorner.setter
-    def upperCorner(self, value: Tuple[float, float, float]) -> None:
+    def upperCorner(self, value: tuple[float, float, float]) -> None:
         self._glsl.upperCorner.x = value[0]
         self._glsl.upperCorner.y = value[1]
         self._glsl.upperCorner.z = value[2]
@@ -220,7 +219,7 @@ class SphereBBox:
 
     Parameters
     ----------
-    center: Tuple[float, float, float]
+    center: tuple[float, float, float]
         center of the sphere
     radius: float
         radius of the sphere
@@ -231,7 +230,7 @@ class SphereBBox:
 
         _fields_ = [("center", vec3), ("radius", c_float)]
 
-    def __init__(self, center: Tuple[float, float, float], radius: float) -> None:
+    def __init__(self, center: tuple[float, float, float], radius: float) -> None:
         self._glsl = self.GLSL()
         self.center = center
         self.radius = radius
@@ -242,7 +241,7 @@ class SphereBBox:
         return self._glsl
 
     @property
-    def center(self) -> Tuple[float, float, float]:
+    def center(self) -> tuple[float, float, float]:
         """Center of the sphere"""
         return (
             self._glsl.center.x,
@@ -251,7 +250,7 @@ class SphereBBox:
         )
 
     @center.setter
-    def center(self, value: Tuple[float, float, float]) -> None:
+    def center(self, value: tuple[float, float, float]) -> None:
         self._glsl.center.x = value[0]
         self._glsl.center.y = value[1]
         self._glsl.center.z = value[2]
@@ -361,7 +360,7 @@ class MeshStore:
     Class managing the lifetime of single meshes allowing to reuse them.
     """
 
-    def __init__(self, meshes: dict[str, Union[hp.Mesh, str]]) -> None:
+    def __init__(self, meshes: dict[str, hp.Mesh | str]) -> None:
         """
         Creates a new MeshStore managing the lifetime of meshes.
 
@@ -384,9 +383,9 @@ class MeshStore:
         key: str,
         material: str,
         *,
-        transform: Union[Transform, None] = None,
+        transform: Transform | None = None,
         detectorId: int = 0,
-        scale: Union[float, None] = None,
+        scale: float | None = None,
     ) -> MeshInstance:
         """
         Creates and returns a new MeshInstance of a mesh specified via its name.
@@ -476,7 +475,7 @@ class Scene:
         materials: Mapping[str, int],
         *,
         medium: int = 0,
-        bbox: Optional[RectBBox] = None,
+        bbox: RectBBox | None = None,
         targets: Iterable[SphereBBox] = [],
     ) -> None:
         instances = list(instances)
@@ -710,11 +709,11 @@ class SceneRender:
         self,
         scene: Scene,
         *,
-        dimension: Optional[tuple[float, float]] = None,
-        position: Optional[tuple[float, float, float]] = None,
-        direction: Optional[tuple[float, float, float]] = None,
-        up: Optional[tuple[float, float, float]] = None,
-        maxDistance: Optional[float] = None,
+        dimension: tuple[float, float] | None = None,
+        position: tuple[float, float, float] | None = None,
+        direction: tuple[float, float, float] | None = None,
+        up: tuple[float, float, float] | None = None,
+        maxDistance: float | None = None,
     ) -> NDArray:
         """
         Renders the given scene and returns the image as numpy array of

@@ -14,7 +14,7 @@ from theia.random import RNG
 from theia.util import ShaderLoader, compileShader, createPreamble
 import theia.units as u
 
-from typing import Callable, Dict, List, Set, Tuple, Optional
+from collections.abc import Callable
 from numpy.typing import NDArray
 
 __all__ = [
@@ -52,8 +52,8 @@ class WavelengthSource(SourceCodeMixin):
         self,
         *,
         nRNGSamples: int = 0,
-        params: Dict[str, type[Structure]] = {},
-        extra: Set[str] = set(),
+        params: dict[str, type[Structure]] = {},
+        extra: set[str] = set(),
     ) -> None:
         super().__init__(params, extra)
         self._nRNGSamples = nRNGSamples
@@ -90,7 +90,7 @@ class HostWavelengthSource(WavelengthSource):
         self,
         capacity: int,
         *,
-        updateFn: Optional[Callable[[HostWavelengthSource, int], None]] = None,
+        updateFn: Callable[[HostWavelengthSource, int], None] | None = None,
     ) -> None:
         super().__init__()
 
@@ -134,7 +134,7 @@ class HostWavelengthSource(WavelengthSource):
             self._updateFn(self, i)
         super().update(i)
 
-    def run(self, i: int) -> List[hp.Command]:
+    def run(self, i: int) -> list[hp.Command]:
         return [hp.updateTensor(self.buffer(i), self._tensor), *super().run(i)]
 
 
@@ -193,7 +193,7 @@ class UniformWavelengthSource(WavelengthSource):
     def __init__(
         self,
         *,
-        lambdaRange: Tuple[float, float] = (300.0, 700.0),
+        lambdaRange: tuple[float, float] = (300.0, 700.0),
     ) -> None:
         super().__init__(
             nRNGSamples=1,
@@ -230,8 +230,8 @@ class LightSource(SourceCodeMixin):
         supportBackward: bool,
         nRNGForward: int = 0,
         nRNGBackward: int = 0,
-        params: Dict[str, type[Structure]] = {},
-        extra: Set[str] = set(),
+        params: dict[str, type[Structure]] = {},
+        extra: set[str] = set(),
     ) -> None:
         super().__init__(params, extra)
         self._forward = supportForward
@@ -337,11 +337,11 @@ class LightSampler(PipelineStage):
         wavelengthSource: WavelengthSource,
         capacity: int,
         *,
-        rng: Optional[RNG] = None,
+        rng: RNG | None = None,
         polarized: bool = False,
         retrieve: bool = True,
         batchSize: int = 128,
-        code: Optional[bytes] = None,
+        code: bytes | None = None,
     ) -> None:
         # Check if we have a RNG if needed
         needRNG = source.nRNGForward > 0 or wavelengthSource.nRNGSamples > 0
@@ -427,7 +427,7 @@ class LightSampler(PipelineStage):
         return self._retrieve
 
     @property
-    def rng(self) -> Optional[RNG]:
+    def rng(self) -> RNG | None:
         """The random number generator used for sampling. None, if none used."""
         return self._rng
 
@@ -446,42 +446,42 @@ class LightSampler(PipelineStage):
         """Tensor holding the sampled wavelengths"""
         return self._photonTensor
 
-    def lightBuffer(self, i: int) -> Optional[QueueBuffer]:
+    def lightBuffer(self, i: int) -> QueueBuffer | None:
         """
         Buffer holding the i-th queue containing light samples.
         `None` if retrieve was set to False.
         """
         return self._lightBuffer[i]
 
-    def lightView(self, i: int) -> Optional[QueueView]:
+    def lightView(self, i: int) -> QueueView | None:
         """
         View into the i-th queue containing light samples.
         `None` if retrieve was set to `False`.
         """
         return self.lightBuffer(i).view if self.retrieve else None
 
-    def wavelengthBuffer(self, i: int) -> Optional[QueueBuffer]:
+    def wavelengthBuffer(self, i: int) -> QueueBuffer | None:
         """
         Buffer holding the i-th queue containing wavelength samples.
         `None` if retrieve was set to False.
         """
         return self._photonBuffer[i]
 
-    def wavelengthView(self, i: int) -> Optional[QueueView]:
+    def wavelengthView(self, i: int) -> QueueView | None:
         """
         View into the i-th queue containing wavelength samples.
         `None` if retrieve was set to False.
         """
         return self.wavelengthBuffer(i).view if self.retrieve else None
 
-    def run(self, i: int) -> List[hp.Command]:
+    def run(self, i: int) -> list[hp.Command]:
         self._bindParams(self._program, i)
         self.source.bindParams(self._program, i)
         self.wavelengthSource.bindParams(self._program, i)
 
         if self.rng is not None:
             self.rng.bindParams(self._program, i)
-        cmds: List[hp.Command] = [self._program.dispatch(self._groups)]
+        cmds: list[hp.Command] = [self._program.dispatch(self._groups)]
         if self.retrieve:
             cmds.extend(
                 [
@@ -520,7 +520,7 @@ class HostLightSource(LightSource):
         capacity: int,
         *,
         polarized: bool = False,
-        updateFn: Optional[Callable[[HostLightSource, int], None]] = None,
+        updateFn: Callable[[HostLightSource, int], None] | None = None,
     ) -> None:
         super().__init__(supportForward=True, supportBackward=False)
 
@@ -575,7 +575,7 @@ class HostLightSource(LightSource):
             self._updateFn(self, i)
         super().update(i)
 
-    def run(self, i: int) -> List[hp.Command]:
+    def run(self, i: int) -> list[hp.Command]:
         return [hp.updateTensor(self.buffer(i), self._tensor), *super().run(i)]
 
 
@@ -649,13 +649,13 @@ class ConeLightSource(LightSource):
     def __init__(
         self,
         *,
-        position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
-        direction: Tuple[float, float, float] = (1.0, 0.0, 0.0),
-        timeRange: Tuple[float, float] = (0.0, 100.0) * u.ns,
+        position: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        direction: tuple[float, float, float] = (1.0, 0.0, 0.0),
+        timeRange: tuple[float, float] = (0.0, 100.0) * u.ns,
         cosOpeningAngle: float = 0.5,
         budget: float = 1.0,
-        polarizationReference: Tuple[float, float, float] = (0.0, 1.0, 0.0),
-        stokes: Tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0),
+        polarizationReference: tuple[float, float, float] = (0.0, 1.0, 0.0),
+        stokes: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0),
         polarized: bool = True,
     ) -> None:
         super().__init__(
@@ -778,12 +778,12 @@ class PencilLightSource(LightSource):
     def __init__(
         self,
         *,
-        position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
-        direction: Tuple[float, float, float] = (0.0, 0.0, 1.0),
-        timeRange: Tuple[float, float] = (0.0, 100.0) * u.ns,
+        position: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        direction: tuple[float, float, float] = (0.0, 0.0, 1.0),
+        timeRange: tuple[float, float] = (0.0, 100.0) * u.ns,
         budget: float = 1.0,
-        stokes: Tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0),
-        polarizationRef: Tuple[float, float, float] = (0.0, 1.0, 0.0),
+        stokes: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0),
+        polarizationRef: tuple[float, float, float] = (0.0, 1.0, 0.0),
     ) -> None:
         super().__init__(
             supportForward=True,
@@ -864,8 +864,8 @@ class SphericalLightSource(LightSource):
     def __init__(
         self,
         *,
-        position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
-        timeRange: Tuple[float, float] = (0.0, 100.0) * u.ns,
+        position: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        timeRange: tuple[float, float] = (0.0, 100.0) * u.ns,
         budget: float = 1.0,
     ) -> None:
         super().__init__(
@@ -959,8 +959,8 @@ class CherenkovLightSource(LightSource):
     def __init__(
         self,
         *,
-        trackStart: Tuple[float, float, float] = (0.0, 0.0, 0.0) * u.m,
-        trackEnd: Tuple[float, float, float] = (100.0, 0.0, 0.0) * u.m,
+        trackStart: tuple[float, float, float] = (0.0, 0.0, 0.0) * u.m,
+        trackEnd: tuple[float, float, float] = (100.0, 0.0, 0.0) * u.m,
         startTime: float = 0.0 * u.ns,
         endTime: float = 100.0 * u.m / u.c,
         medium: int = 0,

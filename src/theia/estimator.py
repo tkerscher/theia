@@ -11,7 +11,6 @@ from theia.util import ShaderLoader, compileShader, createPreamble
 import theia.units as u
 
 from numpy.typing import NDArray
-from typing import Dict, List, Set, Type, Union, Optional
 
 
 __all__ = [
@@ -117,7 +116,7 @@ class HitResponse(SourceCodeMixin):
     name = "Hit Response"
 
     def __init__(
-        self, params: Dict[str, Type[Structure]] = {}, extra: Set[str] = set()
+        self, params: dict[str, type[Structure]] = {}, extra: set[str] = set()
     ) -> None:
         super().__init__(params, extra)
 
@@ -204,15 +203,15 @@ class HitRecorder(HitResponse):
         return preamble + self._sourceCode
 
     @property
-    def tensor(self) -> Union[QueueTensor, None]:
+    def tensor(self) -> QueueTensor | None:
         """Tensor holding the queue storing the hits"""
         return self._tensor
 
-    def buffer(self, i: int) -> Optional[QueueBuffer]:
+    def buffer(self, i: int) -> QueueBuffer | None:
         """Buffer holding the i-th queue. `None` if retrieve was set to `False`"""
         return self._buffer[i]
 
-    def view(self, i: int) -> Optional[QueueView]:
+    def view(self, i: int) -> QueueView | None:
         """View into the i-th queue. `None` if retrieve was set to `False`"""
         return self.buffer(i).view if self.retrieve else None
 
@@ -222,7 +221,7 @@ class HitRecorder(HitResponse):
         super().bindParams(program, i)
         program.bindParams(HitQueueOut=self._tensor)
 
-    def run(self, i: int) -> List[hp.Command]:
+    def run(self, i: int) -> list[hp.Command]:
         if self.retrieve:
             return [
                 hp.retrieveTensor(self.tensor, self.buffer(i)),
@@ -264,7 +263,7 @@ class HitReplay(PipelineStage):
         normalization: float = 1.0,
         polarized: bool = False,
         blockSize: int = 128,
-        code: Optional[bytes] = None,
+        code: bytes | None = None,
     ) -> None:
         super().__init__()
         # save params
@@ -335,7 +334,7 @@ class HitReplay(PipelineStage):
         """View into the i-th queue holding the hits for the next run"""
         return self.buffer(i).view
 
-    def run(self, i: int) -> List[hp.Command]:
+    def run(self, i: int) -> list[hp.Command]:
         self._bindParams(self._program, i)
         self.response.bindParams(self._program, i)
         return [
@@ -378,7 +377,7 @@ class ValueResponse(SourceCodeMixin):
     name = "Value Response"
 
     def __init__(
-        self, params: Dict[str, Type[Structure]] = {}, extra: Set[str] = set()
+        self, params: dict[str, type[Structure]] = {}, extra: set[str] = set()
     ) -> None:
         super().__init__(params, extra)
 
@@ -451,14 +450,14 @@ class StoreValueHitResponse(HitResponse):
     _sourceCode = ShaderLoader("response.value.store.glsl")
 
     def __init__(
-        self, response: ValueResponse, queue: Union[QueueTensor, None] = None
+        self, response: ValueResponse, queue: QueueTensor | None = None
     ) -> None:
         super().__init__()
         self._response = response
         self._queue = queue
 
     @property
-    def queue(self) -> Union[QueueTensor, None]:
+    def queue(self) -> QueueTensor | None:
         """Tensor to be filled with `ValueItem`"""
         return self._queue
 
@@ -548,8 +547,8 @@ class HistogramReducer(PipelineStage):
         *,
         nBins: int,
         nHist: int,
-        histIn: Optional[hp.Tensor] = None,
-        histOut: Optional[hp.Tensor] = None,
+        histIn: hp.Tensor | None = None,
+        histOut: hp.Tensor | None = None,
         retrieve: bool = True,
         normalization: float = 1.0,
         blockSize: int = 128,
@@ -603,11 +602,11 @@ class HistogramReducer(PipelineStage):
         """Wether to retrieve the final histogram"""
         return self._retrieve
 
-    def result(self, i: int) -> Optional[NDArray]:
+    def result(self, i: int) -> NDArray | None:
         """The retrieved i-th histogram. `None` if `retrieve`was set to `False`"""
         return self._buffer[i].numpy() if self.retrieve else None
 
-    def run(self, i: int) -> List[hp.Command]:
+    def run(self, i: int) -> list[hp.Command]:
         self._bindParams(self._program, i)
         cmds = [self._program.dispatch(self._groups)]
         if self.retrieve:
@@ -677,7 +676,7 @@ class HistogramHitResponse(HitResponse):
         nBins: int = 100,
         t0: float = 0.0 * u.ns,
         binSize: float = 1.0 * u.ns,
-        normalization: Optional[float] = None,
+        normalization: float | None = None,
         retrieve: bool = True,
         reduceBlockSize: int = 128,
         updateResponse: bool = True,
@@ -699,7 +698,7 @@ class HistogramHitResponse(HitResponse):
         return self._nBins
 
     @property
-    def normalization(self) -> Optional[float]:
+    def normalization(self) -> float | None:
         """Common factor each bin gets multiplied with"""
         return self._normalization
 
@@ -750,7 +749,7 @@ class HistogramHitResponse(HitResponse):
             ]
         )
 
-    def result(self, i: int) -> Optional[NDArray]:
+    def result(self, i: int) -> NDArray | None:
         """
         The retrieved i-th histogram. `None` if `retrieve` was set to `False` or
         response has not yet been prepared.
@@ -785,7 +784,7 @@ class HistogramHitResponse(HitResponse):
         if self._updateResponse:
             self.response.update(i)
 
-    def run(self, i: int) -> List[hp.Command]:
+    def run(self, i: int) -> list[hp.Command]:
         return self._reducer.run(i)
 
 
@@ -816,8 +815,8 @@ class Estimator(PipelineStage):
         self,
         queue: QueueTensor,
         clearQueue: bool,
-        params: Dict[str, Type[Structure]] = {},
-        extra: Set[str] = set(),
+        params: dict[str, type[Structure]] = {},
+        extra: set[str] = set(),
     ) -> None:
         super().__init__(params, extra)
         self._queue = queue
@@ -896,7 +895,7 @@ class HistogramEstimator(Estimator):
         retrieve: bool = True,
         blockSize: int = 128,
         reduceBlockSize: int = 128,
-        code: Optional[bytes] = None,
+        code: bytes | None = None,
     ) -> None:
         super().__init__(
             queue, clearQueue, {"Parameters": self.Params}, {"normalization"}
@@ -968,7 +967,7 @@ class HistogramEstimator(Estimator):
         """Wether to retrieve the final histogram"""
         return self._reducer.retrieve
 
-    def result(self, i: int) -> Optional[NDArray]:
+    def result(self, i: int) -> NDArray | None:
         """The retrieved i-th histogram. `None` if `retrieve`was set to `False`"""
         return self._reducer.result(i)
 
@@ -979,7 +978,7 @@ class HistogramEstimator(Estimator):
         self._reducer.update(i)
         super().update(i)
 
-    def run(self, i: int) -> List[hp.Command]:
+    def run(self, i: int) -> list[hp.Command]:
         self._bindParams(self._program, i)
         return [
             self._program.dispatch(self._groups),
@@ -1014,7 +1013,7 @@ class HostEstimator(Estimator):
         """Returns a view of the i-th queue buffer"""
         return self.buffer(i).view
 
-    def run(self, i: int) -> List[hp.Command]:
+    def run(self, i: int) -> list[hp.Command]:
         return [
             hp.retrieveTensor(self.queue, self.buffer(i)),
             *([clearQueue(self.queue)] if self.clearQueue else []),

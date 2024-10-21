@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import importlib.resources
 import hephaistos as hp
 import numpy as np
@@ -7,8 +9,6 @@ from os import urandom
 
 from hephaistos.pipeline import PipelineStage, SourceCodeMixin
 from theia.util import ShaderLoader, compileShader, createPreamble
-
-from typing import Dict, List, Optional, Set, Tuple, Type
 
 
 __all__ = [
@@ -35,8 +35,8 @@ class RNG(SourceCodeMixin):
 
     def __init__(
         self,
-        params: Dict[str, Type[Structure]] = {},
-        extras: Set[str] = set(),
+        params: dict[str, type[Structure]] = {},
+        extras: set[str] = set(),
     ) -> None:
         super().__init__(params, extras)
 
@@ -107,8 +107,8 @@ class RNGBufferSink(PipelineStage):
         *,
         baseStream: int = 0,
         baseCount: int = 0,
-        blockSize: Tuple[int, int, int] = (32, 4, 16),
-        code: Optional[bytes] = None,
+        blockSize: tuple[int, int, int] = (32, 4, 16),
+        code: bytes | None = None,
     ) -> None:
         super().__init__({"Params": self.Params})
         # save params
@@ -145,7 +145,7 @@ class RNGBufferSink(PipelineStage):
         self._program.bindParams(RngSink=self._tensor)
 
     @property
-    def blockSize(self) -> Tuple[float, float, float]:
+    def blockSize(self) -> tuple[float, float, float]:
         """Block size used by the shader: (streams, batches, draws per invocation)"""
         return self._blockSize
 
@@ -179,7 +179,7 @@ class RNGBufferSink(PipelineStage):
         """Tensor holding the drawn samples"""
         return self._tensor
 
-    def run(self, i: int) -> List[hp.Command]:
+    def run(self, i: int) -> list[hp.Command]:
         self._bindParams(self._program, i)
         self.generator.bindParams(self._program, i)
         return [self._program.dispatch(*self._dispatchSize)]
@@ -240,7 +240,7 @@ class PhiloxRNG(RNG):
         _fields_ = [("key", Key), ("offset", Counter)]
 
     def __init__(
-        self, *, key: Optional[int] = None, offset: int = 0, autoAdvance: int = 0
+        self, *, key: int | None = None, offset: int = 0, autoAdvance: int = 0
     ) -> None:
         super().__init__({"PhiloxParams": self.PhiloxParams}, {"autoAdvance"})
         # save params
@@ -308,7 +308,7 @@ class SobolQRNG(RNG):
     def __init__(
         self,
         *,
-        seed: Optional[int] = None,
+        seed: int | None = None,
         offset: int = 0,
         scrambled: bool = True,
         autoAdvance: int = 0,

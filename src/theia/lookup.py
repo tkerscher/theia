@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 from scipy.interpolate import (
@@ -10,7 +12,7 @@ import hephaistos as hp
 from ctypes import memmove
 from hephaistos import ByteTensor
 
-from typing import Final, List, Literal, Union
+from typing import Final, Literal
 
 __all__ = [
     "createTable",
@@ -30,7 +32,7 @@ def __dir__():
 TABLE_ALIGNMENT: Final[int] = 4
 
 
-def getTableSize(a: Union[ArrayLike, tuple[int, ...], None]) -> int:
+def getTableSize(a: ArrayLike | tuple[int, ...] | None) -> int:
     """
     Calculates the size in bytes needed to store a table of given shape on the
     GPU. Returns zero if a is None.
@@ -45,7 +47,7 @@ def getTableSize(a: Union[ArrayLike, tuple[int, ...], None]) -> int:
     return (len(a) + sum(a)) * 4  # 4 bytes per float
 
 
-def createTable(data):
+def createTable(data: NDArray):
     """
     Transform the given data to be suitable for table lookups on the GPU.
     It is assumed that the data is uniformly sampled on [0,1] on each dimension.
@@ -69,7 +71,7 @@ def createTable(data):
     return np.ascontiguousarray(data, np.float32)
 
 
-def uploadTables(data: List) -> Union[ByteTensor, List[int]]:
+def uploadTables(data: list[NDArray]) -> tuple[ByteTensor, list[int]]:
     """
     Creates a table for each data entry in the given list and uploads them to
     the GPU. Returns the tensor storing them and a the corresponding list of
@@ -77,14 +79,14 @@ def uploadTables(data: List) -> Union[ByteTensor, List[int]]:
 
     Parameters
     ----------
-    data: List
+    data: list[NDArray]
         List of data used to populate tables.
 
     Returns
     -------
     tensor: ByteTensor
         Tensor containing the table data
-    addresses: List[int]
+    addresses: list[int]
         Device addresses pointing to the individual tables on the device.
     """
     tables = [createTable(d) for d in data]

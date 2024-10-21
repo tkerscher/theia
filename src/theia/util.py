@@ -8,10 +8,10 @@ from hephaistos.glsl import uvec4, uvec2
 from numpy.ctypeslib import as_array
 
 from numpy.typing import NDArray
-from typing import Any, Dict, Type
+from typing import Any
 
 
-def viewSoA(address: int, item: Type[Structure], count: int) -> NDArray:
+def viewSoA(address: int, item: type[Structure], count: int) -> NDArray:
     """
     Returns a structured numpy array as a view of the structure of array saved
     at the given memory address.
@@ -60,7 +60,7 @@ class ShaderLoader:
         return self.code
 
 
-def compileShader(file: str, preamble: str = "", headers: Dict[str, str] = {}) -> bytes:
+def compileShader(file: str, preamble: str = "", headers: dict[str, str] = {}) -> bytes:
     """
     Compiles the given shader code stored inside the libs shader folder.
 

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import hephaistos as hp
 from hephaistos import Program
 from hephaistos.glsl import buffer_reference, vec3
@@ -18,7 +20,7 @@ import warnings
 
 from enum import IntEnum
 from numpy.typing import NDArray
-from typing import Dict, List, Literal, Optional, Set, Tuple, Type, Union
+from typing import Literal
 
 
 __all__ = [
@@ -53,8 +55,8 @@ class TraceEventCallback(SourceCodeMixin):
     def __init__(
         self,
         *,
-        params: Dict[str, Type[Structure]] = {},
-        extra: Set[str] = set(),
+        params: dict[str, type[Structure]] = {},
+        extra: set[str] = set(),
     ) -> None:
         super().__init__(params, extra)
 
@@ -240,7 +242,7 @@ class TrackRecordCallback(TraceEventCallback):
         """Tensor containing the tracks"""
         return self._tensor
 
-    def result(self, i: int) -> Tuple[NDArray, NDArray]:
+    def result(self, i: int) -> tuple[NDArray, NDArray]:
         """
         Returns the recorded tracks saved using the i-th pipeline configuration.
         First tuple are the tracks, the second one the length of each track, and
@@ -274,7 +276,7 @@ class TrackRecordCallback(TraceEventCallback):
         super().bindParams(program, i)
         program.bindParams(TrackBuffer=self._tensor)
 
-    def run(self, i: int) -> List[hp.Command]:
+    def run(self, i: int) -> list[hp.Command]:
         if self.retrieve:
             return [hp.retrieveTensor(self._tensor, self._buffer[i])]
         else:
@@ -326,8 +328,8 @@ class Tracer(PipelineStage):
     def __init__(
         self,
         response: HitResponse,
-        params: Dict[str, type[Structure]] = {},
-        extra: Set[str] = set(),
+        params: dict[str, type[Structure]] = {},
+        extra: set[str] = set(),
         *,
         batchSize: int,
         blockSize: int,
@@ -440,7 +442,7 @@ class VolumeForwardTracer(Tracer):
         The simulated light path is not affected by this.
     blockSize: int, default=128
         Number of threads in a single work group
-    code: Optional[bytes], default=None
+    code: bytes | None, default=None
         Cached compiled byte code. If `None` compiles it from source.
         The given byte code is not checked and must match the given
         configuration
@@ -501,7 +503,7 @@ class VolumeForwardTracer(Tracer):
         disableDirectLighting: bool = False,
         disableTargetSampling: bool = False,
         blockSize: int = 128,
-        code: Optional[bytes] = None,
+        code: bytes | None = None,
     ) -> None:
         # calculate max hits
         maxHits = nScattering
@@ -640,7 +642,7 @@ class VolumeForwardTracer(Tracer):
         super()._finishParams(i)
         self.setParam("_maxDist", self.traceBBox.diagonal)
 
-    def run(self, i: int) -> List[hp.Command]:
+    def run(self, i: int) -> list[hp.Command]:
         self._bindParams(self._program, i)
         self.callback.bindParams(self._program, i)
         self.source.bindParams(self._program, i)
@@ -701,7 +703,7 @@ class VolumeBackwardTracer(Tracer):
         with no scattering.
     blockSize: int, default=128
         Number of threads in a single work group
-    code: Optional[bytes], default=None
+    code: bytes | None, default=None
         Cached compiled byte code. If `None` compiles it from source.
         The given byte code is not checked and must match the given
         configuration
@@ -755,14 +757,14 @@ class VolumeBackwardTracer(Tracer):
         callback: TraceEventCallback = EmptyEventCallback(),
         medium: int = 0,
         nScattering: int = 6,
-        target: Optional[SphereBBox] = None,
+        target: SphereBBox | None = None,
         scatterCoefficient: float = 0.01 / u.m,
         traceBBox: RectBBox = RectBBox((-1.0 * u.km,) * 3, (1.0 * u.km,) * 3),
         maxTime: float = 1000.0 * u.ns,
         polarized: bool = False,
         disableDirectLighting: bool = False,
         blockSize: int = 128,
-        code: Optional[bytes] = None,
+        code: bytes | None = None,
     ) -> None:
         # check if source and camera support this mode
         if not source.supportBackward:
@@ -901,7 +903,7 @@ class VolumeBackwardTracer(Tracer):
         super()._finishParams(i)
         self.setParam("_maxDist", self.traceBBox.diagonal)
 
-    def run(self, i: int) -> List[hp.Command]:
+    def run(self, i: int) -> list[hp.Command]:
         self._bindParams(self._program, i)
         self.callback.bindParams(self._program, i)
         self.camera.bindParams(self._program, i)
@@ -969,7 +971,7 @@ class SceneForwardTracer(Tracer):
         volume border will produce wrong results.
     blockSize: int, default=128
         Number of threads in a single work group
-    code: Optional[bytes], default=None
+    code: bytes | None, default=None
         Cached compiled byte code. If `None` compiles it from source.
         The given byte code is not checked and must match the given
         configuration
@@ -1018,7 +1020,7 @@ class SceneForwardTracer(Tracer):
         disableTransmission: bool = False,
         disableVolumeBorder: bool = False,
         blockSize: int = 128,
-        code: Optional[bytes] = None,
+        code: bytes | None = None,
     ) -> None:
         # check if ray tracing was enabled
         if not hp.isRaytracingEnabled():
@@ -1158,7 +1160,7 @@ class SceneForwardTracer(Tracer):
         """Source used to sample wavelengths"""
         return self._wavelengthSource
 
-    def run(self, i: int) -> List[hp.Command]:
+    def run(self, i: int) -> list[hp.Command]:
         self._bindParams(self._program, i)
         self.callback.bindParams(self._program, i)
         self.source.bindParams(self._program, i)
@@ -1222,7 +1224,7 @@ class SceneBackwardTracer(Tracer):
         volume border will produce wrong results.
     blockSize: int, default=128
         Number of threads in a single work group
-    code: Optional[bytes], default=None
+    code: bytes | None, default=None
         Cached compiled byte code. If `None` compiles it from source.
         The given byte code is not checked and must match the given
         configuration
@@ -1259,7 +1261,7 @@ class SceneBackwardTracer(Tracer):
         scene: Scene,
         *,
         callback: TraceEventCallback = EmptyEventCallback(),
-        medium: Optional[int] = None,
+        medium: int | None = None,
         maxPathLength: int = 6,
         scatterCoefficient: float = 0.01 / u.m,
         maxTime: float = 1000.0 * u.ns,
@@ -1268,7 +1270,7 @@ class SceneBackwardTracer(Tracer):
         disableTransmission: bool = False,
         disableVolumeBorder: bool = False,
         blockSize: int = 128,
-        code: Optional[bytes] = None,
+        code: bytes | None = None,
     ) -> None:
         # check if source and camera support this mode
         if not source.supportBackward:
@@ -1403,7 +1405,7 @@ class SceneBackwardTracer(Tracer):
         """Source used to sample wavelengths"""
         return self._wavelengthSource
 
-    def run(self, i: int) -> List[hp.Command]:
+    def run(self, i: int) -> list[hp.Command]:
         self._bindParams(self._program, i)
         self.callback.bindParams(self._program, i)
         self.camera.bindParams(self._program, i)
@@ -1449,7 +1451,7 @@ class DirectLightTracer(Tracer):
         Whether to simulate polarization effects.
     blockSize: int, default=128
         Number of threads in a single work group
-    code: Optional[bytes], default=None
+    code: bytes | None, default=None
         Cached compiled byte code. If `None` compiles it from source.
         The given byte code is not checked and must match the given
         configuration
@@ -1487,14 +1489,14 @@ class DirectLightTracer(Tracer):
         wavelengthSource: WavelengthSource,
         response: HitResponse,
         rng: RNG,
-        scene: Optional[Scene] = None,
+        scene: Scene | None = None,
         *,
         callback: TraceEventCallback = EmptyEventCallback(),
-        medium: Optional[int] = None,
+        medium: int | None = None,
         maxTime: float = 1000.0 * u.ns,
         polarized: bool = False,
         blockSize: int = 128,
-        code: Optional[bytes] = None,
+        code: bytes | None = None,
     ) -> None:
         # check if sources support this mode
         if not source.supportBackward:
@@ -1593,7 +1595,7 @@ class DirectLightTracer(Tracer):
         return self._rng
 
     @property
-    def scene(self) -> Union[Scene, None]:
+    def scene(self) -> Scene | None:
         """Scene in which the rays are traced"""
         return self._scene
 
@@ -1607,7 +1609,7 @@ class DirectLightTracer(Tracer):
         """Source used to sample wavelengths"""
         return self._wavelengthSource
 
-    def run(self, i: int) -> List[hp.Command]:
+    def run(self, i: int) -> list[hp.Command]:
         self._bindParams(self._program, i)
         self.callback.bindParams(self._program, i)
         self.camera.bindParams(self._program, i)
@@ -1675,7 +1677,7 @@ class BidirectionalPathTracer(Tracer):
         volume border will produce wrong results.
     blockSize: int, default=128
         Number of threads in a single work group
-    code: Optional[bytes], default=None
+    code: bytes | None, default=None
         Cached compiled byte code. If `None` compiles it from source.
         The given byte code is not checked and must match the given
         configuration
@@ -1725,11 +1727,11 @@ class BidirectionalPathTracer(Tracer):
         scatterCoefficient: float = 0.01 / u.m,
         maxTime: float = 1000.0 * u.ns,
         polarized: bool = False,
-        cameraMedium: Optional[int] = None,
+        cameraMedium: int | None = None,
         disableTransmission: bool = False,
         disableVolumeBorder: bool = False,
         blockSize: int = 128,
-        code: Optional[bytes] = None,
+        code: bytes | None = None,
     ) -> None:
         # check if ray tracing was enabled
         if not hp.isRaytracingEnabled():
@@ -1864,7 +1866,7 @@ class BidirectionalPathTracer(Tracer):
         """Source used to sample wavelengths"""
         return self._wavelengthSource
 
-    def run(self, i: int) -> List[hp.Command]:
+    def run(self, i: int) -> list[hp.Command]:
         self._bindParams(self._program, i)
         self.callback.bindParams(self._program, i)
         self.camera.bindParams(self._program, i)

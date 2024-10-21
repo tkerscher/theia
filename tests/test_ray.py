@@ -125,7 +125,7 @@ def test_surface(shaderUtil, forward: bool, polarized: bool):
         headers["source.glsl"] = light.sourceCode
         pipeline.extend([light])
     else:
-        camera = theia.camera.PointCameraRaySource()
+        camera = theia.camera.PointCamera()
         headers["camera.glsl"] = camera.sourceCode
         pipeline.extend([camera])
     # create test program

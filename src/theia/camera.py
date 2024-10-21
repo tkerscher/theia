@@ -14,7 +14,8 @@ from theia.random import RNG
 from theia.scene import MeshInstance
 from theia.util import ShaderLoader, compileShader, createPreamble
 
-from typing import Callable, Dict, List, Optional, Set, Tuple, Type, Union
+from collections.abc import Callable
+
 
 __all__ = [
     "Camera",
@@ -50,8 +51,8 @@ class Camera(SourceCodeMixin):
         nRNGSamples: int,
         nRNGDirect: int = 0,
         supportDirect: bool = False,
-        params: Dict[str, Type[Structure]] = {},
-        extra: Set[str] = set(),
+        params: dict[str, type[Structure]] = {},
+        extra: set[str] = set(),
     ) -> None:
         super().__init__(params, extra)
         self._nRNGSamples = nRNGSamples
@@ -147,11 +148,11 @@ class CameraRaySampler(PipelineStage):
         wavelengthSource: WavelengthSource,
         capacity: int,
         *,
-        rng: Optional[RNG] = None,
+        rng: RNG | None = None,
         polarized: bool = True,
         retrieve: bool = True,
         batchSize: int = 128,
-        code: Optional[bytes] = None,
+        code: bytes | None = None,
     ) -> None:
         # check if we have a rng if needed
         needRNG = camera.nRNGSamples > 0 or wavelengthSource.nRNGSamples > 0
@@ -238,7 +239,7 @@ class CameraRaySampler(PipelineStage):
         return self._retrieve
 
     @property
-    def rng(self) -> Optional[RNG]:
+    def rng(self) -> RNG | None:
         """The random number generator used for sampling. None, if none used."""
         return self._rng
 
@@ -257,41 +258,41 @@ class CameraRaySampler(PipelineStage):
         """Tensor holding the sampled wavelengths"""
         return self._photonTensor
 
-    def cameraBuffer(self, i: int) -> Optional[QueueBuffer]:
+    def cameraBuffer(self, i: int) -> QueueBuffer | None:
         """
         Buffer holding the i-th queue containing camera samples.
         `None` if retrieve was set to False.
         """
         return self._camBuffer[i]
 
-    def cameraView(self, i: int) -> Optional[QueueView]:
+    def cameraView(self, i: int) -> QueueView | None:
         """
         View into the i-th queue containing camera samples.
         `None` if retrieve was set to `False`.
         """
         return self.cameraBuffer(i).view if self.retrieve else None
 
-    def wavelengthBuffer(self, i: int) -> Optional[QueueBuffer]:
+    def wavelengthBuffer(self, i: int) -> QueueBuffer | None:
         """
         Buffer holding the i-th queue containing wavelength samples.
         `None` if retrieve was set to False.
         """
         return self._photonBuffer[i]
 
-    def wavelengthView(self, i: int) -> Optional[QueueView]:
+    def wavelengthView(self, i: int) -> QueueView | None:
         """
         View into the i-th queue containing wavelength samples.
         `None` if retrieve was set to False.
         """
         return self.wavelengthBuffer(i).view if self.retrieve else None
 
-    def run(self, i: int) -> List[hp.Command]:
+    def run(self, i: int) -> list[hp.Command]:
         self._bindParams(self._program, i)
         self.camera.bindParams(self._program, i)
         self.wavelengthSource.bindParams(self._program, i)
         if self.rng is not None:
             self.rng.bindParams(self._program, i)
-        cmds: List[hp.Command] = [self._program.dispatch(self._groups)]
+        cmds: list[hp.Command] = [self._program.dispatch(self._groups)]
         if self.retrieve:
             cmds.extend(
                 [
@@ -332,7 +333,7 @@ class HostCamera(Camera):
         capacity: int,
         *,
         polarized: bool = False,
-        updateFn: Optional[Callable[[HostCamera, int], None]] = None,
+        updateFn: Callable[[HostCamera, int], None] | None = None,
     ) -> None:
         super().__init__(nRNGSamples=0, supportDirect=False)
         # save params
@@ -386,7 +387,7 @@ class HostCamera(Camera):
             self._updateFn(self, i)
         super().update(i)
 
-    def run(self, i: int) -> List[hp.Command]:
+    def run(self, i: int) -> list[hp.Command]:
         return [hp.updateTensor(self.buffer(i), self._tensor), *super().run(i)]
 
 
@@ -460,14 +461,14 @@ class PencilCamera(Camera):
     def __init__(
         self,
         *,
-        rayPosition: Tuple[float, float, float] = (0.0, 0.0, 0.0),
-        rayDirection: Tuple[float, float, float] = (0.0, 0.0, 1.0),
-        polarizationRef: Union[Tuple[float, float, float], None] = None,
+        rayPosition: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        rayDirection: tuple[float, float, float] = (0.0, 0.0, 1.0),
+        polarizationRef: tuple[float, float, float] | None = None,
         timeDelta: float = 0.0,
-        hitPosition: Tuple[float, float, float] = (0.0, 0.0, 0.0),
-        hitDirection: Tuple[float, float, float] = (0.0, 0.0, -1.0),
-        hitNormal: Tuple[float, float, float] = (0.0, 0.0, 1.0),
-        hitPolarizationRef: Union[Tuple[float, float, float], None] = None,
+        hitPosition: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        hitDirection: tuple[float, float, float] = (0.0, 0.0, -1.0),
+        hitNormal: tuple[float, float, float] = (0.0, 0.0, 1.0),
+        hitPolarizationRef: tuple[float, float, float] | None = None,
     ) -> None:
         super().__init__(
             nRNGSamples=0,
@@ -574,9 +575,9 @@ class FlatCamera(Camera):
         *,
         width: float = 1.0 * u.cm,
         length: float = 1.0 * u.cm,
-        position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
-        direction: Tuple[float, float, float] = (0.0, 0.0, 1.0),
-        up: Tuple[float, float, float] = (0.0, 1.0, 0.0),
+        position: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        direction: tuple[float, float, float] = (0.0, 0.0, 1.0),
+        up: tuple[float, float, float] = (0.0, 1.0, 0.0),
     ) -> None:
         super().__init__(
             nRNGSamples=4,
@@ -595,21 +596,21 @@ class FlatCamera(Camera):
     sourceCode = ShaderLoader("camera.flat.glsl")
 
     @property
-    def direction(self) -> Tuple[float, float, float]:
+    def direction(self) -> tuple[float, float, float]:
         """Direction the camera faces"""
         return self._direction
 
     @direction.setter
-    def direction(self, value: Tuple[float, float, float]) -> None:
+    def direction(self, value: tuple[float, float, float]) -> None:
         self._direction = value
 
     @property
-    def up(self) -> Tuple[float, float, float]:
+    def up(self) -> tuple[float, float, float]:
         """Direction of the local y-Axis identifying where 'up' us for the camera"""
         return self._up
 
     @up.setter
-    def up(self, value: Tuple[float, float, float]) -> None:
+    def up(self, value: tuple[float, float, float]) -> None:
         self._up = value
 
     def _finishParams(self, i: int) -> None:
@@ -663,8 +664,8 @@ class ConeCamera(Camera):
     def __init__(
         self,
         *,
-        position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
-        direction: Tuple[float, float, float] = (0.0, 0.0, 1.0),
+        position: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        direction: tuple[float, float, float] = (0.0, 0.0, 1.0),
         cosOpeningAngle: float = 1.0,
     ) -> None:
         super().__init__(
@@ -727,7 +728,7 @@ class SphereCamera(Camera):
     def __init__(
         self,
         *,
-        position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        position: tuple[float, float, float] = (0.0, 0.0, 0.0),
         radius: float = 1.0,
         timeDelta: float = 0.0,
     ) -> None:
@@ -780,7 +781,7 @@ class PointCamera(Camera):
     def __init__(
         self,
         *,
-        position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        position: tuple[float, float, float] = (0.0, 0.0, 0.0),
         timeDelta: float = 0.0,
     ) -> None:
         super().__init__(

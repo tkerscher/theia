@@ -357,9 +357,7 @@ def test_coneCamera(polarized: bool):
 
     # create camera and sampler
     photon = theia.light.ConstWavelengthSource()
-    camera = theia.camera.ConeCamera(
-        position=pos, direction=dir, cosOpeningAngle=theta
-    )
+    camera = theia.camera.ConeCamera(position=pos, direction=dir, cosOpeningAngle=theta)
     philox = PhiloxRNG(key=0xC0FFEE)
     sampler = theia.camera.CameraRaySampler(
         camera, photon, N, rng=philox, polarized=polarized
@@ -399,9 +397,7 @@ def test_coneCamera_direct(shaderUtil, polarized: bool):
 
     # create camera and sampler
     philox = PhiloxRNG(key=0xC0FFEE)
-    camera = theia.camera.ConeCamera(
-        position=pos, direction=dir, cosOpeningAngle=theta
-    )
+    camera = theia.camera.ConeCamera(position=pos, direction=dir, cosOpeningAngle=theta)
     sampler = CameraDirectSampler(
         camera, N, rng=philox, polarized=polarized, shaderUtil=shaderUtil
     )
@@ -453,9 +449,7 @@ def test_sphericalCamera(polarized: bool):
 
     # create camera and sampler
     photon = theia.light.ConstWavelengthSource()
-    camera = theia.camera.SphereCamera(
-        position=position, radius=radius, timeDelta=t0
-    )
+    camera = theia.camera.SphereCamera(position=position, radius=radius, timeDelta=t0)
     philox = PhiloxRNG(key=0xC0FFEE)
     sampler = theia.camera.CameraRaySampler(
         camera, photon, N, rng=philox, polarized=polarized
@@ -501,9 +495,7 @@ def test_sphericalCamera_direct(shaderUtil, polarized: bool):
 
     # create camera and sampler
     philox = PhiloxRNG(key=0xC0FFEE)
-    camera = theia.camera.SphereCamera(
-        position=position, radius=radius, timeDelta=t0
-    )
+    camera = theia.camera.SphereCamera(position=position, radius=radius, timeDelta=t0)
     sampler = CameraDirectSampler(
         camera, N, rng=philox, polarized=polarized, shaderUtil=shaderUtil
     )

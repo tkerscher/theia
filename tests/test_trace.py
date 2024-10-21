@@ -160,9 +160,7 @@ def test_VolumeBackwardTracer(
         budget=light_budget,
         timeRange=(T0, T1),
     )
-    camera = theia.camera.SphereCamera(
-        position=target_pos, radius=target_radius
-    )
+    camera = theia.camera.SphereCamera(position=target_pos, radius=target_radius)
     recorder = theia.estimator.HitRecorder(polarized=polarized)
     stats = theia.trace.EventStatisticCallback()
     tracer = theia.trace.VolumeBackwardTracer(
