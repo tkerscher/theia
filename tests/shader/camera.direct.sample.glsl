@@ -12,6 +12,7 @@ layout(local_size_x = 32) in;
 
 #include "rng.glsl"
 #include "camera.glsl"
+#include "util.sample.glsl"
 
 struct Result {
     float wavelength;
@@ -28,14 +29,7 @@ void main() {
     //sample wavelength
     float lambda = mix(LAM_MIN, LAM_MAX, random(i, dim));
     //sample light direction
-    float cos_theta = 2.0 * random(i, dim) - 1.0;
-    float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
-    float phi = TWO_PI * random(i, dim);
-    vec3 lightDir = vec3(
-        sin_theta * sin(phi),
-        sin_theta * cos(phi),
-        cos_theta
-    );
+    vec3 lightDir = sampleUnitSphere(random2D(i, dim));
 
     //sample camera
     CameraSample cam = sampleCamera(lambda, i, dim);

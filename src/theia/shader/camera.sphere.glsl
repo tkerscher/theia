@@ -2,6 +2,7 @@
 #define _INCLUDE_CAMERARAYSOURCE_SPHERE
 
 #include "math.glsl"
+#include "util.sample.glsl"
 
 layout(scalar) uniform CameraParams {
     vec3 position;
@@ -16,28 +17,13 @@ layout(scalar) uniform CameraParams {
 
 CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
     //sample normal
-    vec2 u = random2D(idx, dim);
-    float phi = TWO_PI * u.x;
-    float cos_theta = 2.0 * u.y - 1.0;
-    float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
-    vec3 normal = vec3(
-        sin_theta * sin(phi),
-        sin_theta * cos(phi),
-        cos_theta
-    );
+    vec3 normal = sampleUnitSphere(random2D(idx, dim));
     //derive ray pos from normal
     vec3 rayPos = cameraParams.radius * normal + cameraParams.position;
 
     //sample direction
-    u = random2D(idx, dim);
-    phi = TWO_PI * u.x;
-    cos_theta = 1.0 - u.y; //upper hemisphere (exclude 0.0)
-    sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
-    vec3 rayDir = vec3(
-        sin_theta * sin(phi),
-        sin_theta * cos(phi),
-        cos_theta
-    );
+    vec3 rayDir = sampleHemisphere(random2D(idx, dim));
+    float cos_theta = rayDir.z;
     //rotate dir so that hemisphere coincides with normal
     mat3 cosy = createLocalCOSY(normal);
     rayDir = cosy * rayDir;
@@ -66,15 +52,7 @@ CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
 
 CameraSample sampleCamera(float wavelength, uint idx, inout uint dim) {
     //sample normal
-    vec2 u = random2D(idx, dim);
-    float phi = TWO_PI * u.x;
-    float cos_theta = 2.0 * u.y - 1.0;
-    float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
-    vec3 normal = vec3(
-        sin_theta * sin(phi),
-        sin_theta * cos(phi),
-        cos_theta
-    );
+    vec3 normal = sampleUnitSphere(random2D(idx, dim));
     //derive ray pos from normal
     vec3 rayPos = cameraParams.radius * normal + cameraParams.position;
 

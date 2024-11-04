@@ -2,6 +2,7 @@
 #define _INCLUDE_CAMERARAYSOURCE_POINT
 
 #include "math.glsl"
+#include "util.sample.glsl"
 
 layout(scalar) uniform CameraParams {
     vec3 position;
@@ -10,15 +11,7 @@ layout(scalar) uniform CameraParams {
 
 CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
     //sample direction
-    vec2 u = random2D(idx, dim);
-    float phi = TWO_PI * u.x;
-    float cos_theta = 2.0 * u.y - 1.0;
-    float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
-    vec3 dir = vec3(
-        sin_theta * sin(phi),
-        sin_theta * cos(phi),
-        cos_theta
-    );
+    vec3 dir = sampleUnitSphere(random2D(idx, dim));
     vec3 polRef = perpendicularTo(dir);
 
     //assemble camera ray

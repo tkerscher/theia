@@ -2,6 +2,7 @@
 #define _INCLUDE_LIGHTSOURCE_SPHERICAL
 
 #include "math.glsl"
+#include "util.sample.glsl"
 
 layout(scalar) uniform LightParams {
     vec3 position;
@@ -14,15 +15,7 @@ layout(scalar) uniform LightParams {
 
 SourceRay sampleLight(float wavelength, uint idx, inout uint dim) {
     //sample direction
-    vec2 u = random2D(idx, dim);
-    float cos_theta = 2.0 * u.x - 1.0;
-    float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
-    float phi = TWO_PI * u.y;
-    vec3 rayDir = vec3(
-        sin_theta * cos(phi),
-        sin_theta * sin(phi),
-        cos_theta
-    );
+    vec3 rayDir = sampleUnitSphere(random2D(idx, dim));
     //sample startTime
     float v = random(idx, dim);
     float startTime = mix(lightParams.t_min, lightParams.t_max, v);

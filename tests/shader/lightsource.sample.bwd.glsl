@@ -11,6 +11,7 @@ layout(local_size_x = 32) in;
 
 #include "rng.glsl"
 #include "light.glsl"
+#include "util.sample.glsl"
 
 struct Result {
     vec3 observer;
@@ -33,14 +34,7 @@ void main() {
         mix(-DIM, DIM, random(i, dim))
     );
     //sample observer normal
-    float cos_theta = random(i, dim);
-    float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
-    float phi = TWO_PI * random(i, dim);
-    vec3 normal = vec3(
-        sin_theta * sin(phi),
-        sin_theta * cos(phi),
-        cos_theta
-    );
+    vec3 normal = sampleHemisphere(random2D(i, dim));
 
     //sample light
     SourceRay ray = sampleLight(observer, normal, lambda, i, dim);

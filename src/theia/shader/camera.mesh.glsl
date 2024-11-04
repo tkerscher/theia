@@ -6,6 +6,7 @@
 #include "math.glsl"
 #include "ray.surface.glsl"
 #include "scene.types.glsl"
+#include "util.sample.glsl"
 
 layout(scalar) uniform CameraParams {
     uvec2 verticesAddress;
@@ -71,15 +72,8 @@ CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
     CameraSample camSample = sampleCamera(wavelength, idx, dim);    
 
     //sample ray direction (upper hemisphere)
-    float cos_theta = 1.0 - random(idx, dim); //exclude 0.0
-    // float cos_theta = pow(1.0 - random(idx, dim), 1./3.) //IS cosine term
-    float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
-    float phi = TWO_PI * random(idx, dim);
-    vec3 localDir = vec3(
-        sin_theta * cos(phi),
-        sin_theta * sin(phi),
-        cos_theta
-    );
+    vec3 localDir = sampleHemisphere(random2D(idx, dim));
+    float cos_theta = localDir.z;
     //align direction with normal
     localDir = createLocalCOSY(camSample.hitNormal) * localDir;
     //transform from local to world

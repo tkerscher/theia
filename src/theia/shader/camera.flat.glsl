@@ -2,6 +2,7 @@
 #define _INCLUDE_CAMERARAYSOURCE_FLAT
 
 #include "math.glsl"
+#include "util.sample.glsl"
 
 layout(scalar) uniform CameraParams {
     float width;
@@ -21,15 +22,8 @@ CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
     vec3 rayPos = objToWorld * localPos + cameraParams.offset;
 
     //sample direction
-    u = random2D(idx, dim);
-    float cos_theta = 1.0 - u.x; //limit to upper hemisphere (exclude 0.0)
-    float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
-    float phi = TWO_PI * u.y;
-    vec3 localDir = vec3(
-        sin_theta * cos(phi),
-        sin_theta * sin(phi),
-        cos_theta
-    );
+    vec3 localDir = sampleHemisphere(random2D(idx, dim));
+    float cos_theta = localDir.z;
     vec3 rayDir = objToWorld * localDir;
     //flip local dir as it should hit the detector
     localDir *= -1.0;
