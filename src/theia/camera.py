@@ -517,9 +517,9 @@ class FlatCamera(Camera):
 
     In the local coordinates system of hits the rectangle lies in the xy plane
     centered in the origin with its normal facing in positive z direction. Width
-    is its size in the x direction, length in the y direction. A `Transform` is
-    applied to translate from local to global coordinates, thus allowing the
-    rectangle to be positioned in the scene.
+    is its size in the x direction, length in the y direction. The orientation
+    in global space are determined by `direction` defining the surface normal
+    and a `up` vector defining where the local y axis points to.
 
     Parameters
     ----------
@@ -721,8 +721,8 @@ class SphereCamera(Camera):
             ("position", vec3),
             ("radius", c_float),
             ("timeDelta", c_float),
-            ("_contribFwd", c_float),
-            ("_contribBwd", c_float),
+            ("_contrib", c_float),
+            ("_contribDirect", c_float),
         ]
 
     def __init__(
@@ -745,10 +745,10 @@ class SphereCamera(Camera):
 
     def _finishParams(self, i: int) -> None:
         r = self.getParam("radius")
-        contribFwd = 4 * np.pi * r**2 * 2 * np.pi
-        contribBwd = 4 * np.pi * r**2
-        self.setParam("_contribFwd", contribFwd)
-        self.setParam("_contribBwd", contribBwd)
+        contrib = 4 * np.pi * r**2 * 2 * np.pi
+        contribDirect = 4 * np.pi * r**2
+        self.setParam("_contrib", contrib)
+        self.setParam("_contribDirect", contribDirect)
 
 
 class PointCamera(Camera):

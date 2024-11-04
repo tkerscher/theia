@@ -10,8 +10,8 @@ layout(scalar) uniform CameraParams {
     float timeDelta;
 
     //constant factor calculated on cpu
-    float contribFwd;
-    float contribBwd;
+    float contrib;
+    float contribDirect;
 } cameraParams;
 
 CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
@@ -44,7 +44,7 @@ CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
     //local dir is opposite (hits sphere)
     vec3 localDir = -rayDir;
     
-    float contrib = cos_theta * cameraParams.contribFwd;
+    float contrib = cos_theta * cameraParams.contrib;
 
     //create polarization reference frame in plane of incidence
     vec3 polRef = perpendicularTo(localDir, normal);
@@ -78,7 +78,7 @@ CameraSample sampleCamera(float wavelength, uint idx, inout uint dim) {
     //derive ray pos from normal
     vec3 rayPos = cameraParams.radius * normal + cameraParams.position;
 
-    return createCameraSample(rayPos, normal, cameraParams.contribBwd);
+    return createCameraSample(rayPos, normal, cameraParams.contribDirect);
 }
 
 CameraRay createCameraRay(CameraSample cam, vec3 lightDir, float wavelength) {
