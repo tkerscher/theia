@@ -265,7 +265,9 @@ def test_SceneForwardTracer(
     x, y, z = 10.0, 5.0, -5.0
     t1 = Transform.TRS(scale=r, translate=(x, y, z + r + d))
     c1 = store.createInstance("sphere", "mat", t1, detectorId=0)
-    t2 = Transform.TRS(scale=r, translate=(x, y, z - r - d))
+    t2 = Transform.TRS(
+        scale=r, translate=(x, y, z - r - d), rotate=(0.0, 0.0, 1.0, 110.0)
+    )
     c2 = store.createInstance("sphere", "mat", t2, detectorId=1)
     targets = [
         theia.scene.SphereBBox((x, y, z + r + d), r),

@@ -45,7 +45,7 @@ void createResponse(
     }
 
     //create response
-    response(createHit(ray, hit.objPos, hit.objNrm));
+    response(createHit(ray, hit.objPos, hit.objNrm, hit.worldToObj));
 }
 
 /**

@@ -78,7 +78,7 @@ void createResponse(ForwardRay ray, vec3 dir, float weight, bool scattered) {
 
     //create (weighted) response
     ray.state.lin_contrib *= weight;
-    response(createHit(ray, objPos, hitNormal));
+    response(createHit(ray, objPos, hitNormal, mat3(1.0)));
 }
 
 ResultCode trace(
@@ -115,7 +115,7 @@ ResultCode trace(
         vec3 hitObjPos = hitNormal * params.target.radius;
         //Align hit, i.e. rotate polRef to plane of incidence
         alignRayToHit(ray, hitNormal);
-        response(createHit(ray, hitObjPos, hitNormal));
+        response(createHit(ray, hitObjPos, hitNormal, mat3(1.0)));
 
         return RESULT_CODE_RAY_DETECTED;
     }

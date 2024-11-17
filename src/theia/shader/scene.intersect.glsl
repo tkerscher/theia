@@ -40,6 +40,11 @@ struct SurfaceHit {
     precise vec3 objPos;    ///< Hit position in object space
     precise vec3 objNrm;    ///< Geometry normal at hit position in object space
     vec3 objDir;            ///< Ray direction in object space
+
+    //Lastly, we may need to transform from world to object space.
+    //We skip the translating part for now.
+
+    mat3 worldToObj;        ///< Transformation from world to object space
 };
 
 /*
@@ -93,6 +98,7 @@ ResultCode processRayQuery(
 
     //translate from world to object space
     mat4x3 world2Obj = rayQueryGetIntersectionWorldToObjectEXT(rayQuery, true);
+    hit.worldToObj = mat3(world2Obj);
     hit.objDir = normalize(mat3(world2Obj) * ray.direction);
     //check orientation
     // -> inward if direction and normal in opposite direction
