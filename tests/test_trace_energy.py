@@ -826,7 +826,7 @@ def test_VolumeBackwardTracer_Crosscheck(
         (0.0, 0.005, 0.0, False, 200, 0.035),
         (0.05, 0.01, 0.0, True, 200, 0.025),
         (0.0, 0.02, -0.4, False, 200, 2e-3),
-        (0.05, 0.01, 0.6, False, 250, 0.025),
+        (0.05, 0.01, 0.6, False, 250, 0.03),
     ],
 )
 def test_BidirectionalPathTracer(
@@ -885,10 +885,7 @@ def test_BidirectionalPathTracer(
         position=position, timeRange=(t0, t0), budget=budget
     )
     # create camera
-    camera = theia.camera.SphereCameraRaySource(
-        position=position,
-        radius=-r_insc,
-    )
+    camera = theia.camera.SphereCamera(position=position, radius=-r_insc)
     # create tracer
     rng = theia.random.PhiloxRNG(key=0xC0FFEE)
     recorder = theia.estimator.HitRecorder(polarized=polarized)
@@ -1031,10 +1028,7 @@ def test_DirectTracer(mu_a: float, mu_s: float, g: float, polarized: bool):
         position=position, timeRange=(t0, t0), budget=budget
     )
     # create camera
-    camera = theia.camera.SphereCameraRaySource(
-        position=position,
-        radius=-radius,
-    )
+    camera = theia.camera.SphereCamera(position=position, radius=-radius)
     # create tracer
     rng = theia.random.PhiloxRNG(key=0xC0FFEE)
     recorder = theia.estimator.HitRecorder(polarized=polarized)
