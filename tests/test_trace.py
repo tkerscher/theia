@@ -13,6 +13,7 @@ import theia.scene
 import theia.trace
 import theia.units as u
 
+from theia.scene import Transform
 from common.models import WaterModel
 
 
@@ -262,10 +263,10 @@ def test_SceneForwardTracer(
     r_scale = 0.99547149974733 * u.m  # radius of inscribed sphere (icosphere)
     r_insc = r * r_scale
     x, y, z = 10.0, 5.0, -5.0
-    t1 = theia.scene.Transform.Scale(r, r, r).translate(x, y, z + r + d)
-    c1 = store.createInstance("sphere", "mat", transform=t1, detectorId=0)
-    t2 = theia.scene.Transform.Scale(r, r, r).translate(x, y, z - r - d)
-    c2 = store.createInstance("sphere", "mat", transform=t2, detectorId=1)
+    t1 = Transform.TRS(scale=r, translate=(x, y, z + r + d))
+    c1 = store.createInstance("sphere", "mat", t1, detectorId=0)
+    t2 = Transform.TRS(scale=r, translate=(x, y, z - r - d))
+    c2 = store.createInstance("sphere", "mat", t2, detectorId=1)
     targets = [
         theia.scene.SphereBBox((x, y, z + r + d), r),
         theia.scene.SphereBBox((x, y, z - r - d), r),
@@ -376,15 +377,15 @@ def test_SceneBackwardTracer(
     r_scale = 0.99547149974733 * u.m  # radius of inscribed sphere (icosphere)
     r_insc = r * r_scale
     x, y, z = 10.0, 5.0, -5.0
-    t1 = theia.scene.Transform.Scale(r, r, r).translate(x, y, z + r + d)
-    c1 = store.createInstance("sphere", "mat", transform=t1, detectorId=0)
-    t2 = theia.scene.Transform.Scale(r, r, r).translate(x, y, z - r - d)
-    c2 = store.createInstance("sphere", "mat", transform=t2, detectorId=1)
-    t3 = theia.scene.Transform.Scale(r, r, r).translate(-x, -y, z + r + d)
-    c3 = store.createInstance("sphere", "abs", transform=t3)
+    t1 = Transform.TRS(scale=r, translate=(x, y, z + r + d))
+    c1 = store.createInstance("sphere", "mat", t1, detectorId=0)
+    t2 = Transform.TRS(scale=r, translate=(x, y, z - r - d))
+    c2 = store.createInstance("sphere", "mat", t2, detectorId=1)
+    t3 = Transform.TRS(scale=r, translate=(-x, -y, z + r + d))
+    c3 = store.createInstance("sphere", "abs", t3)
     instances = [c1, c2, c3]
-    t4 = theia.scene.Transform.Scale(r, r, r).translate(-x, -y, z - r - d)
-    c4 = store.createInstance("sphere", "vol", transform=t4)
+    t4 = Transform.TRS(scale=r, translate=(-x, -y, z - r - d))
+    c4 = store.createInstance("sphere", "vol", t4)
     if not disableVolumeBorder:
         instances.append(c4)
     targets = [
@@ -508,16 +509,16 @@ def test_BidirectionalPathTracer(
     store = theia.scene.MeshStore(
         {"cube": "assets/cube.ply", "sphere": "assets/sphere.stl"}
     )
-    t_det_inner = theia.scene.Transform().scale(*(r_inner,) * 3).translate(*det_pos)
-    det_inner = store.createInstance("sphere", "sph_inner", transform=t_det_inner)
-    t_det_outer = theia.scene.Transform().scale(*(r_outer,) * 3).translate(*det_pos)
-    det_outer = store.createInstance("sphere", "sph_outer", transform=t_det_outer)
-    t_src_inner = theia.scene.Transform().scale(*(r_inner,) * 3).translate(*src_pos)
-    src_inner = store.createInstance("sphere", "sph_inner", transform=t_src_inner)
-    t_src_outer = theia.scene.Transform().scale(*(r_outer,) * 3).translate(*src_pos)
-    src_outer = store.createInstance("sphere", "sph_outer", transform=t_src_outer)
-    t_shield = theia.scene.Transform().scale(*shield_size)
-    shield = store.createInstance("cube", "absorber", transform=t_shield)
+    t_det_inner = Transform.TRS(scale=r_inner, translate=det_pos)
+    det_inner = store.createInstance("sphere", "sph_inner", t_det_inner)
+    t_det_outer = Transform.TRS(scale=r_outer, translate=det_pos)
+    det_outer = store.createInstance("sphere", "sph_outer", t_det_outer)
+    t_src_inner = Transform.TRS(scale=r_inner, translate=src_pos)
+    src_inner = store.createInstance("sphere", "sph_inner", t_src_inner)
+    t_src_outer = Transform.TRS(scale=r_outer, translate=src_pos)
+    src_outer = store.createInstance("sphere", "sph_outer", t_src_outer)
+    t_shield = Transform.TRS(scale=shield_size)
+    shield = store.createInstance("cube", "absorber", t_shield)
     scene = theia.scene.Scene(
         [det_outer, det_inner, src_outer, src_inner, shield],
         matStore.material,
@@ -613,14 +614,14 @@ def test_EventStatisticCallback():
     # create scene
     store = theia.scene.MeshStore({"sphere": "assets/sphere.stl"})
     r, d = 20.0, 5.0
-    t1 = theia.scene.Transform.Scale(r, r, r).translate(17.0, 17.0, 17.0)
-    c1 = store.createInstance("sphere", "mat", transform=t1, detectorId=0)
-    t2 = theia.scene.Transform.Scale(r, r, r).translate(-17.0, -17.0, -17.0)
-    c2 = store.createInstance("sphere", "mat", transform=t2, detectorId=1)
-    t3 = theia.scene.Transform.Scale(r, r, r).translate(17.0, 17.0, -17.0)
-    c3 = store.createInstance("sphere", "vol", transform=t3)
-    t4 = theia.scene.Transform.Scale(r, r, r).translate(-17.0, 17.0, 17.0)
-    c4 = store.createInstance("sphere", "abs", transform=t4)
+    t1 = Transform.TRS(scale=r, translate=(17.0, 17.0, 17.0))
+    c1 = store.createInstance("sphere", "mat", t1, detectorId=0)
+    t2 = Transform.TRS(scale=r, translate=(-17.0, -17.0, -17.0))
+    c2 = store.createInstance("sphere", "mat", t2, detectorId=1)
+    t3 = Transform.TRS(scale=r, translate=(17.0, 17.0, -17.0))
+    c3 = store.createInstance("sphere", "vol", t3)
+    t4 = Transform.TRS(scale=r, translate=(-17.0, 17.0, 17.0))
+    c4 = store.createInstance("sphere", "abs", t4)
     bbox = theia.scene.RectBBox((-50.0,) * 3, (50.0,) * 3)
     scene = theia.scene.Scene(
         [c1, c2, c3, c4], matStore.material, medium=matStore.media["water"], bbox=bbox
@@ -788,8 +789,8 @@ def test_volumeBorder():
     matStore = theia.material.MaterialStore([mat])
     # create scene
     store = theia.scene.MeshStore({"cube": "assets/cube.ply"})
-    trafo = theia.scene.Transform.Scale(50.0, 50.0, 50.0).translate(75.0, 0.0, 0.0)
-    cube = store.createInstance("cube", "mat", transform=trafo)
+    trafo = Transform.TRS(scale=50.0, translate=(75.0, 0.0, 0.0))
+    cube = store.createInstance("cube", "mat", trafo)
     scene = theia.scene.Scene([cube], matStore.material)
 
     # create scene
@@ -874,17 +875,16 @@ def test_tracer_reflection(flag, reflectance, err):
     matStore = theia.material.MaterialStore([mat, det])
     # create scene
     store = theia.scene.MeshStore({"cube": "assets/cube.ply"})
-    splitter_trans = (
-        theia.scene.Transform()
-        .Scale(0.1, 5.0, 5.0)
-        .rotate(0.0, 0.0, 1.0, np.radians(45.0))
-        .translate(0.141, 0.0, 0.0)
+    splitter_trans = Transform.TRS(
+        scale=(0.1, 5.0, 5.0),
+        rotate=(0.0, 0.0, 1.0, 45.0),
+        translate=(0.141, 0.0, 0.0),
     )
-    splitter = store.createInstance("cube", "mat", transform=splitter_trans)
-    ref_trans = theia.scene.Transform.Scale(50.0, 0.5, 50.0).translate(0.0, -50.0, 0.0)
-    ref_det = store.createInstance("cube", "det", transform=ref_trans, detectorId=1)
-    trans_trans = theia.scene.Transform.Scale(0.5, 50.0, 50.0).translate(50.0, 0.0, 0.0)
-    trans_det = store.createInstance("cube", "det", transform=trans_trans, detectorId=2)
+    splitter = store.createInstance("cube", "mat", splitter_trans)
+    ref_trans = Transform.TRS(scale=(50.0, 0.5, 50.0), translate=(0.0, -50.0, 0.0))
+    ref_det = store.createInstance("cube", "det", ref_trans, detectorId=1)
+    trans_trans = Transform.TRS(scale=(0.5, 50.0, 50.0), translate=(50.0, 0.0, 0.0))
+    trans_det = store.createInstance("cube", "det", trans_trans, detectorId=2)
     scene = theia.scene.Scene([splitter, trans_det, ref_det], matStore.material)
 
     # create pipeline
@@ -1034,8 +1034,8 @@ def test_DirectTracer_scene(polarized: bool):
     meshes = theia.scene.MeshStore({"cube": "assets/cube.ply"})
     aperture_size = (1.0 * u.cm, width, length)
     aperture_pos = (5.03, 2.0 + width, -1.0)
-    t = theia.scene.Transform.Scale(*aperture_size).translate(*aperture_pos)
-    a = meshes.createInstance("cube", "absorber", transform=t)
+    t = Transform.TRS(scale=aperture_size, translate=aperture_pos)
+    a = meshes.createInstance("cube", "absorber", t)
     scene = theia.scene.Scene([a], store.material, medium=store.media["water"])
 
     # estimate min time

@@ -15,6 +15,8 @@ import theia.scene
 import theia.trace
 import theia.units as u
 
+from theia.scene import Transform
+
 """
 The goal of this test is to check SceneTracer is conserving energy by tracing a
 scene where we expect no light to escape.
@@ -93,8 +95,8 @@ def test_SceneForwardTracer_GroundTruth(
 
     # create scene
     targets = [theia.scene.SphereBBox(position, radius)]
-    trafo = theia.scene.Transform.Scale(radius, radius, radius).translate(*position)
-    target = meshStore.createInstance("sphere", "det", transform=trafo, detectorId=0)
+    trafo = Transform.TRS(scale=radius, translate=position)
+    target = meshStore.createInstance("sphere", "det", trafo, detectorId=0)
     scene = theia.scene.Scene(
         [target],
         matStore.material,
@@ -223,8 +225,8 @@ def test_SceneForwardTracer_Crosscheck(
 
     # create scene
     targets = [theia.scene.SphereBBox(position, radius)]
-    trafo = theia.scene.Transform.Scale(radius, radius, radius).translate(*position)
-    target = meshStore.createInstance("sphere", "det", transform=trafo, detectorId=0)
+    trafo = Transform.TRS(scale=radius, translate=position)
+    target = meshStore.createInstance("sphere", "det", trafo, detectorId=0)
     scene = theia.scene.Scene(
         [target],
         matStore.material,
@@ -385,8 +387,8 @@ def test_SceneBackwardTracer(
 
     # create scene
     targets = [theia.scene.SphereBBox(position, radius)]
-    trafo = theia.scene.Transform.Scale(radius, radius, radius).translate(*position)
-    target = meshStore.createInstance("sphere", "det", transform=trafo, detectorId=0)
+    trafo = Transform.TRS(scale=radius, translate=position)
+    target = meshStore.createInstance("sphere", "det", trafo, detectorId=0)
     scene = theia.scene.Scene(
         [target],
         matStore.material,
@@ -526,8 +528,8 @@ def test_VolumeForwardTracer_Crosscheck(
 
     # create scene
     targets = [theia.scene.SphereBBox(position, radius)]
-    trafo = theia.scene.Transform.Scale(radius, radius, radius).translate(*position)
-    target = meshStore.createInstance("sphere", "det", transform=trafo, detectorId=0)
+    trafo = Transform.TRS(scale=radius, translate=position)
+    target = meshStore.createInstance("sphere", "det", trafo, detectorId=0)
     scene = theia.scene.Scene(
         [target],
         matStore.material,
@@ -695,7 +697,7 @@ def test_VolumeBackwardTracer_Crosscheck(
     # create empty scene
     meshStore = theia.scene.MeshStore({"sphere": "assets/sphere.stl"})
     t = theia.scene.Transform.Scale(0, 0, 0).translate(1e9, 1e9, 1e9)  # move away
-    c = meshStore.createInstance("sphere", "abs", transform=t)
+    c = meshStore.createInstance("sphere", "abs", t)
     scene = theia.scene.Scene(
         [c], matStore.material, medium=matStore.media["homogenous"]
     )
@@ -868,8 +870,8 @@ def test_BidirectionalPathTracer(
 
     # create scene
     targets = [theia.scene.SphereBBox(position, radius)]
-    trafo = theia.scene.Transform.Scale(radius, radius, radius).translate(*position)
-    target = meshStore.createInstance("sphere", "det", transform=trafo, detectorId=0)
+    trafo = Transform.TRS(scale=radius, translate=position)
+    target = meshStore.createInstance("sphere", "det", trafo, detectorId=0)
     scene = theia.scene.Scene(
         [target],
         matStore.material,

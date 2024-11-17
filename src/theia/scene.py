@@ -71,7 +71,7 @@ class Transform:
     def Rotation(dx: float, dy: float, dz: float, angle: float) -> Transform:
         """
         Returns a rotation transformation around the given axis (dx,dy,dz) for
-        angle radians.
+        angle degrees.
         """
         # normalize unit direction
         length = np.sqrt(dx * dx + dy * dy + dz * dz)
@@ -82,27 +82,37 @@ class Transform:
         K = np.array([[0.0, -dz, dy], [dz, 0.0, -dx], [-dy, dx, 0.0]])
         # create rotation matrix
         res = Transform()
+        angle = np.deg2rad(angle)
         res._arr[:3, :3] += np.sin(angle) * K + (1.0 - np.cos(angle)) * (K @ K)
         return res
 
     def rotate(self, dx: float, dy: float, dz: float, angle: float) -> Transform:
         """
-        Rotates the transformation around (dx,dy,dz) counter-clockwise angle
-        radians.
+        Returns a copy of the transformation rotated around (dx,dy,dz)
+        counter-clockwise for angle degrees.
         """
         return Transform.Rotation(dx, dy, dz, angle) @ self
 
     @staticmethod
-    def Scale(x: float, y: float, z: float) -> Transform:
-        """Returns a scale transformation"""
+    def Scale(x: float, y: float | None = None, z: float | None = None) -> Transform:
+        """
+        Returns a scale transformation using either a common factor for all axis
+        or a distinct one for each individually.
+        """
         res = Transform()
         res._arr[0, 0] = x
-        res._arr[1, 1] = y
-        res._arr[2, 2] = z
+        res._arr[1, 1] = y if y is not None else x
+        res._arr[2, 2] = z if z is not None else x
         return res
 
-    def scale(self, x: float, y: float, z: float) -> Transform:
-        """Scales the transformation in each dimension independently"""
+    def scale(
+        self, x: float, y: float | None = None, z: float | None = None
+    ) -> Transform:
+        """
+        Scales the transformation either by a common factor or in each dimension
+        independently and returns the new transformation without altering the
+        existing one.
+        """
         return Transform.Scale(x, y, z) @ self
 
     @staticmethod
@@ -113,8 +123,40 @@ class Transform:
         return res
 
     def translate(self, x: float, y: float, z: float) -> Transform:
-        """Translates the transform by the given amount"""
+        """Returns a copy of the transform translated by the given amount"""
         return Transform.Translation(x, y, z) @ self
+
+    @staticmethod
+    def TRS(
+        *,
+        scale: tuple[float, float, float] | float = 1.0,
+        rotate: tuple[float, float, float, float] | None = None,
+        translate: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    ) -> Transform:
+        """
+        Shorthand function for creating a new transform using the given
+        scale, rotation and translation applied in that order.
+
+        Parameters
+        ----------
+        scale: (float, float, float) | float, default=1.0
+            Either a common scaling factor for all axis or a distinct one for
+            each.
+        rotate: (float, float, float, float) | None, default=None
+            Optional rotation. First three elements define the rotation axis,
+            the last the rotation angle in radians.
+        translate: (float, float, float), default=(0.0, 0.0, 0.0)
+            Translation given as an offset added.
+        """
+        result = Transform()
+        if type(scale) is tuple:
+            result = result.scale(*scale)
+        else:
+            result = result.scale(scale)
+        if rotate is not None:
+            result = result.rotate(*rotate)
+        result = result.translate(*translate)
+        return result
 
     def __matmul__(self, other: Transform) -> Transform:
         if type(other) != Transform:
@@ -382,8 +424,8 @@ class MeshStore:
         self,
         key: str,
         material: str,
-        *,
         transform: Transform | None = None,
+        *,
         detectorId: int = 0,
         scale: float | None = None,
     ) -> MeshInstance:
