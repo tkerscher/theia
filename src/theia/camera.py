@@ -11,7 +11,7 @@ from ctypes import Structure, c_float, c_uint32
 import theia.units as u
 from theia.light import WavelengthSampleItem, WavelengthSource
 from theia.random import RNG
-from theia.scene import MeshInstance
+from theia.scene import MeshInstance, Transform
 from theia.util import ShaderLoader, compileShader, createPreamble
 
 from collections.abc import Callable
@@ -616,17 +616,9 @@ class FlatCamera(Camera):
     def _finishParams(self, i: int) -> None:
         super()._finishParams(i)
 
-        def normalize(name):
-            v = np.array(self.getParam(name))
-            return v / np.sqrt(np.square(v).sum(-1))
-
-        # assemble view matrix
-        z = normalize("direction")
-        x = np.cross(normalize("up"), z)
-        y = np.cross(z, x)
-        view = np.stack([x, y, z], -1)
-        # set matrices
-        self.setParam("_view", view)
+        # create view matrix
+        t = Transform.View(direction=self.getParam("direction"), up=self.getParam("up"))
+        self.setParam("_view", t.innerMatrix)  # column major
 
 
 class ConeCamera(Camera):

@@ -67,6 +67,16 @@ class Transform:
         """
         return np.ascontiguousarray(self._arr[:3, :], dtype=np.float32)
 
+    @property
+    def innerMatrix(self) -> NDArray:
+        """Returns the inner 3x3 transformation matrix"""
+        return self.numpy()[:3, :3]
+
+    @property
+    def offset(self) -> NDArray:
+        """Returns the translation part of the transformation"""
+        return self.numpy()[:3, 3]
+
     @staticmethod
     def Rotation(dx: float, dy: float, dz: float, angle: float) -> Transform:
         """
@@ -157,6 +167,92 @@ class Transform:
             result = result.rotate(*rotate)
         result = result.translate(*translate)
         return result
+
+    @staticmethod
+    def View(
+        *,
+        position: tuple[float, float, float] | NDArray = (0.0, 0.0, 0.0),
+        direction: tuple[float, float, float] | NDArray = (0.0, 0.0, 1.0),
+        up: tuple[float, float, float] | NDArray = (0.0, 1.0, 0.0),
+    ) -> Transform:
+        """
+        Creates the view matrix mimicking a orthogonal camera at a specified
+        position pointing in a given direction. Assumes in object space that the
+        camera points in positive z direction and its up directions to align
+        with the y axis.
+
+        Parameters
+        ----------
+        position: (float, float, float) | NDArray, default=(0.0, 0.0, 0.0)
+            Position of the camera
+        direction: (float, float, float) | NDArray, default=(0.0, 0.0, 1.0)
+            Direction the camera points
+        up: (float, float, float) | NDArray, default=(0.0, 1.0, 0.0)
+            Direction aligning with the camera's up direction
+
+        Note
+        ----
+        `direction` and `up` may not be parallel
+
+        See Also
+        --------
+        theia.scene.Transform.LookAt : View transform specified with a target
+        """
+        # ensure params are numpy arrays
+        position = np.array(position)
+        direction = np.array(direction)
+        up = np.array(up)
+
+        # calculate new coordinate system
+        norm = lambda v: v / np.sqrt(np.square(v).sum(-1))
+        z = norm(direction)
+        x = norm(np.cross(up, direction))
+        y = norm(np.cross(z, x))  # just to be safe
+        # assemble matrix
+        m = np.stack([x, y, z, position], -1)
+        return Transform(m)
+
+    @staticmethod
+    def LookAt(
+        *,
+        position: tuple[float, float, float] | NDArray = (0.0, 0.0, 0.0),
+        target: tuple[float, float, float] | NDArray = (0.0, 0.0, 1.0),
+        up: tuple[float, float, float] | NDArray = (0.0, 1.0, 0.0),
+    ) -> Transform:
+        """
+        Creates a transformation mimicking a orthogonal camera put at a
+        specified position pointing at a target. Assumes in object space that
+        the camera points in positive z direction and that its up direction
+        aligns with the y axis.
+
+        Parameters
+        ----------
+        position: (float, float, float), default=(0.0, 0.0, 0.0)
+            Position of the camera
+        target: (float, float, float), default=(0.0, 0.0, 1.0),
+            Target the camera points at.
+        up: (float, float, float), default=(0.0, 1.0, 0.0)
+            Direction aligning with the cameras up direction.
+
+        Note
+        ----
+        `up` may not point from `position` to `target`.
+
+        See Also
+        --------
+        theia.scene.Transform.View : Creates a view transformation
+        """
+        # ensure params are numpy arrays
+        position = np.array(position)
+        target = np.array(target)
+        up = np.array(up)
+
+        # create transform
+        return Transform.View(
+            position=position,
+            direction=(position - target),
+            up=up,
+        )
 
     def __matmul__(self, other: Transform) -> Transform:
         if type(other) != Transform:
