@@ -27,6 +27,7 @@ submodules = [
     "material",
     "random",
     "scene",
+    "target",
     "trace",
     "units",
 ]

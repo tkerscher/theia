@@ -2,6 +2,7 @@
 #define _INCLUDE_CAMERARAYSOURCE_CONE
 
 #include "math.glsl"
+#include "util.sample.glsl"
 
 layout(scalar) uniform CameraParams {
     vec3 conePos;
@@ -11,16 +12,7 @@ layout(scalar) uniform CameraParams {
 
 CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
     //sample cone
-    vec2 u = random2D(idx, dim);
-    float phi = TWO_PI * u.x;
-    float cos_theta = 1.0 - cameraParams.cosOpeningAngle * u.y;
-    float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
-    //construct local ray dir
-    vec3 localDir = vec3(
-        sin_theta * cos(phi),
-        sin_theta * sin(phi),
-        cos_theta
-    );
+    vec3 localDir = sampleDirectionCone(cameraParams.cosOpeningAngle, random2D(idx, dim));
     //convert to global space
     mat3 trafo = createLocalCOSY(cameraParams.coneDir);
     vec3 rayDir = trafo * localDir;
