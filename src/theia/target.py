@@ -433,8 +433,8 @@ class TargetGuide(SourceCodeMixin):
     Target guides must provide two GPU functions:
 
     ```
-    vec3 sampleTargetGuide(vec3 observer, [rng state], out float prob)
-    float evalTargetGuide(vec3 observer, vec3 direction)
+    TargetGuideSample sampleTargetGuide(vec3 observer, [rng state])
+    TargetGuideSample evalTargetGuide(vec3 observer, vec3 direction)
     ```
 
     The first function samples the target guide given the position of an
