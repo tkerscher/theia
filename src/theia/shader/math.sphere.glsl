@@ -28,6 +28,10 @@ vec2 intersectSphere(const Sphere sphere, vec3 origin, vec3 direction) {
         float c = dot(f, f) - r2;
         float q = -b2 - signBit(b2) * sqrt(discr);
         result = vec2(c / q, q);
+
+        //if we're inside the sphere, we may need to swap to ensure t1 < t2
+        if (result.x > result.y)
+            result = result.yx;
     }
 
     //done
