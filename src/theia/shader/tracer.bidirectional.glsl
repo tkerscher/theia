@@ -172,7 +172,7 @@ void connectVertex(BackwardRay ray, CameraRay cam, SourceRay light, uint pathLen
     //the phase function as emission profile.
     hit.contrib /= d*d;
 
-    if (result >= 0) {
+    if (result >= 0 && hit.contrib > 0.0) {
         response(hit);
     }
 }

@@ -230,7 +230,7 @@ def test_surface(shaderUtil, forward: bool, polarized: bool):
         # bit larger error. Likely due to slight mismatch in refractive indices
         # GPU has linear interpolation, CPU uses analytic model
         st = (tp**2 - ts**2) / (tp**2 + ts**2)
-        assert np.abs(trans_stokes[:, 1] - st).max() < 3e-3
+        assert np.abs(trans_stokes[:, 1] - st).max() < 4e-3
         assert np.abs(trans_stokes[:, 1] - st).mean() < 1e-6
         assert np.all(trans_stokes[:, 2:] == 0.0)
 

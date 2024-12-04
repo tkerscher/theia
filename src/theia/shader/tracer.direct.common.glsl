@@ -76,7 +76,7 @@ void sampleDirect(
         //Finally, combine source and camera ray to create the hit
         HitItem hit;
         result = combineRaysAligned(ray, camera, params, hit);
-        if (result >= 0) {
+        if (result >= 0 && hit.contrib > 0.0) {
             result = RESULT_CODE_RAY_DETECTED;
             response(hit);
         }

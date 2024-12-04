@@ -13,10 +13,8 @@
 layout(local_size_x = BLOCK_SIZE) in;
 
 #include "ray.propagate.glsl"
-#include "sphere.intersect.glsl"
 
 layout(scalar) uniform TraceParams {
-    Sphere target;
     uvec2 medium;
 
     PropagateParams propagation;
@@ -51,14 +49,18 @@ Medium getMedium() {
 #endif
 
 #ifndef DISABLE_SELF_SHADOWING
+#include "target.common.glsl"
+#include "target.glsl"
+
 bool isVisible(vec3 observer, vec3 target) {
     vec3 dir = target - observer;
     float dist = length(dir);
     dir /= dist;
 
     //Check if we are shadowed by target
-    float t = intersectSphere(params.target, observer, dir);
-    return t <= dist;
+    // -> returns false (target not visible) if shadowed
+    TargetSample hit = intersectTarget(observer, dir);
+    return !hit.valid || (hit.dist >= dist);
 }
 #else
 bool isVisible(vec3 observer, vec3 target) {
@@ -83,7 +85,7 @@ void traceShadowRay(
     //create hit by combining source and camera ray
     HitItem hit;
     ResultCode result = combineRays(ray, source, cam, params.propagation, hit);
-    if (result >= 0) {
+    if (result >= 0 && hit.contrib > 0.0) {
         response(hit);
     }
 }
@@ -99,9 +101,9 @@ ResultCode trace(
 
     //check for self shadowing
     #ifndef DISABLE_SELF_SHADOWING
-    float t = intersectSphere(params.target, ray.state.position, ray.state.direction);
-    bool hit = t <= dist;
-    dist = min(t, dist);
+    TargetSample intersection = intersectTarget(ray.state.position, ray.state.direction);
+    bool hit = intersection.valid && (intersection.dist <= dist);
+    if (hit) dist = intersection.dist;
     #else
     bool hit = false;
     #endif

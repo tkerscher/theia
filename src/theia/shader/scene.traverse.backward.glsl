@@ -190,7 +190,7 @@ void traceShadowRay(
     //create hit by combining source and camera ray
     HitItem hit;
     ResultCode result = combineRays(ray, source, camera, params, hit);
-    if (result >= 0) {
+    if (result >= 0 && hit.contrib > 0.0) {
         response(hit);
     }
 }

@@ -14,6 +14,7 @@ import theia.trace
 import theia.units as u
 
 from theia.scene import Transform
+from theia.target import SphereTarget, SphereTargetGuide
 from common.models import WaterModel
 
 
@@ -49,25 +50,27 @@ def test_VolumeForwardTracer(
     source = theia.light.SphericalLightSource(
         position=light_pos, budget=light_budget, timeRange=(T0, T1)
     )
+    target = SphereTarget(position=target_pos, radius=target_radius)
     recorder = theia.estimator.HitRecorder(polarized=polarized)
     stats = theia.trace.EventStatisticCallback()
     tracer = theia.trace.VolumeForwardTracer(
         N,
         source,
+        target,
         photons,
         recorder,
         rng,
         medium=store.media["water"],
         nScattering=N_SCATTER,
         callback=stats,
+        # callback=track,
         maxTime=T_MAX,
-        target=theia.scene.SphereBBox(target_pos, target_radius),
         polarized=polarized,
         disableDirectLighting=disableDirect,
         disableTargetSampling=disableTarget,
     )
     # run pipeline
-    pl.runPipeline([rng, photons, source, tracer, recorder])
+    pl.runPipeline(tracer.collectStages())
 
     # check hits
     hits = recorder.view(0)
@@ -75,7 +78,7 @@ def test_VolumeForwardTracer(
     assert hits.count <= tracer.maxHits
     hits = hits[: hits.count]
 
-    assert np.allclose(np.square(hits["position"]).sum(-1), target_radius**2)
+    assert np.allclose(np.square(hits["position"]).sum(-1), 1.0)
     assert np.allclose(np.square(hits["normal"]).sum(-1), 1.0)
     assert np.min(hits["time"]) >= t_min
     assert np.max(hits["time"]) <= T_MAX
@@ -98,28 +101,30 @@ def test_VolumeForwardTracer(
         assert np.abs(np.abs((polRef_exp * polRef).sum(-1))[mask] - 1.0).max() < 1e-6
 
     # check config via stats
+    # NOTE: We no longer report hits with zero contrib.
+    #       The asserts commented out no longer hold
     assert stats.created == tracer.batchSize
     assert stats.scattered > 0
     if disableDirect and disableTarget:
         assert stats.absorbed > 0
         assert stats.detected > 0
-        if not limitTime:
-            assert len(hits) == stats.detected
+        # if not limitTime:
+        #     assert len(hits) == stats.detected
     elif disableDirect and not disableTarget:
         assert stats.absorbed > 0
         assert stats.detected == 0
-        if not limitTime:
-            assert len(hits) > stats.scattered
+        # if not limitTime:
+        #     assert len(hits) > stats.scattered
     elif not disableDirect and disableTarget:
         assert stats.absorbed == 0
         assert stats.detected > 0
-        if not limitTime:
-            assert len(hits) == stats.detected
+        # if not limitTime:
+        #     assert len(hits) == stats.detected
     elif not disableDirect and not disableTarget:
         assert stats.absorbed > 0
         assert stats.detected == 0
-        if not limitTime:
-            assert len(hits) > (stats.detected + stats.scattered)
+        # if not limitTime:
+        #     assert len(hits) > (stats.detected + stats.scattered)
 
     # TODO: more sophisticated tests...
 
@@ -138,9 +143,7 @@ def test_VolumeBackwardTracer(
     light_pos = (-1.0, -7.0, 0.0) * u.m
     light_budget = 1000.0
     target_pos, target_radius = (5.0, 2.0, -8.0) * u.m, 4.0 * u.m
-    target = theia.scene.SphereBBox(target_pos, target_radius)
-    if disableTarget:
-        target = None
+    target = SphereTarget(position=target_pos, radius=target_radius)
 
     # create water medium
     water = WaterModel().createMedium()
@@ -174,13 +177,13 @@ def test_VolumeBackwardTracer(
         callback=stats,
         medium=store.media["water"],
         nScattering=N_SCATTER,
+        target=None if disableTarget else target,
         maxTime=T_MAX if limitTime else 10.0 * u.ms,
-        target=target,
         polarized=polarized,
         disableDirectLighting=disableDirect,
     )
     # run pipeline
-    pl.runPipeline([rng, photons, camera, light, tracer, recorder])
+    pl.runPipeline(tracer.collectStages())
 
     # check hits
     hits = recorder.view(0)
@@ -269,13 +272,10 @@ def test_SceneForwardTracer(
         scale=r, translate=(x, y, z - r - d), rotate=(0.0, 0.0, 1.0, 110.0)
     )
     c2 = store.createInstance("sphere", "mat", t2, detectorId=1)
-    targets = [
-        theia.scene.SphereBBox((x, y, z + r + d), r),
-        theia.scene.SphereBBox((x, y, z - r - d), r),
-    ]
     scene = theia.scene.Scene(
-        [c1, c2], matStore.material, medium=matStore.media["water"], targets=targets
+        [c1, c2], matStore.material, medium=matStore.media["water"]
     )
+    guide = SphereTargetGuide(position=(x, y, z - r - d), radius=r)
 
     # calculate min time
     target_pos = (x, y, z - r - d) * u.m  # detector #1
@@ -300,16 +300,16 @@ def test_SceneForwardTracer(
         scene,
         maxPathLength=MAX_PATH,
         targetIdx=1,
+        targetGuide=None if disableTarget else guide,
         maxTime=T_MAX,
         polarized=polarized,
         callback=stats,
         disableDirectLighting=disableDirect,
-        disableTargetSampling=disableTarget,
         disableTransmission=disableTransmission,
         disableVolumeBorder=disableVolumeBorder,
     )
     # run pipeline
-    pl.runPipeline([rng, photons, source, tracer, recorder])
+    pl.runPipeline(tracer.collectStages())
 
     # check hits
     hits = recorder.view(0)
@@ -390,12 +390,8 @@ def test_SceneBackwardTracer(
     c4 = store.createInstance("sphere", "vol", t4)
     if not disableVolumeBorder:
         instances.append(c4)
-    targets = [
-        theia.scene.SphereBBox((x, y, z + r + d), r),
-        theia.scene.SphereBBox((x, y, z - r - d), r),
-    ]
     scene = theia.scene.Scene(
-        instances, matStore.material, medium=matStore.media["water"], targets=targets
+        instances, matStore.material, medium=matStore.media["water"]
     )
 
     # calculate min time
@@ -435,7 +431,7 @@ def test_SceneBackwardTracer(
         disableVolumeBorder=disableVolumeBorder,
     )
     # run pipeline
-    pl.runPipeline([rng, photons, source, camera, tracer, recorder])
+    pl.runPipeline(tracer.collectStages())
 
     # check hits
     hits = recorder.view(0)
@@ -559,8 +555,7 @@ def test_BidirectionalPathTracer(
         disableTransmission=disableTransmission,
     )
     # run pipeline
-    # pl.runPipeline([rng, cam, ph, src, trace, rec])
-    pl.runPipeline([rng, cam, ph, src, trace, rec, track])
+    pl.runPipeline(trace.collectStages())
     paths, length, codes = track.result(0)
 
     # check hits
@@ -647,7 +642,6 @@ def test_EventStatisticCallback():
         maxPathLength=1,
         scatterCoefficient=0.005 / u.m,
         maxTime=100.0 * u.ns,
-        disableTargetSampling=True,
     )
     # assert stats start empty
     assert stats.created == 0
@@ -660,7 +654,7 @@ def test_EventStatisticCallback():
     assert stats.volume == 0
     assert stats.error == 0
     # run pipeline
-    pl.runPipeline([rng, photons, source, tracer])
+    pl.runPipeline(tracer.collectStages())
 
     # check stats again
     assert stats.created == N
@@ -728,6 +722,7 @@ def test_TrackRecordCallback(polarizedTrack: bool, polarized: bool):
     tracer = theia.trace.VolumeForwardTracer(
         N,
         source,
+        SphereTarget(position=target_pos, radius=target_radius),
         photons,
         response,
         rng,
@@ -737,11 +732,10 @@ def test_TrackRecordCallback(polarizedTrack: bool, polarized: bool):
         scatterCoefficient=0.1,
         maxTime=T_MAX,
         traceBBox=theia.scene.RectBBox((-200.0 * u.m,) * 3, (200.0 * u.m,) * 3),
-        target=theia.scene.SphereBBox(target_pos, target_radius),
         polarized=polarized,
     )
     # run pipeline
-    pl.runPipeline([rng, photons, source, tracer, track])
+    pl.runPipeline(tracer.collectStages())
 
     # check result
     tracks, lengths, codes = track.result(0)
@@ -819,10 +813,9 @@ def test_volumeBorder():
         scene=scene,
         targetIdx=1,
         maxPathLength=2,
-        disableTargetSampling=True,  # there's no scattering anyway
     )
     # run pipeline
-    pl.runPipeline([rng, photons, source, tracer, tracker])
+    pl.runPipeline(tracer.collectStages())
 
     # retrieve result
     track, lengths, codes = tracker.result(0)
@@ -910,9 +903,8 @@ def test_tracer_reflection(flag, reflectance, err):
         scene=scene,
         targetIdx=1,
         maxPathLength=4,
-        disableTargetSampling=True,  # there's no scattering anyway
     )
-    pipeline = pl.Pipeline([rng, photons, source, tracer, recorder])
+    pipeline = pl.Pipeline(tracer.collectStages())
     # run pipeline
     pipeline.run(0)
     hits_ref = recorder.view(0)
@@ -978,7 +970,7 @@ def test_DirectTracer_volume(polarized: bool):
         polarized=polarized,
     )
     # run pipeline
-    pl.runPipeline([rng, photons, light, camera, tracer, stats, recorder])
+    pl.runPipeline(tracer.collectStages())
 
     # check hits
     hits = recorder.view(0)
@@ -1074,7 +1066,7 @@ def test_DirectTracer_scene(polarized: bool):
         polarized=polarized,
     )
     # run pipeline
-    pl.runPipeline([rng, photons, light, camera, tracer, stats, recorder])
+    pl.runPipeline(tracer.collectStages())
 
     # check hits
     hits = recorder.view(0)

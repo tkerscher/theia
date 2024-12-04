@@ -13,17 +13,9 @@
 //user provided code
 #include "rng.glsl"
 #include "response.glsl"
-
-//Additional dependencies for MIS
 #ifndef SCENE_TRAVERSE_FORWARD_DISABLE_MIS
-
-#include "sphere.intersect.glsl"
-#include "tracer.mis.glsl"
-
-layout(scalar) readonly buffer Targets {
-    Sphere targets[];
-};
-
+#include "target_guide.common.glsl"
+#include "target_guide.glsl"
 #endif
 
 /**
@@ -45,7 +37,9 @@ void createResponse(
     }
 
     //create response
-    response(createHit(ray, hit.objPos, hit.objNrm, hit.worldToObj));
+    HitItem item = createHit(ray, hit.objPos, hit.objNrm, hit.worldToObj);
+    if (item.contrib > 0.0)
+        response(item);
 }
 
 /**
@@ -202,6 +196,63 @@ void traceShadowRay(
     processShadowRay(ray, hit, targetId, params);
 }
 
+#ifndef SCENE_TRAVERSE_FORWARD_DISABLE_MIS
+
+//MIS is a sampling method that combines multiple distributions using weights
+//to minimize variance increase. Allows to use specialized distributions (here
+//sampling the target sphere) to increase performance. Distributions need to
+//cover the variable space only jointly, i.e. they are allowed to assign zero
+//probability to a valid value as long as there is at least one that can sample
+//it
+
+//MIS: sample both scattering phase function & detector
+//also include factors of phase function and sample propability:
+//             p_XX^2        p_PX   <- scattering phase function
+// w_X = ---------------- * ------
+//        p_XX^2 + p_YX^2    p_XX   <- importance sampling
+//       \-------V------/
+//          MIS weight
+//to improve precision, we already reduce the fraction where possible
+
+void sampleTargetMIS(
+    ForwardRay ray,
+    uint targetId,
+    uint idx, inout uint dim,
+    const PropagateParams params    
+) {
+    //Here we'll use the following naming scheme: pXY, where:
+    // X: prob, evaluated distribution
+    // Y: sampled distribution
+    // T: targetphere, P: phase
+    //e.g. pTP: p_target(dir ~ phase)
+
+    //shorthand notation
+    Medium med = Medium(ray.state.medium);
+    vec3 obs = ray.state.position;
+    vec3 dir = ray.state.direction;
+
+    //sample phase function
+    float pPP;
+    vec3 dirPhase = scatter(med, dir, random2D(idx, dim), pPP);
+    //sample target guide
+    TargetGuideSample targetSample = sampleTargetGuide(obs, idx, dim);
+    float pTT = targetSample.prob;
+    //calculate cross probabilities
+    TargetGuideSample phaseSample = evalTargetGuide(obs, dirPhase);
+    float pTP = phaseSample.prob;
+    float pPT = scatterProb(med, dir, targetSample.dir);
+
+    //calculate MIS weights
+    float wTarget = pTT * pPT / (pTT*pTT + pPT*pPT);
+    float wPhase = pPP * pPP / (pPP*pPP + pTP*pTP);
+
+    //trace shadow rays
+    traceShadowRay(ray, dirPhase, phaseSample.dist, targetId, params, wPhase);
+    traceShadowRay(ray, targetSample.dir, targetSample.dist, targetId, params, wTarget);
+}
+
+#endif
+
 /**
  * Process a volume scatter event produced by trace().
  *  - Samples new ray direction
@@ -217,32 +268,7 @@ void processScatter(
     const PropagateParams params    ///< Propagation params
 ) {
     #ifndef SCENE_TRAVERSE_FORWARD_DISABLE_MIS
-    //MIS detector:
-    //we both sample the scattering phase function as well as the detector
-    //sphere for a possible hit direction
-    float wTarget, wPhase;
-    vec3 dirTarget, dirPhase;
-    vec2 uTarget = random2D(idx, dim), uPhase = random2D(idx, dim);
-    Sphere target = targets[targetId]; //NOTE: external dependency !!!
-    sampleTargetMIS(
-        getMedium(ray),
-        ray.state.position,
-        ray.state.direction,
-        target,
-        uTarget, uPhase,
-        wTarget, dirTarget,
-        wPhase, dirPhase
-    );
-    //check if phase sampling even has a chance of hitting the detector
-    //TODO: check if this test actually reduce pressure on ray tracing hardware
-    //      otherwise this only introduce divergence overhead
-    bool phaseMiss = isinf(intersectSphere(target, ray.state.position, dirPhase));
-    //trace shadow ray & create hit if visible
-    //(dist is max distance checked for hit: dist to back of target sphere)
-    float dist = distance(ray.state.position, target.position) + target.radius;
-    traceShadowRay(ray, dirTarget, dist, targetId, params, wTarget);
-    if (!phaseMiss)
-        traceShadowRay(ray, dirPhase, dist, targetId, params, wPhase);
+    sampleTargetMIS(ray, targetId, idx, dim, params);
     #endif
 
     //scatter ray in new direction
@@ -277,17 +303,14 @@ ResultCode trace(
     //only if allowResponse is true
     #ifndef SCENE_TRAVERSE_FORWARD_DISABLE_MIS
     float sampledDist = dist;
-    Sphere target = targets[targetId];
+    TargetGuideSample guideSample = evalTargetGuide(ray.state.position, dir);
     //check if we have a chance on hitting the detector by extending ray
-    bool mis_target = allowResponse &&
-        !isinf(intersectSphere(target, ray.state.position, dir));
+    bool mis_target = allowResponse && guideSample.prob > 0.0;
     if (mis_target) {
-        //extend ray to detector
-        dist = distance(ray.state.position, target.position) + target.radius;
         //check if we actually extended the ray
         //disable shadow ray if not
-        mis_target = dist > sampledDist;
-        dist = max(dist, sampledDist);
+        mis_target = guideSample.dist > dist;
+        dist = max(guideSample.dist, dist);
     }
     #endif
 

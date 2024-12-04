@@ -5,6 +5,7 @@ from hephaistos import Program
 from hephaistos.glsl import buffer_reference, vec3
 from hephaistos.pipeline import PipelineStage, SourceCodeMixin
 
+from abc import abstractmethod
 from ctypes import Structure, c_float, c_int32, c_uint32, addressof, memset, sizeof
 from numpy.ctypeslib import as_array
 
@@ -12,11 +13,10 @@ from theia.camera import Camera
 from theia.estimator import HitResponse, TraceConfig
 from theia.light import LightSource, WavelengthSource
 from theia.random import RNG
-from theia.scene import RectBBox, Scene, SphereBBox
+from theia.scene import RectBBox, Scene
+from theia.target import Target, TargetGuide
 from theia.util import ShaderLoader, compileShader, createPreamble
 import theia.units as u
-
-import warnings
 
 from enum import IntEnum
 from numpy.typing import NDArray
@@ -389,6 +389,14 @@ class Tracer(PipelineStage):
         """Response function processing each simulated hit"""
         return self._response
 
+    @abstractmethod
+    def collectStages(self) -> list[PipelineStage]:
+        """
+        Returns a list of all pipeline stages involved with this tracer in the
+        correct order suitable for creating a pipeline.
+        """
+        pass
+
 
 class VolumeForwardTracer(Tracer):
     """
@@ -404,6 +412,8 @@ class VolumeForwardTracer(Tracer):
         up to nScattering hits.
     source: LightSource
         Source producing light rays
+    target: Target
+        Target model used to generate hits.
     wavelengthSource: WavelengthSource
         Source to sample wavelengths from
     response: HitResponse
@@ -435,7 +445,7 @@ class VolumeForwardTracer(Tracer):
         Whether to ignore contributions from direct lighting, i.e. light paths
         with no scattering. If True, one can use a more performant direct
         lighting estimator in addition to increase overall performance.
-    disableTargetSampling: bool, default=False
+    disableTargetSampling: bool, default=false
         Whether to disable sampling the target after scatter event. Disabling it
         means that targets will only be hit by chance and it is therefore
         recommended to not disable this as it hugely improves the performance.
@@ -449,10 +459,6 @@ class VolumeForwardTracer(Tracer):
 
     Stage Parameters
     ----------------
-    targetPosition: vec3
-        Center of the target sphere
-    targetRadius: float
-        Radius of the target sphere
     scatterCoefficient: float
         Scatter coefficient used for sampling ray lengths
     medium: int
@@ -474,8 +480,6 @@ class VolumeForwardTracer(Tracer):
 
     class TraceParams(Structure):
         _fields_ = [
-            ("targetPosition", vec3),
-            ("targetRadius", c_float),
             ("medium", buffer_reference),
             ("scatterCoefficient", c_float),
             ("lowerBBoxCorner", vec3),
@@ -488,6 +492,7 @@ class VolumeForwardTracer(Tracer):
         self,
         batchSize: int,
         source: LightSource,
+        target: Target,
         wavelengthSource: WavelengthSource,
         response: HitResponse,
         rng: RNG,
@@ -495,7 +500,6 @@ class VolumeForwardTracer(Tracer):
         callback: TraceEventCallback = EmptyEventCallback(),
         medium: int = 0,
         nScattering: int = 6,
-        target: SphereBBox = SphereBBox((0.0, 0.0, 0.0), 1.0 * u.m),
         scatterCoefficient: float = 0.01 / u.m,
         traceBBox: RectBBox = RectBBox((-1.0 * u.km,) * 3, (1.0 * u.km,) * 3),
         maxTime: float = 1000.0 * u.ns,
@@ -532,13 +536,12 @@ class VolumeForwardTracer(Tracer):
         self._source = source
         self._wavelengthSource = wavelengthSource
         self._rng = rng
+        self._target = target
         self._callback = callback
         self._nScattering = nScattering
         self._directLightingDisabled = disableDirectLighting
         self._targetSamplingDisabled = disableTargetSampling
         self.setParams(
-            targetPosition=target.center,
-            targetRadius=target.radius,
             scatterCoefficient=scatterCoefficient,
             medium=medium,
             lowerBBoxCorner=traceBBox.lowerCorner,
@@ -565,6 +568,7 @@ class VolumeForwardTracer(Tracer):
                 "rng.glsl": rng.sourceCode,
                 "source.glsl": source.sourceCode,
                 "photon.glsl": wavelengthSource.sourceCode,
+                "target.glsl": target.sourceCode,
             }
             code = compileShader("tracer.volume.forward.glsl", preamble, headers)
         self._code = code
@@ -602,16 +606,9 @@ class VolumeForwardTracer(Tracer):
         return self._source
 
     @property
-    def target(self) -> SphereBBox:
-        """Sphere the tracer targets"""
-        return SphereBBox(
-            self.getParam("targetPosition"),
-            self.getParam("targetRadius"),
-        )
-
-    @target.setter
-    def target(self, value: SphereBBox) -> None:
-        self.setParams(targetPosition=value.center, targetRadius=value.radius)
+    def target(self) -> Target:
+        """Target model used to determine hits"""
+        return self._target
 
     @property
     def traceBBox(self) -> RectBBox:
@@ -638,6 +635,17 @@ class VolumeForwardTracer(Tracer):
         """Source used to sample wavelengths"""
         return self._wavelengthSource
 
+    def collectStages(self) -> list[PipelineStage]:
+        return [
+            self.rng,
+            self.wavelengthSource,
+            self.source,
+            self.target,
+            self,
+            self.callback,
+            self.response,
+        ]
+
     def _finishParams(self, i: int) -> None:
         super()._finishParams(i)
         self.setParam("_maxDist", self.traceBBox.diagonal)
@@ -649,6 +657,7 @@ class VolumeForwardTracer(Tracer):
         self.wavelengthSource.bindParams(self._program, i)
         self.response.bindParams(self._program, i)
         self.rng.bindParams(self._program, i)
+        self.target.bindParams(self._program, i)
         return [self._program.dispatch(self._groups)]
 
 
@@ -684,8 +693,8 @@ class VolumeBackwardTracer(Tracer):
         Defaults to zero specifying vacuum.
     nScattering: int, default=6
         Number of simulated scattering events
-    target: Optional[SphereBBox], default=None
-        Detector sphere used to determine self shadowing. If None, this test is
+    target: Optional[Target], default=None
+        Target model used to determine self shadowing. If None, this test is
         disabled.
     scatterCoefficient: float, default=0.01 1/m
         Scatter coefficient used for sampling ray lengths. Tuning this parameter
@@ -710,10 +719,6 @@ class VolumeBackwardTracer(Tracer):
 
     Stage Parameters
     ----------------
-    targetPosition: vec3
-        Center of the target sphere. Ignored if target was None.
-    targetRadius: float
-        Radius of the target sphere. Ignored if target was None.
     scatterCoefficient: float
         Scatter coefficient used for sampling ray lengths
     medium: int
@@ -735,8 +740,6 @@ class VolumeBackwardTracer(Tracer):
 
     class TraceParams(Structure):
         _fields_ = [
-            ("targetPosition", vec3),
-            ("targetRadius", c_float),
             ("medium", buffer_reference),
             ("scatterCoefficient", c_float),
             ("lowerBBoxCorner", vec3),
@@ -757,7 +760,7 @@ class VolumeBackwardTracer(Tracer):
         callback: TraceEventCallback = EmptyEventCallback(),
         medium: int = 0,
         nScattering: int = 6,
-        target: SphereBBox | None = None,
+        target: Target | None = None,
         scatterCoefficient: float = 0.01 / u.m,
         traceBBox: RectBBox = RectBBox((-1.0 * u.km,) * 3, (1.0 * u.km,) * 3),
         maxTime: float = 1000.0 * u.ns,
@@ -801,12 +804,11 @@ class VolumeBackwardTracer(Tracer):
         self._camera = camera
         self._wavelengthSource = wavelengthSource
         self._rng = rng
+        self._target = target
         self._callback = callback
         self._nScattering = nScattering
         self._directLightingDisabled = disableDirectLighting
         self.setParams(
-            targetPosition=target.center if target is not None else (0.0, 0.0, 0.0),
-            targetRadius=target.radius if target is not None else 0.0,
             scatterCoefficient=scatterCoefficient,
             medium=medium,
             lowerBBoxCorner=traceBBox.lowerCorner,
@@ -834,6 +836,7 @@ class VolumeBackwardTracer(Tracer):
                 "response.glsl": response.sourceCode,
                 "rng.glsl": rng.sourceCode,
                 "source.glsl": wavelengthSource.sourceCode,
+                "target.glsl": "" if target is None else target.sourceCode,
             }
             code = compileShader("tracer.volume.backward.glsl", preamble, headers)
         self._code = code
@@ -876,16 +879,9 @@ class VolumeBackwardTracer(Tracer):
         return self._source
 
     @property
-    def target(self) -> SphereBBox:
-        """Sphere the tracer targets"""
-        return SphereBBox(
-            self.getParam("targetPosition"),
-            self.getParam("targetRadius"),
-        )
-
-    @target.setter
-    def target(self, value: SphereBBox) -> None:
-        self.setParams(targetPosition=value.center, targetRadius=value.radius)
+    def target(self) -> Target | None:
+        """Target used for self shadowing. If None, this test is disabled."""
+        return self._target
 
     @property
     def traceBBox(self) -> RectBBox:
@@ -899,6 +895,13 @@ class VolumeBackwardTracer(Tracer):
         """Source used to sample wavelengths"""
         return self._wavelengthSource
 
+    def collectStages(self) -> list[PipelineStage]:
+        stages = [self.rng, self.wavelengthSource, self.source, self.camera]
+        if self.target is not None:
+            stages.append(self.target)
+        stages.extend([self, self.callback, self.response])
+        return stages
+
     def _finishParams(self, i: int) -> None:
         super()._finishParams(i)
         self.setParam("_maxDist", self.traceBBox.diagonal)
@@ -911,6 +914,8 @@ class VolumeBackwardTracer(Tracer):
         self.wavelengthSource.bindParams(self._program, i)
         self.response.bindParams(self._program, i)
         self.rng.bindParams(self._program, i)
+        if self.target is not None:
+            self.target.bindParams(self._program, i)
         return [self._program.dispatch(self._groups)]
 
 
@@ -945,6 +950,8 @@ class SceneForwardTracer(Tracer):
     targetIdx: int, default=0
         Id of the detector, the tracer should try to hit.
         Hits on other detectors are ignored to make estimates easier.
+    targetGuide: TargetGuide | None, default=None
+        Optional target proxy used to sample scatter directions towards it.
     scatterCoefficient: float, default=0.01 1/m
         Scatter coefficient used for sampling ray lengths. Tuning this parameter
         affects the time distribution of the hits.
@@ -957,11 +964,6 @@ class SceneForwardTracer(Tracer):
         Whether to ignore contributions from direct lighting, i.e. light paths
         with no scattering. If True, one can use a more performant direct
         lighting estimator in addition to increase overall performance.
-    disableTargetSampling: bool, default=False
-        Whether to disable sampling the target after scatter event. Disabling it
-        means that targets will only be hit by chance and it is therefore
-        recommended to not disable this as it hugely improves the performance.
-        The simulated light path is not affected by this.
     disableTransmission: bool, default=False
         Disables GPU code handling transmission, which may improve performance.
         Rays will default to always reflect where possible.
@@ -1012,11 +1014,11 @@ class SceneForwardTracer(Tracer):
         callback: TraceEventCallback = EmptyEventCallback(),
         maxPathLength: int = 6,
         targetIdx: int = 0,
+        targetGuide: TargetGuide | None = None,
         scatterCoefficient: float = 0.01 / u.m,
         maxTime: float = 1000.0 * u.ns,
         polarized: bool = False,
         disableDirectLighting: bool = False,
-        disableTargetSampling: bool = False,
         disableTransmission: bool = False,
         disableVolumeBorder: bool = False,
         blockSize: int = 128,
@@ -1025,22 +1027,16 @@ class SceneForwardTracer(Tracer):
         # check if ray tracing was enabled
         if not hp.isRaytracingEnabled():
             raise RuntimeError("Ray tracing is not supported on this system!")
-        # disable MIS if there are no targets
-        if scene.targets is None and not disableTargetSampling:
-            warnings.warn(
-                "Target sampling was requested but scene has no targets! "
-                "Disabling target sampling which will most likely hurt performance."
-            )
-            disableTargetSampling = True
 
         # calculate max hits
         maxHits = batchSize * (maxPathLength - 1)
-        if not disableTargetSampling:
+        rngStride = 4
+        if targetGuide is not None:
             maxHits *= 2
+            rngStride += targetGuide.nRNGSamples
         if not disableDirectLighting:
             maxHits += batchSize
         # init tracer
-        rngStride = 4 if disableTargetSampling else 8
         nRNG = source.nRNGForward + wavelengthSource.nRNGSamples
         nRNG += rngStride * maxPathLength
         super().__init__(
@@ -1060,10 +1056,10 @@ class SceneForwardTracer(Tracer):
         self._callback = callback
         self._rng = rng
         self._scene = scene
+        self._targetGuide = targetGuide
         self._maxPathLength = maxPathLength
         self._directLightingDisabled = disableDirectLighting
         self._transmissionDisabled = disableTransmission
-        self._targetSamplingDisabled = disableTargetSampling
         self._volumeBorderDisabled = disableVolumeBorder
         self.setParams(
             targetIdx=targetIdx,
@@ -1083,18 +1079,20 @@ class SceneForwardTracer(Tracer):
                 BATCH_SIZE=batchSize,
                 BLOCK_SIZE=blockSize,
                 DISABLE_DIRECT_LIGHTING=disableDirectLighting,
-                DISABLE_MIS=disableTargetSampling,
+                DISABLE_MIS=targetGuide is None,
                 DISABLE_TRANSMISSION=disableTransmission,
                 DISABLE_VOLUME_BORDER=disableVolumeBorder,
                 PATH_LENGTH=maxPathLength,
                 POLARIZATION=polarized,
             )
+            guideCode = "" if targetGuide is None else targetGuide.sourceCode
             headers = {
                 "callback.glsl": callback.sourceCode,
                 "response.glsl": response.sourceCode,
                 "rng.glsl": rng.sourceCode,
                 "source.glsl": source.sourceCode,
                 "photon.glsl": wavelengthSource.sourceCode,
+                "target_guide.glsl": guideCode,
             }
             code = compileShader("tracer.scene.forward.glsl", preamble, headers)
         self._code = code
@@ -1102,8 +1100,6 @@ class SceneForwardTracer(Tracer):
         self._program = hp.Program(self._code)
         # bind scene
         self._program.bindParams(Geometries=scene.geometries, tlas=scene.tlas)
-        if not disableTargetSampling:
-            self._program.bindParams(Targets=scene.targets)
 
     @property
     def callback(self) -> TraceEventCallback:
@@ -1141,9 +1137,9 @@ class SceneForwardTracer(Tracer):
         return self._source
 
     @property
-    def targetSamplingDisabled(self) -> bool:
-        """Whether target sampling is disabled"""
-        return self._targetSamplingDisabled
+    def targetGuide(self) -> TargetGuide | None:
+        """Optional target guide used for sampling scatter directions"""
+        return self._targetGuide
 
     @property
     def transmissionDisabled(self) -> bool:
@@ -1160,6 +1156,13 @@ class SceneForwardTracer(Tracer):
         """Source used to sample wavelengths"""
         return self._wavelengthSource
 
+    def collectStages(self) -> list[PipelineStage]:
+        stages = [self.rng, self.wavelengthSource, self.source]
+        if self.targetGuide is not None:
+            stages.append(self.targetGuide)
+        stages.extend([self, self.callback, self.response])
+        return stages
+
     def run(self, i: int) -> list[hp.Command]:
         self._bindParams(self._program, i)
         self.callback.bindParams(self._program, i)
@@ -1167,6 +1170,8 @@ class SceneForwardTracer(Tracer):
         self.wavelengthSource.bindParams(self._program, i)
         self.response.bindParams(self._program, i)
         self.rng.bindParams(self._program, i)
+        if self._targetGuide is not None:
+            self._targetGuide.bindParams(self._program, i)
         return [self._program.dispatch(self._groups)]
 
 
@@ -1405,6 +1410,17 @@ class SceneBackwardTracer(Tracer):
         """Source used to sample wavelengths"""
         return self._wavelengthSource
 
+    def collectStages(self):
+        return [
+            self.rng,
+            self.wavelengthSource,
+            self.source,
+            self.camera,
+            self,
+            self.callback,
+            self.response,
+        ]
+
     def run(self, i: int) -> list[hp.Command]:
         self._bindParams(self._program, i)
         self.callback.bindParams(self._program, i)
@@ -1608,6 +1624,17 @@ class DirectLightTracer(Tracer):
     def wavelengthSource(self) -> WavelengthSource:
         """Source used to sample wavelengths"""
         return self._wavelengthSource
+
+    def collectStages(self) -> list[PipelineStage]:
+        return [
+            self.rng,
+            self.wavelengthSource,
+            self.source,
+            self.camera,
+            self,
+            self.callback,
+            self.response,
+        ]
 
     def run(self, i: int) -> list[hp.Command]:
         self._bindParams(self._program, i)
@@ -1865,6 +1892,17 @@ class BidirectionalPathTracer(Tracer):
     def wavelengthSource(self) -> WavelengthSource:
         """Source used to sample wavelengths"""
         return self._wavelengthSource
+
+    def collectStages(self):
+        return [
+            self.rng,
+            self.wavelengthSource,
+            self.source,
+            self.camera,
+            self,
+            self.callback,
+            self.response,
+        ]
 
     def run(self, i: int) -> list[hp.Command]:
         self._bindParams(self._program, i)
