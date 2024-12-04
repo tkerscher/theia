@@ -590,12 +590,6 @@ class Scene:
     bbox: RectBBox, default=None
         bounding box containing the scene, limiting traced rays inside. Defaults
         to a cube of 1km in each primal direction.
-    targets: Iterable[SphereBBox], default=[]
-        during scatter events, tracers may use targets each corresponding to the
-        detector of the same index to sample the next ray direction instead of
-        the phase function to increase the chance of actually hitting the
-        detector. targets do not need to coincide with the actual detector
-        geometry nor is it checked.
     """
 
     class GLSLGeometry(Structure):
@@ -614,7 +608,6 @@ class Scene:
         *,
         medium: int = 0,
         bbox: RectBBox | None = None,
-        targets: Iterable[SphereBBox] = [],
     ) -> None:
         instances = list(instances)
         if len(instances) == 0:
@@ -633,17 +626,6 @@ class Scene:
         # upload geometries to gpu
         self._geometries = hp.ArrayTensor(Scene.GLSLGeometry, len(instances))
         hp.execute(hp.updateTensor(geometries, self._geometries))
-
-        # upload detectors to gpu
-        targets = list(targets)  # make sure its a list
-        if len(targets) > 0:
-            targetBuffer = hp.ArrayBuffer(SphereBBox.GLSL, len(targets))
-            for i in range(len(targets)):
-                targetBuffer[i] = targets[i].glsl
-            self._targets = hp.ArrayTensor(SphereBBox.GLSL, len(targets))
-            hp.execute(hp.updateTensor(targetBuffer, self._targets))
-        else:
-            self._targets = None
 
         # in order to pass to hephaistos.AccelerationStructure, we need to
         # extract the hephaistos.GeometryInstance from the MeshInstance
@@ -664,14 +646,6 @@ class Scene:
     @bbox.setter
     def bbox(self, value: RectBBox) -> None:
         self._bbox = value
-
-    @property
-    def targets(self) -> hp.ByteTensor | None:
-        """
-        Tensor holding the array of spherical bounding boxes encapsulating the
-        detectors. `None` if no targets have been specified.
-        """
-        return self._targets
 
     @property
     def geometries(self) -> hp.ByteTensor:
