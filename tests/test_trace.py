@@ -5,7 +5,7 @@ import hephaistos as hp
 import hephaistos.pipeline as pl
 
 import theia.camera
-import theia.estimator
+import theia.response
 import theia.light
 import theia.material
 import theia.random
@@ -51,7 +51,7 @@ def test_VolumeForwardTracer(
         position=light_pos, budget=light_budget, timeRange=(T0, T1)
     )
     target = SphereTarget(position=target_pos, radius=target_radius)
-    recorder = theia.estimator.HitRecorder(polarized=polarized)
+    recorder = theia.response.HitRecorder(polarized=polarized)
     stats = theia.trace.EventStatisticCallback()
     tracer = theia.trace.VolumeForwardTracer(
         N,
@@ -165,7 +165,7 @@ def test_VolumeBackwardTracer(
         timeRange=(T0, T1),
     )
     camera = theia.camera.SphereCamera(position=target_pos, radius=target_radius)
-    recorder = theia.estimator.HitRecorder(polarized=polarized)
+    recorder = theia.response.HitRecorder(polarized=polarized)
     stats = theia.trace.EventStatisticCallback()
     tracer = theia.trace.VolumeBackwardTracer(
         N,
@@ -289,7 +289,7 @@ def test_SceneForwardTracer(
     source = theia.light.SphericalLightSource(
         position=light_pos, timeRange=(T0, T1), budget=light_budget
     )
-    recorder = theia.estimator.HitRecorder(polarized=polarized)
+    recorder = theia.response.HitRecorder(polarized=polarized)
     stats = theia.trace.EventStatisticCallback()
     tracer = theia.trace.SceneForwardTracer(
         N,
@@ -412,7 +412,7 @@ def test_SceneBackwardTracer(
         position=target_pos,
         radius=r,
     )
-    recorder = theia.estimator.HitRecorder(polarized=polarized)
+    recorder = theia.response.HitRecorder(polarized=polarized)
     stats = theia.trace.EventStatisticCallback()
     tracer = theia.trace.SceneBackwardTracer(
         N,
@@ -534,7 +534,7 @@ def test_BidirectionalPathTracer(
     # cam = theia.camera.FlatCamera(transform=det_trafo)
     ph = theia.light.UniformWavelengthSource()
     src = theia.light.PencilLightSource(position=det_pos, timeRange=(T0, T1))
-    rec = theia.estimator.HitRecorder(polarized=polarized)
+    rec = theia.response.HitRecorder(polarized=polarized)
     # stats = theia.trace.EventStatisticCallback()
     track = theia.trace.TrackRecordCallback(N, L_CAMERA + 2, polarized=polarized)
     trace = theia.trace.BidirectionalPathTracer(
@@ -628,7 +628,7 @@ def test_EventStatisticCallback():
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
     photons = theia.light.UniformWavelengthSource()
     source = theia.light.SphericalLightSource(timeRange=(T0, T1))
-    response = theia.estimator.EmptyResponse()
+    response = theia.response.EmptyResponse()
     stats = theia.trace.EventStatisticCallback()
     tracer = theia.trace.SceneForwardTracer(
         N,
@@ -717,7 +717,7 @@ def test_TrackRecordCallback(polarizedTrack: bool, polarized: bool):
         stokes=stokes,
         polarizationRef=polRef,
     )
-    response = theia.estimator.EmptyResponse()
+    response = theia.response.EmptyResponse()
     track = theia.trace.TrackRecordCallback(N, LENGTH, polarized=polarizedTrack)
     tracer = theia.trace.VolumeForwardTracer(
         N,
@@ -801,7 +801,7 @@ def test_volumeBorder():
         timeRange=(0.0, 0.0),  # const time
         budget=1.0,
     )
-    estimator = theia.estimator.EmptyResponse()
+    estimator = theia.response.EmptyResponse()
     tracker = theia.trace.TrackRecordCallback(N, 4)
     tracer = theia.trace.SceneForwardTracer(
         N,
@@ -893,7 +893,7 @@ def test_tracer_reflection(flag, reflectance, err):
         timeRange=(0.0, 0.0),  # const time
         budget=1.0,
     )
-    recorder = theia.estimator.HitRecorder()
+    recorder = theia.response.HitRecorder()
     tracer = theia.trace.SceneForwardTracer(
         N,
         source,
@@ -955,7 +955,7 @@ def test_DirectTracer_volume(polarized: bool):
         direction=camDir,
         up=camUp,
     )
-    recorder = theia.estimator.HitRecorder(polarized=polarized)
+    recorder = theia.response.HitRecorder(polarized=polarized)
     stats = theia.trace.EventStatisticCallback()
     tracer = theia.trace.DirectLightTracer(
         N,
@@ -1051,7 +1051,7 @@ def test_DirectTracer_scene(polarized: bool):
         direction=camDir,
         up=camUp,
     )
-    recorder = theia.estimator.HitRecorder(polarized=polarized)
+    recorder = theia.response.HitRecorder(polarized=polarized)
     stats = theia.trace.EventStatisticCallback()
     tracer = theia.trace.DirectLightTracer(
         N,

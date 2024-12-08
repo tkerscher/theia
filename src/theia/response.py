@@ -411,8 +411,8 @@ class CustomValueResponse(ValueResponse):
     float responseValue(HitItem item)
     ```
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     code: str
         User provided source code (GLSL).
     """

@@ -10,7 +10,7 @@ from ctypes import Structure, c_float, c_int32, c_uint32, addressof, memset, siz
 from numpy.ctypeslib import as_array
 
 from theia.camera import Camera
-from theia.estimator import HitResponse, TraceConfig
+from theia.response import HitResponse, TraceConfig
 from theia.light import LightSource, WavelengthSource
 from theia.random import RNG
 from theia.scene import RectBBox, Scene

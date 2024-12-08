@@ -1,7 +1,7 @@
 import pytest
 
 import numpy as np
-import theia.estimator
+import theia.response
 import theia.units as u
 
 from hephaistos.pipeline import RetrieveTensorStage, UpdateTensorStage, runPipeline
@@ -12,8 +12,8 @@ from hephaistos.queue import QueueTensor, as_queue
 def test_record(rng, polarized: bool):
     N = 8192
 
-    record = theia.estimator.HitRecorder(polarized=polarized)
-    replay = theia.estimator.HitReplay(N, record, polarized=polarized)
+    record = theia.response.HitRecorder(polarized=polarized)
+    replay = theia.response.HitReplay(N, record, polarized=polarized)
 
     samples = replay.view(0)
     samples["position"] = (10.0 * rng.random((N, 3)) - 5.0) * u.m
@@ -46,11 +46,11 @@ def test_record(rng, polarized: bool):
 
 def test_hitPolarizationMismatch():
     with pytest.raises(RuntimeError):
-        record = theia.estimator.HitRecorder(polarized=True)
-        replay = theia.estimator.HitReplay(128, record, polarized=False)
+        record = theia.response.HitRecorder(polarized=True)
+        replay = theia.response.HitReplay(128, record, polarized=False)
     with pytest.raises(RuntimeError):
-        record = theia.estimator.HitRecorder(polarized=False)
-        replay = theia.estimator.HitReplay(128, record, polarized=True)
+        record = theia.response.HitRecorder(polarized=False)
+        replay = theia.response.HitReplay(128, record, polarized=True)
 
 
 def test_histogramResponse(rng):
@@ -61,11 +61,11 @@ def test_histogramResponse(rng):
     T1 = T0 + N_BINS * BIN_SIZE
     NORM = 1e-5
 
-    value = theia.estimator.UniformValueResponse()
-    response = theia.estimator.HistogramHitResponse(
+    value = theia.response.UniformValueResponse()
+    response = theia.response.HistogramHitResponse(
         value, nBins=N_BINS, t0=T0, binSize=BIN_SIZE, normalization=NORM
     )
-    replay = theia.estimator.HitReplay(N, response, blockSize=128)
+    replay = theia.response.HitReplay(N, response, blockSize=128)
 
     samples = replay.view(0)
     samples["position"] = (10.0 * rng.random((N, 3)) - 5.0) * u.m
@@ -95,8 +95,8 @@ def test_histogramEstimator(rng):
     T1 = T0 + N_BINS * BIN_SIZE
     NORM = 0.01
 
-    queue = theia.estimator.createValueQueue(N)
-    estimator = theia.estimator.HistogramEstimator(
+    queue = theia.response.createValueQueue(N)
+    estimator = theia.response.HistogramEstimator(
         queue,
         nBins=N_BINS,
         t0=T0,
@@ -105,7 +105,7 @@ def test_histogramEstimator(rng):
         clearQueue=False,
     )
     updater = UpdateTensorStage(queue)
-    data = as_queue(updater.buffer(0), theia.estimator.ValueItem)
+    data = as_queue(updater.buffer(0), theia.response.ValueItem)
 
     data.count = N
     data["value"] = rng.random(N)
@@ -121,10 +121,10 @@ def test_histogramEstimator(rng):
 def test_uniformResponse(rng):
     N = 32 * 1024
 
-    queue = QueueTensor(theia.estimator.ValueItem, N)
-    value = theia.estimator.UniformValueResponse()
-    response = theia.estimator.StoreValueHitResponse(value, queue)
-    replay = theia.estimator.HitReplay(N, response)
+    queue = QueueTensor(theia.response.ValueItem, N)
+    value = theia.response.UniformValueResponse()
+    response = theia.response.StoreValueHitResponse(value, queue)
+    replay = theia.response.HitReplay(N, response)
     fetch = RetrieveTensorStage(queue)
 
     hits = replay.view(0)
@@ -142,7 +142,7 @@ def test_uniformResponse(rng):
 
     runPipeline([replay, fetch])
 
-    result = as_queue(fetch.buffer(0), theia.estimator.ValueItem)
+    result = as_queue(fetch.buffer(0), theia.response.ValueItem)
     time, value = result["time"], result["value"]
     # sort by time
     value = value[time.argsort()]

@@ -7,7 +7,7 @@ from hephaistos.queue import dumpQueue
 
 import theia
 import theia.camera
-import theia.estimator
+import theia.response
 import theia.light
 import theia.material
 import theia.random
@@ -110,7 +110,7 @@ def test_SceneForwardTracer_GroundTruth(
     # create tracer
     # rng = theia.random.SobolQRNG(seed=0xC0FFEE)
     rng = theia.random.PhiloxRNG(key=0xC0FFEE)
-    recorder = theia.estimator.HitRecorder(polarized=polarized)
+    recorder = theia.response.HitRecorder(polarized=polarized)
     tracer = theia.trace.SceneForwardTracer(
         batch_size,
         light,
@@ -241,8 +241,8 @@ def test_SceneForwardTracer_Crosscheck(
     # create tracer
     # rng = theia.random.SobolQRNG(seed=0xC0FFEE)
     rng = theia.random.PhiloxRNG(key=0xC0FFEE)
-    value = theia.estimator.UniformValueResponse()
-    response = theia.estimator.HistogramHitResponse(
+    value = theia.response.UniformValueResponse()
+    response = theia.response.HistogramHitResponse(
         value, nBins=n_bins, binSize=bin_size, t0=bin_t0, normalization=1 / batch_size
     )
     tracer = theia.trace.SceneForwardTracer(
@@ -279,8 +279,8 @@ def test_SceneForwardTracer_Crosscheck(
     # create estimate
 
     # create tracer
-    value = theia.estimator.UniformValueResponse()
-    response = theia.estimator.HistogramHitResponse(
+    value = theia.response.UniformValueResponse()
+    response = theia.response.HistogramHitResponse(
         value,
         nBins=n_bins,
         binSize=bin_size,
@@ -402,7 +402,7 @@ def test_SceneBackwardTracer(
     )
     # create tracer
     rng = theia.random.PhiloxRNG(key=0xC0FFEE)
-    recorder = theia.estimator.HitRecorder(polarized=polarized)
+    recorder = theia.response.HitRecorder(polarized=polarized)
     stats = theia.trace.EventStatisticCallback()
     tracer = theia.trace.SceneBackwardTracer(
         batch_size,
@@ -525,7 +525,7 @@ def test_VolumeForwardTracer(
     )
     target = InnerSphereTarget(position=position, radius=radius)
     # stats = theia.trace.EventStatisticCallback()
-    recorder = theia.estimator.HitRecorder(polarized=polarized)
+    recorder = theia.response.HitRecorder(polarized=polarized)
     tracer = theia.trace.VolumeForwardTracer(
         batch_size,
         light,
@@ -636,7 +636,7 @@ def test_VolumeBackwardTracer(
     camera = theia.camera.SphereCamera(position=position, radius=-radius)
     # make target a bit larger to not occlude the camera
     target = InnerSphereTarget(position=position, radius=radius * 1.001)
-    recorder = theia.estimator.HitRecorder(polarized=polarized)
+    recorder = theia.response.HitRecorder(polarized=polarized)
     stats = theia.trace.EventStatisticCallback()
     tracer = theia.trace.VolumeBackwardTracer(
         batch_size,
@@ -772,7 +772,7 @@ def test_BidirectionalPathTracer(
     camera = theia.camera.SphereCamera(position=position, radius=-r_insc)
     # create tracer
     rng = theia.random.PhiloxRNG(key=0xC0FFEE)
-    recorder = theia.estimator.HitRecorder(polarized=polarized)
+    recorder = theia.response.HitRecorder(polarized=polarized)
     tracer = theia.trace.BidirectionalPathTracer(
         batch_size,
         light,
@@ -820,7 +820,7 @@ def test_BidirectionalPathTracer(
 
     # estimate for single scatter contributions
     rng = theia.random.PhiloxRNG(key=0xC0FFEE)
-    recorder = theia.estimator.HitRecorder(polarized=polarized)
+    recorder = theia.response.HitRecorder(polarized=polarized)
     tracer = theia.trace.SceneBackwardTracer(
         batch_size,
         light,
@@ -915,7 +915,7 @@ def test_DirectTracer(mu_a: float, mu_s: float, g: float, polarized: bool):
     camera = theia.camera.SphereCamera(position=position, radius=-radius)
     # create tracer
     rng = theia.random.PhiloxRNG(key=0xC0FFEE)
-    recorder = theia.estimator.HitRecorder(polarized=polarized)
+    recorder = theia.response.HitRecorder(polarized=polarized)
     tracer = theia.trace.DirectLightTracer(
         batch_size,
         light,
