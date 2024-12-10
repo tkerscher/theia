@@ -1,20 +1,4 @@
-# Theia
-
-Theia is a package for creating Monte Carlo simulation of optionally polarized
-light propagation through volumes of arbitrary shapes containing
-(non-)scattering media while keeping track of the elapsed time. This includes
-physically correct reflections and transmission at their boundaries. The
-simulation runs on the GPU utilizing dedicated ray tracing hardware found on
-modern ones for increased performance.
-
-This package allows through its modular design maximal flexibility in
-defining simulations. While this also includes the produced results, usually
-one wants to produce _light curves_ describing the expected signal at the
-detector as function of time:
-
-![light curve example](docs/images/light_curve.png)
-
-## Installation
+# Installation Guide
 
 Theia is a python package and can installed using pip via a single line:
 
@@ -44,7 +28,30 @@ emulating a GPU on the CPU called _llvmpipe_. This is however strongly
 discouraged as performance is expected to be much worse than even the slowest
 GPUs.
 
-## Documentation and Examples
+## GPU Selection
 
-The documentation is contained in the `docs` directory. For example notebooks
-on how to use this package see the `notebooks` directory.
+If no GPU is explicitly select, theia choses the first suitable GPU while
+preferring dedicated over integrated ones. To specify on which GPU to run the
+simulation you have to first import `hephaistos` and select the desired device:
+
+```python
+import hephaistos as hp
+
+# print all available devices
+for device in hp.enumerateDevices():
+    print(device)
+
+# select the 3rd device
+hp.selectDevice(2)
+
+# now we can import theia
+import theia
+```
+
+## Mac Support
+
+Apple implements their own version of the Vulkan API called _Metal_, that is not
+out of the box compatible. There exist a translation layer that allow software
+targeting Vulkan to run on MacOS, but this currently does not support ray
+tracing. Thus for now, Mac is currently not supported but may become so in a
+future version.

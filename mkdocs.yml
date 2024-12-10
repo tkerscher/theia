@@ -1,0 +1,80 @@
+site_name: Theia Photon Tracer
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: green
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: green
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
+  features:
+    - navigation.sections
+    - navigation.expand
+    - content.code.annotate
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - footnotes
+  - md_in_html
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - toc:
+      permalink: "#"
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
+
+plugins:
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          options:
+            docstring_style: numpy
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+          rendering:
+            show_source: true
+  - offline
+
+nav:
+  - Overview: index.md
+  - Installation: installation.md
+  - Simulation Pipeline:
+    - Pipeline Overview: pipeline/index.md
+    - Pipeline Components: pipeline/pipeline.md
+    - Simulation Components: pipeline/components.md
+    - Custom Components: pipeline/extend.md
+    - Component Interfaces: pipeline/interfaces.md
+  - Scene: scene.md
+  - Mathematical Model: model.md
+  - Polarization: polarization.md
+  - API:
+    - Module Overview: api/index.md
+    - Camera Module: api/camera.md
+    - Light Module: api/light.md
+    - Look Up Module: api/lookup.md
+    - Material Module: api/material.md
+    - Response Module: api/response.md
+    - RNG Module: api/random.md
+    - Scene Module: api/scene.md
+    - Target Module: api/target.md
+    - Trace Module: api/trace.md
+    - Units Module: api/units.md  

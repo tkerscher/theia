@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+<svg width="800" height="450" version="1.1" viewBox="0 0 211.67 119.06" xmlns="http://www.w3.org/2000/svg">
+ <path d="m10.319 6.4308c0 1.5563 6.809 89.49 6.809 89.49 13.907 3.2475 51.61 2.8635 64.199-1.7509l9.9217-88.712-8.7545 0.19454-8.3654 71.592c-10.944 3.0693-34.875 4.8917-50.192 0.19454l-6.0308-71.008z" fill="#d5ffd5" stroke="#000" stroke-linecap="square" stroke-width="1.3441"/>
+ <path d="m22.462 37.909 3.319 38.168c16.467 3.7016 30.947 2.7586 46.38-0.26332l4.6003-37.822z" fill="#0cf" stroke="#000" stroke-linecap="square" stroke-width="1.3441"/>
+ <g font-family="Bahnschrift" font-size="7.1126px" letter-spacing="0px" stroke-linecap="square" stroke-width="1.3441" text-anchor="middle">
+  <text x="48.646065" y="59.541176" fill="#d5ffd5" stroke="#000000" text-align="center" xml:space="preserve"><tspan x="48.646065" y="59.541176" fill="#000000" letter-spacing="0px" stroke="none" stroke-width="1.3441">WATER</tspan></text>
+  <text x="48.463734" y="92.029953" fill="#000000" text-align="center" xml:space="preserve"><tspan x="48.463734" y="92.029953" stroke-width="1.3441">GLASS</tspan></text>
+  <text x="48.6287" y="22.188826" fill="#000000" text-align="center" xml:space="preserve"><tspan x="48.6287" y="22.188826" stroke-width="1.3441">AIR</tspan></text>
+ </g>
+ <path d="m118.5 7.0296c0 1.5563 6.809 89.49 6.809 89.49 13.907 3.2475 51.61 2.8635 64.199-1.7509l9.9217-88.712-8.7545 0.19454-8.3654 71.592c-10.944 3.0693-34.875 4.8917-50.192 0.19454l-6.0308-71.008z" fill="#d5ffd5"/>
+ <g stroke-linecap="square">
+  <path d="m129.62 38.701-2.8417-32.031-7.5872-1e-6c0 1.5563 6.809 89.49 6.809 89.49 13.907 3.2475 51.61 2.8635 64.199-1.7509l9.9217-88.712-8.7545 0.19454-3.8353 32.843" fill="none" stroke="#2ca02c" stroke-width="1.3441"/>
+  <path d="m187.53 39.605-4.53 38.749c-10.944 3.0693-34.875 4.8917-50.192 0.19454l-3.1891-38.978" fill="#0cf" stroke="#5a2ca0" stroke-width="1.3441"/>
+  <path d="m129.57 39.079c1.5632 0.17368 57.663 0 57.663 0" fill="#0cf" stroke="#d45500" stroke-width="1.2"/>
+ </g>
+ <g fill="#000000" font-family="Bahnschrift" font-size="6.35px" letter-spacing="0px" stroke-linecap="square" stroke-width="1.2" text-anchor="middle">
+  <text x="158.68842" y="35.605259" text-align="center" xml:space="preserve"><tspan x="158.68842" y="35.605259" fill="#000000" stroke-width="1.2">WATER / AIR</tspan></text>
+  <text x="158.71167" y="76.594734" text-align="center" xml:space="preserve"><tspan x="158.71167" y="76.594734" stroke-width="1.2">WATER / GLASS</tspan></text>
+  <text x="158.50238" y="93.442108" text-align="center" xml:space="preserve"><tspan x="158.50238" y="93.442108" font-family="Bahnschrift" font-size="6.35px" stroke-width="1.2" style="font-variant-caps:normal;font-variant-east-asian:normal;font-variant-ligatures:normal;font-variant-numeric:normal">GLASS / AIR</tspan></text>
+  <text x="49.624058" y="110.3692" text-align="center" xml:space="preserve"><tspan x="49.624062" y="110.3692" font-family="Sans" font-size="8.4667px" stroke-width="1.2" style="font-variant-caps:normal;font-variant-east-asian:normal;font-variant-ligatures:normal;font-variant-numeric:normal">Volume Boundary</tspan></text>
+  <text x="158.80354" y="111.36404" text-align="center" xml:space="preserve"><tspan x="158.80354" y="111.36404" font-family="Sans" font-size="8.4667px" stroke-width="1.2" style="font-variant-caps:normal;font-variant-east-asian:normal;font-variant-ligatures:normal;font-variant-numeric:normal">Volume Interface</tspan></text>
+ </g>
+</svg>

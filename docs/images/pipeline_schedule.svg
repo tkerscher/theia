@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+<svg width="800" height="300" version="1.1" viewBox="0 0 211.67 79.375" xmlns="http://www.w3.org/2000/svg">
+ <defs>
+  <marker id="Triangle" overflow="visible" markerHeight="1" markerWidth="1" orient="auto-start-reverse" preserveAspectRatio="xMidYMid" refX="2" viewBox="0 0 1 1">
+   <path transform="scale(.5)" d="m5.77 0-8.65 5v-10z" fill="context-stroke" fill-rule="evenodd" stroke="context-stroke" stroke-width="1pt"/>
+  </marker>
+ </defs>
+ <g fill="#999">
+  <rect x="29.815" y="9.7035" width="175.94" height="8" style="font-variation-settings:'wdth' 87, 'wght' 600"/>
+  <rect x="29.734" y="27.244" width="175.94" height="8" style="font-variation-settings:'wdth' 87, 'wght' 600"/>
+  <rect x="29.688" y="45.781" width="175.94" height="8" style="font-variation-settings:'wdth' 87, 'wght' 600"/>
+ </g>
+ <g stroke-linecap="square" text-anchor="middle">
+  <text x="15.457894" y="16.711079" fill="none" font-family="'DejaVu Sans'" font-size="5.6444px" stroke="#999999" text-align="center" xml:space="preserve"><tspan x="15.457894" y="16.711079" fill="#000000" font-family="Bahnschrift" font-size="8.4667px" stroke="none" style="font-variant-caps:normal;font-variant-east-asian:normal;font-variant-ligatures:normal;font-variant-numeric:normal;font-variation-settings:'wdth' 87, 'wght' 600">PREP</tspan></text>
+  <text x="14.589474" y="33.892815" fill="#000000" font-family="Bahnschrift" font-size="8.4667px" text-align="center" style="font-variant-caps:normal;font-variant-east-asian:normal;font-variant-ligatures:normal;font-variant-numeric:normal;font-variation-settings:'wdth' 87, 'wght' 600" xml:space="preserve"><tspan x="14.589474" y="33.892815">EXEC</tspan></text>
+  <text x="14.936842" y="52.973682" fill="#000000" font-family="Bahnschrift" font-size="8.4667px" text-align="center" style="font-variant-caps:normal;font-variant-east-asian:normal;font-variant-ligatures:normal;font-variant-numeric:normal;font-variation-settings:'wdth' 87, 'wght' 600" xml:space="preserve"><tspan x="14.936842" y="52.973682">PROC</tspan></text>
+ </g>
+ <rect x="29.874" y="9.7035" width="16.847" height="8" fill="#fc0" style="font-variation-settings:'wdth' 87, 'wght' 600"/>
+ <rect x="29.526" y="27.169" width="44.463" height="8" fill="#c83737" style="font-variation-settings:'wdth' 87, 'wght' 600"/>
+ <g>
+  <rect x="73.757" y="27.216" width="44.463" height="8" fill="#fc0" style="font-variation-settings:'wdth' 87, 'wght' 600"/>
+  <rect x="141.84" y="45.841" width="52.8" height="8" fill="#fc0" style="font-variation-settings:'wdth' 87, 'wght' 600"/>
+  <rect x="74.038" y="9.5671" width="14.937" height="8" fill="#0055d4" style="font-variation-settings:'wdth' 87, 'wght' 600"/>
+ </g>
+ <rect x="118.58" y="9.7035" width="14.937" height="8" fill="#37c837" style="font-variation-settings:'wdth' 87, 'wght' 600"/>
+ <rect x="142.07" y="27.319" width="63.916" height="8" fill="#0055d4" style="font-variation-settings:'wdth' 87, 'wght' 600"/>
+ <rect x="74.13" y="45.896" width="67.563" height="8" fill="#c83737" style="font-variation-settings:'wdth' 87, 'wght' 600"/>
+ <g fill="#ffffff" font-family="Bahnschrift" stroke-linecap="square" stroke-width="0" text-anchor="middle">
+  <g font-size="8.4667px">
+   <text x="96.21804" y="33.470436" text-align="center" style="font-variant-caps:normal;font-variant-east-asian:normal;font-variant-ligatures:normal;font-variant-numeric:normal;font-variation-settings:'wdth' 87, 'wght' 600" xml:space="preserve"><tspan x="96.21804" y="33.470436" fill="#ffffff" font-family="Bahnschrift" font-size="6.35px" stroke-width="0" style="font-variant-caps:normal;font-variant-east-asian:normal;font-variant-ligatures:normal;font-variant-numeric:normal">TASK N</tspan></text>
+   <text x="168.47057" y="52.095245" text-align="center" style="font-variant-caps:normal;font-variant-east-asian:normal;font-variant-ligatures:normal;font-variant-numeric:normal;font-variation-settings:'wdth' 87, 'wght' 600" xml:space="preserve"><tspan x="168.47057" y="52.095245" fill="#ffffff" font-family="Bahnschrift" font-size="6.35px" stroke-width="0" style="font-variant-caps:normal;font-variant-east-asian:normal;font-variant-ligatures:normal;font-variant-numeric:normal">TASK N</tspan></text>
+   <text x="51.98579" y="33.423508" text-align="center" style="font-variant-caps:normal;font-variant-east-asian:normal;font-variant-ligatures:normal;font-variant-numeric:normal;font-variation-settings:'wdth' 87, 'wght' 600" xml:space="preserve"><tspan x="51.98579" y="33.423508" fill="#ffffff" font-family="Bahnschrift" font-size="6.35px" stroke-width="0" style="font-variant-caps:normal;font-variant-east-asian:normal;font-variant-ligatures:normal;font-variant-numeric:normal">TASK N-1</tspan></text>
+   <text x="108.13995" y="52.150394" text-align="center" style="font-variant-caps:normal;font-variant-east-asian:normal;font-variant-ligatures:normal;font-variant-numeric:normal;font-variation-settings:'wdth' 87, 'wght' 600" xml:space="preserve"><tspan x="108.13995" y="52.150394" fill="#ffffff" font-family="Bahnschrift" font-size="6.35px" stroke-width="0" style="font-variant-caps:normal;font-variant-east-asian:normal;font-variant-ligatures:normal;font-variant-numeric:normal">TASK N-1</tspan></text>
+   <text x="174.25948" y="33.572796" text-align="center" style="font-variant-caps:normal;font-variant-east-asian:normal;font-variant-ligatures:normal;font-variant-numeric:normal;font-variation-settings:'wdth' 87, 'wght' 600" xml:space="preserve"><tspan x="174.25948" y="33.572796" fill="#ffffff" font-family="Bahnschrift" font-size="6.35px" stroke-width="0" style="font-variant-caps:normal;font-variant-east-asian:normal;font-variant-ligatures:normal;font-variant-numeric:normal">TASK N+1</tspan></text>
+  </g>
+  <g font-size="6.35px">
+   <text x="38.297367" y="15.959186" text-align="center" style="font-variant-caps:normal;font-variant-east-asian:normal;font-variant-ligatures:normal;font-variant-numeric:normal" xml:space="preserve"><tspan x="38.297367" y="15.959186" stroke-width="0">N</tspan></text>
+   <text x="81.506248" y="15.821232" text-align="center" style="font-variant-caps:normal;font-variant-east-asian:normal;font-variant-ligatures:normal;font-variant-numeric:normal" xml:space="preserve"><tspan x="81.506248" y="15.821232" stroke-width="0">N+1</tspan></text>
+   <text x="125.94027" y="15.980888" text-align="center" style="font-variant-caps:normal;font-variant-east-asian:normal;font-variant-ligatures:normal;font-variant-numeric:normal" xml:space="preserve"><tspan x="125.94027" y="15.980888" stroke-width="0">N+2</tspan></text>
+  </g>
+ </g>
+ <path d="m30.047 66.484h174.73" fill="none" marker-end="url(#Triangle)" stroke="#000" stroke-linecap="square" stroke-width="1.2"/>
+ <text x="117.64271" y="64.400253" fill="none" font-family="Bahnschrift" font-size="6.35px" letter-spacing=".79375px" stroke="#000000" stroke-linecap="square" stroke-width="1.2" text-align="center" text-anchor="middle" style="font-variant-caps:normal;font-variant-east-asian:normal;font-variant-ligatures:normal;font-variant-numeric:normal" xml:space="preserve"><tspan x="118.03958" y="64.400253" dx="0" fill="#000000" letter-spacing=".79375px" stroke="none" stroke-width="1.2">TIME</tspan></text>
+</svg>
