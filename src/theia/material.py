@@ -59,14 +59,14 @@ speed_of_light: Final[float] = 1.0 * u.c
 
 class Medium:
     """
-    Class to describe a named material by storing the physical properties as
+    Class to describe a named medium by storing the physical properties as
     tables each containing values of its respective property sampled at
     equidistant positions on a specified range of wavelengths.
 
     Parameters
     ----------
     name: str
-        Unique name of the material. Can later be used to fetch the address of
+        Unique name of the medium. Can later be used to fetch the address of
         the medium in gpu local memory.
     lambda_min: float
         Lower limit of the range of wavelengths the tables are defined
@@ -174,7 +174,7 @@ class Medium:
     @property
     def name(self) -> str:
         """
-        Name of this material. Can later be used to fetch the address of the
+        Name of this medium. Can later be used to fetch the address of the
         medium in gpu local memory.
         """
         return self._name
@@ -185,7 +185,7 @@ class Medium:
 
     @property
     def lambda_min(self) -> float:
-        """Lower end of the wavelength range on which the material properties are defined"""
+        """Minimum wavelength for which the optical properties are defined"""
         return self._lambda_min
 
     @lambda_min.setter
@@ -194,7 +194,7 @@ class Medium:
 
     @property
     def lambda_max(self) -> float:
-        """Upper end of the wavelength range on which the material properties are defined"""
+        """Maximum wavelength for which the optical properties are defined"""
         return self._lambda_max
 
     @lambda_max.setter
@@ -947,7 +947,7 @@ class MaterialStore:
         processed_media: set[str] = set()
 
         def procMedium(medium: Medium | None):
-            if medium is not None and medium.name not in processed_media:
+            if isinstance(medium, Medium) and medium.name not in processed_media:
                 self.updateMedium(medium)
                 processed_media.add(medium.name)
 
@@ -1049,7 +1049,8 @@ class MaterialStore:
         material: Material
             Material to be updated containing new data
         updateMedia: bool, default=False
-            Wether to also update referenced media.
+            Wether to also update referenced media. Media referenced by name
+            will be ignored.
         """
         if self.frozen:
             raise RuntimeError("Cannot update frozen MaterialStore")
@@ -1057,21 +1058,35 @@ class MaterialStore:
             raise ValueError(
                 f"Material {material.name} has not been previously allocated"
             )
+        
+        # fetch names of references media
         inside, outside = material.inside, material.outside
-        if inside is not None and inside.name not in self.media:
+        if isinstance(inside, Medium):
+            inside = inside.name
+        if isinstance(outside, Medium):
+            outside = outside.name
+
+        if inside is not None and inside not in self.media:
             raise ValueError(
-                f"Material {material.name} references unknown material {inside.name}"
+                f"Material {material.name} references unknown medium {inside}"
             )
-        if outside is not None and outside.name not in self.media:
+        if outside is not None and outside not in self.media:
             raise ValueError(
-                f"Material {material.name} references unknown material {outside.name}"
+                f"Material {material.name} references unknown medium {outside}"
             )
         # fetch header
         glsl = Material.GLSL.from_address(self._mat_ptr[material.name])
-        glsl.inside = 0 if inside is None else self.media[inside.name]
-        glsl.outside = 0 if outside is None else self.media[outside.name]
+        glsl.inside = 0 if inside is None else self.media[inside]
+        glsl.outside = 0 if outside is None else self.media[outside]
         glsl.flagsInwards = material.flagsInward
         glsl.flagsOutwards = material.flagsOutward
+
+        # update medium if specified
+        if updateMedia:
+            if isinstance(material.inside, Medium):
+                self.updateMedium(material.inside)
+            if isinstance(material.outside, Medium):
+                self.updateMaterial(material.outside)
 
 
 #################################### MODELS ####################################
