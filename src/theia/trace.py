@@ -420,12 +420,11 @@ class VolumeForwardTracer(Tracer):
         Response function processing each simulated hit
     rng: RNG
         Generator for creating random numbers
+    medium: int
+        Device address of the medium the scene is emerged in, e.g. the address
+        of a water medium for an underwater simulation.
     callback: TraceEventCallback, default=EmptyEventCallback()
         Callback called for each tracing event. See `TraceEventCallback`
-    medium: int, default=0
-        device address of the medium the scene is emerged in, e.g. the address
-        of a water medium for an underwater simulation.
-        Defaults to zero specifying vacuum.
     nScattering: int, default=6
         Number of simulated scattering events
     target: SphereBBox, default=((0,0,0), r=1.0)
@@ -497,8 +496,8 @@ class VolumeForwardTracer(Tracer):
         response: HitResponse,
         rng: RNG,
         *,
+        medium: int,
         callback: TraceEventCallback = EmptyEventCallback(),
-        medium: int = 0,
         nScattering: int = 6,
         scatterCoefficient: float = 0.01 / u.m,
         traceBBox: RectBBox = RectBBox((-1.0 * u.km,) * 3, (1.0 * u.km,) * 3),
@@ -685,12 +684,11 @@ class VolumeBackwardTracer(Tracer):
         Response function simulating the detector
     rng: RNG
         Generator for creating random numbers
+    medium: int
+        dDevice address of the medium the scene is emerged in, e.g. the address
+        of a water medium for an underwater simulation.
     callback: TraceEventCallback, default=EmptyEventCallback()
         Callback called for each tracing event. See `TraceEventCallback`
-    medium: int, default=0
-        device address of the medium the scene is emerged in, e.g. the address
-        of a water medium for an underwater simulation.
-        Defaults to zero specifying vacuum.
     nScattering: int, default=6
         Number of simulated scattering events
     target: Optional[Target], default=None
@@ -757,8 +755,8 @@ class VolumeBackwardTracer(Tracer):
         response: HitResponse,
         rng: RNG,
         *,
+        medium: int,
         callback: TraceEventCallback = EmptyEventCallback(),
-        medium: int = 0,
         nScattering: int = 6,
         target: Target | None = None,
         scatterCoefficient: float = 0.01 / u.m,
@@ -955,6 +953,8 @@ class SceneForwardTracer(Tracer):
     scatterCoefficient: float, default=0.01 1/m
         Scatter coefficient used for sampling ray lengths. Tuning this parameter
         affects the time distribution of the hits.
+    sourceMedium: int | None, default=None
+        Medium surrounding the light source. If None, uses the scene`s medium.
     maxTime: float, default=1000.0 ns
         Max total time including delay from the source and travel time, after
         which a ray gets stopped
@@ -994,7 +994,7 @@ class SceneForwardTracer(Tracer):
     class TraceParams(Structure):
         _fields_ = [
             ("targetIdx", c_uint32),
-            ("_sceneMedium", buffer_reference),
+            ("sourceMedium", buffer_reference),
             ("scatterCoefficient", c_float),
             ("_lowerBBoxCorner", vec3),
             ("_upperBBoxCorner", vec3),
@@ -1016,6 +1016,7 @@ class SceneForwardTracer(Tracer):
         targetIdx: int = 0,
         targetGuide: TargetGuide | None = None,
         scatterCoefficient: float = 0.01 / u.m,
+        sourceMedium: int | None = None,
         maxTime: float = 1000.0 * u.ns,
         polarized: bool = False,
         disableDirectLighting: bool = False,
@@ -1050,6 +1051,9 @@ class SceneForwardTracer(Tracer):
             polarized=polarized,
         )
 
+        # fetch scene's medium if none is specifed
+        if sourceMedium is None:
+            sourceMedium = scene.medium
         # save params
         self._source = source
         self._wavelengthSource = wavelengthSource
@@ -1064,7 +1068,7 @@ class SceneForwardTracer(Tracer):
         self.setParams(
             targetIdx=targetIdx,
             scatterCoefficient=scatterCoefficient,
-            _sceneMedium=scene.medium,
+            sourceMedium=sourceMedium,
             maxTime=maxTime,
             _lowerBBoxCorner=scene.bbox.lowerCorner,
             _upperBBoxCorner=scene.bbox.upperCorner,
