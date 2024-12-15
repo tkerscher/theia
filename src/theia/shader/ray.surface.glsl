@@ -186,13 +186,12 @@ void transmitRayIS(
     //transmit ray
     transmitRayIS(ray.state, surface);
 
-    //forward rays transport importance, which requires an additional factor of
-    //eta^-2. See PBRT or Veach' thesis
-    float eta = surface.n_in / surface.n_tr;
-    ray.state.lin_contrib /= eta * eta;
+    //forward rays transport importance, which cancel the factor eta^2
+    //See PBRT or Veach' thesis
 
     //update stokes vector
     //assume polRef is in the plane of incidence
+    float eta = surface.n_in / surface.n_tr;
     float t_s = surface.r_s + 1.0;
     float t_p = (surface.r_p + 1.0) * eta;
     ray.stokes = polarizerMatrix(t_p, t_s) * ray.stokes;
@@ -204,8 +203,6 @@ void transmitRay(
     transmitRay(ray.state, surface);
 
     float eta = surface.n_in / surface.n_tr;
-    ray.state.lin_contrib /= eta * eta;
-
     float t_s = surface.r_s + 1.0;
     float t_p = (surface.r_p + 1.0) * eta;
     ray.stokes = polarizerMatrix(t_p, t_s) * ray.stokes;
@@ -218,9 +215,12 @@ void transmitRayIS(
     //transmit ray
     transmitRayIS(ray.state, surface);
 
+    //transmitting radiance takes an additional factor eta^2
+    float eta = surface.n_in / surface.n_tr;
+    ray.state.lin_contrib *= eta * eta;
+
     //update mueller matrix
     //assume polRef is in the plane of incidence
-    float eta = surface.n_in / surface.n_tr;
     float t_s = surface.r_s + 1.0;
     float t_p = (surface.r_p + 1.0) * eta;
     ray.mueller = ray.mueller * polarizerMatrix(t_p, t_s);
@@ -232,6 +232,8 @@ void transmitRay(
     transmitRay(ray.state, surface);
 
     float eta = surface.n_in / surface.n_tr;
+    ray.state.lin_contrib *= eta * eta;
+
     float t_s = surface.r_s + 1.0;
     float t_p = (surface.r_p + 1.0) * eta;
     ray.mueller = ray.mueller * polarizerMatrix(t_p, t_s);
@@ -272,16 +274,18 @@ void transmitRayIS(
     //transmit ray
     transmitRayIS(ray.state, surface);
 
-    //forward rays transport importance, which requires an additional factor of
-    //eta^-2. See PBRT or Veach' thesis
-    float inv_eta = surface.n_tr / surface.n_in;
-    ray.state.lin_contrib *= inv_eta * inv_eta;
+    //forward rays transport importance, which cancel the factor eta^2
+    //See PBRT or Veach' thesis
 }
 void transmitRayIS(
     inout UnpolarizedBackwardRay ray,
     const SurfaceReflectance surface
 ) {
     transmitRayIS(ray.state, surface);
+
+    //transmitting radiance takes an additional factor eta^2
+    float eta = surface.n_in / surface.n_tr;
+    ray.state.lin_contrib *= eta * eta;
 }
 
 void transmitRay(
@@ -290,17 +294,15 @@ void transmitRay(
 ) {
     //transmit ray
     transmitRay(ray.state, surface);
-
-    //forward rays transport importance, which requires an additional factor of
-    //eta^-2. See PBRT or Veach' thesis
-    float inv_eta = surface.n_tr / surface.n_in;
-    ray.state.lin_contrib *= inv_eta * inv_eta;
 }
 void transmitRay(
     inout UnpolarizedBackwardRay ray,
     const SurfaceReflectance surface
 ) {
     transmitRay(ray.state, surface);
+
+    float eta = surface.n_in / surface.n_tr;
+    ray.state.lin_contrib *= eta * eta;
 }
 
 #endif
