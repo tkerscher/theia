@@ -35,11 +35,14 @@ float sampleScatterLength(
     float u                         ///< Random number used for sampling
 ) {
     float dist = params.maxDist;
+    //negative values indicate that we should IS scattering length
+    float sampleCoef = params.scatterCoefficient <= 0.0 ?
+        ray.constants.mu_s : params.scatterCoefficient;
     bool canScatter = ray.constants.mu_s > 0.0;
     if (canScatter) {
         //sample exponential distribution
         //use u -> 1.0 - u > 0.0 to be safe on the log
-        dist = -log(1.0 - u) / params.scatterCoefficient;
+        dist = -log(1.0 - u) / sampleCoef;
     }
     return dist;
 }
@@ -106,12 +109,16 @@ void updateRayIS(
     if (!canScatter)
         return;
     
-    ray.log_contrib += params.scatterCoefficient * dist;
+    //negative values indicate that we should IS scattering length
+    float sampleCoef = params.scatterCoefficient <= 0.0 ?
+        ray.constants.mu_s : params.scatterCoefficient;
+    
+    ray.log_contrib += sampleCoef * dist;
     if (!hit) {
         //if we hit anything, the actual prop is to travel at least dist
         // -> happens to cancel the coefficient
         // -> we need to divide by the scatter coef if we did not hit anything
-        ray.lin_contrib /= params.scatterCoefficient;
+        ray.lin_contrib /= sampleCoef;
     }
 }
 //specializations

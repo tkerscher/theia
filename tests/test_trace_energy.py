@@ -712,24 +712,26 @@ def test_SceneBackwardTracer_MultiMedia(polarized: bool):
 
 
 @pytest.mark.parametrize(
-    "mu_a,mu_s,g,disableDirect,sampleTarget,polarized,err",
+    "mu_a,mu_s,mu_sample,g,disableDirect,sampleTarget,polarized,err",
     [
-        (0.0, 0.005, 0.0, False, True, False, 4.5e-4),
-        (0.0, 0.005, 0.0, False, False, False, 0.011),
-        (0.0, 0.005, 0.0, True, True, False, 0.011),
-        (0.05, 0.01, 0.0, False, True, False, 1.8e-3),
-        (0.05, 0.01, 0.0, True, True, False, 2.6e-3),
-        (0.05, 0.01, -0.9, False, True, False, 0.012),
-        (0.05, 0.01, 0.9, True, True, False, 2.8e-4),
-        (0.05, 0.01, 0.9, True, False, False, 2.9e-3),
-        (0.0, 0.005, 0.0, False, True, True, 5e-4),
-        (0.0, 0.005, 0.0, True, True, True, 1.2e-3),
-        (0.05, 0.01, -0.9, False, True, True, 0.012),
+        (0.0, 0.005, 0.05, 0.0, False, True, False, 4.5e-4),
+        (0.0, 0.005, 0.05, 0.0, False, False, False, 0.011),
+        (0.0, 0.005, 0.05, 0.0, True, True, False, 0.011),
+        (0.05, 0.01, 0.05, 0.0, False, True, False, 1.8e-3),
+        (0.05, 0.01, 0.05, 0.0, True, True, False, 2.6e-3),
+        (0.05, 0.01, 0.05, -0.9, False, True, False, 0.012),
+        (0.05, 0.01, 0.05, 0.9, True, True, False, 2.8e-4),
+        (0.05, 0.01, 0.05, 0.9, True, False, False, 2.9e-3),
+        (0.05, 0.01, None, 0.9, False, True, True, 2.9e-3),
+        (0.0, 0.005, 0.05, 0.0, False, True, True, 5e-4),
+        (0.0, 0.005, 0.05, 0.0, True, True, True, 1.2e-3),
+        (0.05, 0.01, 0.05, -0.9, False, True, True, 0.012),
     ],
 )
 def test_VolumeForwardTracer(
     mu_a: float,
     mu_s: float,
+    mu_sample: float | None,
     g: float,
     disableDirect: bool,
     sampleTarget: bool,
@@ -747,7 +749,6 @@ def test_VolumeForwardTracer(
     lam = 400.0 * u.nm
     # tracer settings
     max_length = 10
-    scatter_coef = 0.05
     maxTime = float("inf")
     # simulation settings
     # batch_size = 2 * 1024 * 1024 # does not work on my laptop!?
@@ -779,7 +780,7 @@ def test_VolumeForwardTracer(
         medium=store.media["homogenous"],
         maxTime=maxTime,
         nScattering=max_length,
-        scatterCoefficient=scatter_coef,
+        scatterCoefficient=mu_sample,
         polarized=polarized,
         disableDirectLighting=disableDirect,
         disableTargetSampling=not sampleTarget,
@@ -834,18 +835,25 @@ def test_VolumeForwardTracer(
 
 
 @pytest.mark.parametrize(
-    "mu_a,mu_s,g,disableDirect,polarized,err",
+    "mu_a,mu_s,mu_sample,g,disableDirect,polarized,err",
     [
-        (0.0, 0.01, 0.0, False, False, 5.5e-3),
-        (0.05, 0.005, 0.0, False, False, 3.0e-3),
-        (0.0, 0.01, 0.0, False, True, 5.1e-3),
-        (0.05, 0.005, 0.0, True, True, 4.8e-3),
-        (0.05, 0.005, 0.5, True, False, 8.0e-3),
-        (0.01, 0.01, -0.5, False, False, 2.3e-3),
+        (0.0, 0.01, 0.05, 0.0, False, False, 5.5e-3),
+        (0.05, 0.005, 0.05, 0.0, False, False, 3.0e-3),
+        (0.05, 0.005, None, 0.0, False, False, 3.0e-3),
+        (0.0, 0.01, 0.05, 0.0, False, True, 5.1e-3),
+        (0.05, 0.005, 0.05, 0.0, True, True, 4.8e-3),
+        (0.05, 0.005, 0.05, 0.5, True, False, 8.0e-3),
+        (0.01, 0.01, 0.05, -0.5, False, False, 2.3e-3),
     ],
 )
 def test_VolumeBackwardTracer(
-    mu_a: float, mu_s: float, g: float, disableDirect: bool, polarized: bool, err: float
+    mu_a: float,
+    mu_s: float,
+    mu_sample: float | None,
+    g: float,
+    disableDirect: bool,
+    polarized: bool,
+    err: float,
 ):
     """Spherical light source placed within a spherical target"""
 
@@ -858,7 +866,6 @@ def test_VolumeBackwardTracer(
     lam = 400.0 * u.nm
     # tracer settings
     max_length = 10
-    scatter_coef = 0.05
     maxTime = float("inf")
     # simulation settings
     batch_size = 512 * 1024
@@ -891,7 +898,7 @@ def test_VolumeBackwardTracer(
         nScattering=max_length,
         callback=stats,
         target=target,
-        scatterCoefficient=scatter_coef,
+        scatterCoefficient=mu_sample,
         maxTime=maxTime,
         disableDirectLighting=disableDirect,
         polarized=polarized,
