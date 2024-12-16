@@ -174,11 +174,17 @@ class UniformWavelengthSource(WavelengthSource):
     ----------
     lambdaRange: (float, float), default=(300.0, 700.0)
         min and max wavelength the source emits
+    normalize: bool, default=True
+        If True, adds an extra factor of one over the lambdaRange to the
+        contribution to normalize the light source.
 
     Stage Parameters
     ----------------
     lambdaRange: (float, float), default=(300.0, 700.0)
         min and max wavelength the source emits
+    normalize: bool, default=True
+        If True, adds an extra factor of one over the lambdaRange to the
+        contribution to normalize the light source.
     """
 
     class SourceParams(Structure):
@@ -194,22 +200,33 @@ class UniformWavelengthSource(WavelengthSource):
         self,
         *,
         lambdaRange: tuple[float, float] = (300.0, 700.0),
+        normalize: bool = True,
     ) -> None:
         super().__init__(
             nRNGSamples=1,
             params={"WavelengthParams": self.SourceParams},
+            extra={"normalize"},
         )
         # save params
-        self.setParams(lambdaRange=lambdaRange)
+        self.setParams(lambdaRange=lambdaRange, normalize=normalize)
 
     # sourceCode via descriptor
     sourceCode = ShaderLoader("wavelengthsource.uniform.glsl")
+
+    @property
+    def normalize(self) -> bool:
+        """Whether to normalize this source."""
+        return self._normalize
+
+    @normalize.setter
+    def normalize(self, value: bool) -> None:
+        self._normalize = value
 
     def _finishParams(self, i: int) -> None:
         c = 1.0
         lr = self.getParam("lambdaRange")
         lr = lr[1] - lr[0]
-        if lr != 0.0:
+        if lr != 0.0 and not self.normalize:
             c *= abs(lr)
         self.setParam("_contrib", c)
 
@@ -712,10 +729,6 @@ class ConeLightSource(LightSource):
     def _finishParams(self, i: int) -> None:
         super()._finishParams(i)
         c = self.budget
-        tr = self.getParam("timeRange")
-        tr = tr[1] - tr[0]
-        if tr > 0:
-            c *= abs(tr)
         self.setParam("_contribFwd", c)
         # in forward parameter volume cancels with the probability
         # This is not the case in backward mode
@@ -769,7 +782,7 @@ class PencilLightSource(LightSource):
         _fields_ = [
             ("position", vec3),
             ("direction", vec3),
-            ("_contrib", c_float),
+            ("budget", c_float),
             ("timeRange", vec2),
             ("stokes", vec4),
             ("polarizationRef", vec3),
@@ -790,7 +803,6 @@ class PencilLightSource(LightSource):
             supportBackward=False,
             nRNGForward=1,
             params={"LightParams": self.LightParams},
-            extra={"budget"},
         )
         # save params
         self.budget = budget
@@ -801,25 +813,6 @@ class PencilLightSource(LightSource):
             stokes=stokes,
             polarizationRef=polarizationRef,
         )
-
-    @property
-    def budget(self) -> float:
-        """Total amount of energy or photons the light source distributes among
-        the sampled photons"""
-        return self._budget
-
-    @budget.setter
-    def budget(self, value: float) -> None:
-        self._budget = value
-
-    def _finishParams(self, i: int) -> None:
-        super()._finishParams(i)
-        c = self.budget
-        tr = self.getParam("timeRange")
-        tr = tr[1] - tr[0]
-        if tr > 0:
-            c *= abs(tr)
-        self.setParam("_contrib", c)
 
     # lazily load source code
     sourceCode = ShaderLoader("lightsource.pencil.glsl")
@@ -892,10 +885,6 @@ class SphericalLightSource(LightSource):
     def _finishParams(self, i: int) -> None:
         super()._finishParams(i)
         c = self.budget
-        tr = self.getParam("timeRange")
-        tr = tr[1] - tr[0]
-        if tr > 0:
-            c *= abs(tr)
         self.setParam("_contribFwd", c)
         # in forward parameter volume cancels with the probability
         # This is not the case in backward mode
