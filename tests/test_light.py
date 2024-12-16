@@ -171,16 +171,19 @@ def test_constWavelength():
     assert np.all(result["wavelength"] == lam)
 
 
-def test_uniformWavelength():
+@pytest.mark.parametrize("normalize", [True, False])
+def test_uniformWavelength(normalize: bool):
     N = 32 * 256
     lamRange, dLam = (350.0, 750.0) * u.nm, 400.0 * u.nm
     timeRange, dt = (0.0, 0.0) * u.ns, 0.0 * u.ns
     # contrib = L/p(t,lam); p(t, lam) = 1.0 / (|dLam|*|dt|)
-    contrib = dLam
+    contrib = 1.0 if normalize else dLam
 
     # create pipeline
     philox = theia.random.PhiloxRNG(key=0xC0110FFC0FFEE)
-    photons = theia.light.UniformWavelengthSource(lambdaRange=lamRange)
+    photons = theia.light.UniformWavelengthSource(
+        lambdaRange=lamRange, normalize=normalize
+    )
     light = theia.light.PencilLightSource(timeRange=timeRange)
     sampler = theia.light.LightSampler(light, photons, N, rng=philox)
     # run
@@ -205,7 +208,7 @@ def test_coneLightSource_fwd(polarized: bool):
 
     # create pipeline
     philox = theia.random.PhiloxRNG(key=0xC0110FFC0FFEE)
-    photons = theia.light.UniformWavelengthSource(lambdaRange=(100.0, 100.0) * u.nm)
+    photons = theia.light.ConstWavelengthSource(wavelength=100.0 * u.nm)
     light = theia.light.ConeLightSource(
         position=position,
         direction=direction,
@@ -314,7 +317,7 @@ def test_pencilLightSource(polarized: bool):
     budget = 12.0
     # create pipeline
     philox = theia.random.PhiloxRNG(key=0xC0110FFC0FFEE)
-    photons = theia.light.UniformWavelengthSource(lambdaRange=(100.0, 100.0) * u.nm)
+    photons = theia.light.ConstWavelengthSource(wavelength=100.0 * u.nm)
     light = theia.light.PencilLightSource(
         position=position,
         direction=direction,
@@ -348,7 +351,7 @@ def test_sphericalLightSource_fwd(polarized: bool):
 
     # create pipeline
     philox = theia.random.PhiloxRNG(key=0xC0110FFC0FFEE)
-    photons = theia.light.UniformWavelengthSource(lambdaRange=(100.0, 100.0) * u.nm)
+    photons = theia.light.ConstWavelengthSource(wavelength=100.0 * u.nm)
     light = theia.light.SphericalLightSource(
         position=position,
         timeRange=(10.0, 10.0) * u.ns,
@@ -440,7 +443,7 @@ def test_cherenkov_fwd(usePhotons: bool, polarized: bool):
 
     # build pipeline
     philox = theia.random.PhiloxRNG(key=0xC0FFEE)
-    photon = theia.light.UniformWavelengthSource()
+    photon = theia.light.UniformWavelengthSource(normalize=False)
     light = theia.light.CherenkovLightSource(
         trackStart=startPos,
         trackEnd=endPos,
@@ -600,7 +603,7 @@ def test_cherenkovTrack(usePhotons: bool, polarized: bool):
     track = theia.light.ParticleTrack(4)
     track.setVertices(vertices)
     # build light source
-    photon = theia.light.UniformWavelengthSource()
+    photon = theia.light.UniformWavelengthSource(normalize=False)
     light = theia.light.CherenkovTrackLightSource(
         track,
         medium=store.media["water"],
