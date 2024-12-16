@@ -183,9 +183,9 @@ def test_surface(shaderUtil, forward: bool, polarized: bool):
     ts, tp = rs + 1.0, (rp + 1.0) * eta
     r = 0.5 * (rs**2 + rp**2)
     t = 1.0 - r
-    if forward:
-        # extra factor eta^-2
-        t *= (n_tr / n_in) ** 2
+    if not forward:
+        # extra factor eta^2
+        t *= (n_in / n_tr) ** 2
     # for the math to work out we need to flip the normal to be anti to the ray
     rayNormal = -np.sign(cos_i)[:, None] * normal
     cos_i = -np.abs(cos_i)
