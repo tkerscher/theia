@@ -196,6 +196,42 @@ def test_uniformWavelength(normalize: bool):
     assert np.abs(np.max(result["wavelength"]) - lamRange[1]) < 1.0
 
 
+def test_functionWavelength():
+    N = 256 * 1024  # a bit more for the histogram
+    lamRange = (300.0, 700.0) * u.nm
+
+    def fn(lam: float) -> float:
+        # something fancy just for testing
+        x = lam / 1000
+        return -x * np.log(x)
+
+    def Fn(lam: float) -> float:
+        # anti-derivative needed for testing
+        x = lam / 1000
+        return 250.0 * x**2 * (1.0 - 2.0 * np.log(x))
+
+    # create pipeline
+    philox = theia.random.PhiloxRNG(key=0xC0FFEE)
+    photons = theia.light.FunctionWavelengthSource(fn, lambdaRange=lamRange)
+    light = theia.light.PencilLightSource(timeRange=(0.0, 0.0))
+    sampler = theia.light.LightSampler(light, photons, N, rng=philox)
+    # run
+    runPipeline([philox, photons, light, sampler])
+    result = sampler.wavelengthView(0)
+
+    # check result
+    exp_contrib = Fn(lamRange[1]) - Fn(lamRange[0])
+    assert np.allclose(result["contrib"], exp_contrib)
+    assert np.abs(np.min(result["wavelength"]) - lamRange[0]) < 1.0
+    assert np.abs(np.max(result["wavelength"]) - lamRange[1]) < 1.0
+    # check distribution via histogram
+    hist, edges = np.histogram(result["wavelength"], bins=40)
+    hist = hist / N
+    F = Fn(edges)
+    exp_hist = (F[1:] - F[:-1]) / exp_contrib
+    assert np.abs(hist - exp_hist).max() < 9e-4
+
+
 @pytest.mark.parametrize("polarized", [True, False])
 def test_coneLightSource_fwd(polarized: bool):
     N = 32 * 256

@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import numpy as np
+from scipy.integrate import quad
+from scipy.stats.sampling import NumericalInversePolynomial
+
 import hephaistos as hp
 from hephaistos import Program
 from hephaistos.pipeline import PipelineStage, SourceCodeMixin
 from hephaistos.queue import QueueBuffer, QueueTensor, QueueView
 
-from ctypes import Structure, c_float, c_uint32, sizeof
+from ctypes import Structure, c_float, c_int64, c_uint32, sizeof
 from hephaistos.glsl import buffer_reference, vec2, vec3, vec4
 from numpy.ctypeslib import as_array
 
+from theia.lookup import uploadTables
 from theia.random import RNG
 from theia.util import ShaderLoader, compileShader, createPreamble
 import theia.units as u
@@ -229,6 +233,72 @@ class UniformWavelengthSource(WavelengthSource):
         if lr != 0.0 and not self.normalize:
             c *= abs(lr)
         self.setParam("_contrib", c)
+
+
+class FunctionWavelengthSource(WavelengthSource):
+    """
+    Wavelength source generating samples by importance sampling the given
+    function or distribution. Numerically integrates and inverts the
+    distribution before discretizing the result into a look up table used by
+    the GPU.
+
+    Parameters
+    ----------
+    fn: (float) -> float
+        Function to be importance sampled, mapping wavelengths in nm to a
+        scalar.
+    lambdaRange: (float, float), default=(300.0, 700.0)nm
+        Wavelength range of the generated samples.
+    numSamples: int, default=1024
+        Number of entries in the final look up table.
+    """
+
+    name = "Function Wavelength Source"
+
+    class WavelengthParams(Structure):
+        _fields_ = [("_table", c_int64), ("_contrib", c_float)]
+
+    def __init__(
+        self,
+        fn: Callable[[float], float],
+        *,
+        lambdaRange: tuple[float, float] = (300.0, 700.0) * u.nm,
+        numSamples: int = 1024,
+    ) -> None:
+        super().__init__(
+            nRNGSamples=1,
+            params={"WavelengthParams": self.WavelengthParams},
+        )
+        self._updateFn(fn, lambdaRange, numSamples)
+
+    # Source code via descriptor
+    sourceCode = ShaderLoader("wavelengthsource.function.glsl")
+
+    def _updateFn(
+        self,
+        fn: Callable[[float], float],
+        lambdaRange: tuple[float, float],
+        numSamples: int,
+    ) -> None:
+        # integrate fn to get constant contribution
+        contrib, _ = quad(fn, *lambdaRange)
+
+        class Dist:
+            """Bundle fn into a class for use with scipy"""
+
+            def pdf(self, x):
+                return fn(x)
+
+        # invert cdf
+        inv_cdf = NumericalInversePolynomial(Dist(), domain=lambdaRange)
+        # sample inverted cdf
+        u = np.linspace(0.0, 1.0, numSamples)
+        x = inv_cdf.ppf(u)
+        # create table from samples
+        self._tableMemory, [table_adr] = uploadTables([x])
+
+        # update params
+        self.setParams(_table=table_adr, _contrib=contrib)
 
 
 class LightSource(SourceCodeMixin):
