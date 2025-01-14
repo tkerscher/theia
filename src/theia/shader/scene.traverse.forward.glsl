@@ -28,7 +28,7 @@ void createResponse(
     bool absorb                         ///< True, if the surface absorbs the ray
 ) {
     //if target is not absorbing, we have to emulate a transmission before the
-    //reponse as we have to subtract the reflected part.
+    //response as we have to subtract the reflected part.
     if (!absorb) {
         //remember current direction, as transmitRay also refracts
         vec3 dir = ray.state.direction;
@@ -68,8 +68,8 @@ ResultCode processHit(
     bool isAbs = (hit.flags & MATERIAL_BLACK_BODY_BIT) != 0;
     bool isDet = (hit.flags & MATERIAL_DETECTOR_BIT) != 0;
     bool volBorder = (hit.flags & MATERIAL_VOLUME_BORDER_BIT) != 0;
-    bool canTransmit = (hit.flags & MATERIAL_NO_TRANSMIT_BIT) == 0;
-    bool canReflect = (hit.flags & MATERIAL_NO_REFLECT_BIT) == 0;
+    bool canTransmit = (hit.flags & MATERIAL_NO_TRANSMIT_FWD_BIT) == 0;
+    bool canReflect = (hit.flags & MATERIAL_NO_REFLECT_FWD_BIT) == 0;
 
     //get surface properties
     SurfaceReflectance surface = fresnelReflect(
@@ -120,7 +120,7 @@ ResultCode processHit(
         //neither reflect nor transmit -> absorb
         result = RESULT_CODE_RAY_ABSORBED;
     }
-    #else //#idef DISABLE_TRANSMISSION
+    #else //#ifndef DISABLE_TRANSMISSION
     if (canReflect) {
         reflectRay(ray, surface);
     }
@@ -223,7 +223,7 @@ void sampleTargetMIS(
     //Here we'll use the following naming scheme: pXY, where:
     // X: prob, evaluated distribution
     // Y: sampled distribution
-    // T: targetphere, P: phase
+    // T: target, P: phase
     //e.g. pTP: p_target(dir ~ phase)
 
     //shorthand notation
@@ -258,7 +258,7 @@ void sampleTargetMIS(
  *  - Samples new ray direction
  *  - If not disabled, MIS shadow rays
  *
- * NOTE: In case MIS is enabled it expects a global accesible array
+ * NOTE: In case MIS is enabled it expects a global accessible array
  *       Sphere targets[] where it can fetch the target sphere for MIS.
 */
 void processScatter(

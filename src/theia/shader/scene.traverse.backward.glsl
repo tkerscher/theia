@@ -62,8 +62,8 @@ ResultCode processHit(
     bool isAbs = (hit.flags & MATERIAL_BLACK_BODY_BIT) != 0;
     bool isDet = (hit.flags & MATERIAL_DETECTOR_BIT) != 0;
     bool volBorder = (hit.flags & MATERIAL_VOLUME_BORDER_BIT) != 0;
-    bool canTransmit = (hit.flags & MATERIAL_NO_TRANSMIT_BIT) == 0;
-    bool canReflect = (hit.flags & MATERIAL_NO_REFLECT_BIT) == 0;
+    bool canTransmit = (hit.flags & MATERIAL_NO_TRANSMIT_BWD_BIT) == 0;
+    bool canReflect = (hit.flags & MATERIAL_NO_REFLECT_BWD_BIT) == 0;
 
     //get surface properties
     SurfaceReflectance surface = fresnelReflect(

@@ -412,8 +412,8 @@ def test_serializeMaterial(tmp_path, rng):
         phase_sampling=rng.random(108, dtype=np.float32),
     )
     # dummy material
-    mat1 = theia.material.Material("mat1", "med1", med2, flags=("R", "T"))
-    mat2 = theia.material.Material("mat2", med1, None, flags=("B", "RT"))
+    mat1 = theia.material.Material("mat1", "med1", med2, flags=("R", "Tfb"))
+    mat2 = theia.material.Material("mat2", med1, None, flags=("B", "RbTf"))
 
     # save
     path = tmp_path.joinpath("materials.zip")

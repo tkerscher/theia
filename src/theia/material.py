@@ -14,6 +14,7 @@ from theia.lookup import *
 import theia.units as u
 
 import json
+import re
 from jsonschema import validate
 from pathlib import Path
 from zipfile import Path as ZipPath, ZipFile, is_zipfile
@@ -459,25 +460,43 @@ class MaterialFlags(IntFlag):
     applied.
     """
 
-    NO_REFLECT = 0x08
+    NO_REFLECT_FWD = 0x08
+    """
+    Forbids tracer to reflect forward rays from the material, but still takes
+    the reflectivity factor (i.e. Fresnel equation) into account.
+    """
+
+    NO_REFLECT_BWD = 0x10
+    """
+    Forbids tracer to reflect backward rays from the material, but still takes
+    the reflectivity factor (i.e. Fresnel equation) into account.
+    """
+
+    NO_REFLECT = 0x18
     """
     Forbids tracer to reflect rays from the material, but still takes the
     reflectivity factor (i.e. Fresnel equation) into account.
-
-    In combination with `NO_TRANSMIT` has the same effect as `BLACK_BODY`, but
-    the latter should be preferred.
     """
 
-    NO_TRANSMIT = 0x10
+    NO_TRANSMIT_FWD = 0x20
+    """
+    Forbids tracer to transmit forward rays through this material, but still
+    takes the reflectivity factor (i.e. Fresnel equation) into account.
+    """
+
+    NO_TRANSMIT_BWD = 0x40
+    """
+    Forbids tracer to transmit backward rays through this material, but still
+    takes the reflectivity factor (i.e. Fresnel equation) into account.
+    """
+
+    NO_TRANSMIT = 0x60
     """
     Forbids tracer to transmit rays through this material, but still takes the
     reflectivity factor (i.e. Fresnel equation) into account.
-
-    In combination with `NO_REFLECT` has the same effect as `BLACK_BODY`, but
-    the latter should be preferred.
     """
 
-    VOLUME_BORDER = 0x20
+    VOLUME_BORDER = 0x80
     """
     Marks the boundary of a volume, where media changes but the rays neither
     reflect nor refract, i.e. keep straight. Can be used to model inhomogeneous
@@ -489,19 +508,25 @@ _materialFlagsMap = {
     "B": MaterialFlags.BLACK_BODY,
     "D": MaterialFlags.DETECTOR,
     "R": MaterialFlags.NO_REFLECT,
+    "Rbf": MaterialFlags.NO_REFLECT,
+    "Rfb": MaterialFlags.NO_REFLECT,
+    "Rb": MaterialFlags.NO_REFLECT_BWD,
+    "Rf": MaterialFlags.NO_REFLECT_FWD,
     "T": MaterialFlags.NO_TRANSMIT,
+    "Tbf": MaterialFlags.NO_TRANSMIT,
+    "Tfb": MaterialFlags.NO_TRANSMIT,
+    "Tb": MaterialFlags.NO_TRANSMIT_BWD,
+    "Tf": MaterialFlags.NO_TRANSMIT_FWD,
     "V": MaterialFlags.VOLUME_BORDER,
 }
 
 
 def parseMaterialFlags(flags: str) -> MaterialFlags:
     """
-    Parses the given string where each character represents a flag as listed
-    below and returns the corresponding `MaterialFlags`. Capitalization does
-    not matter. An empty string represents no flags.
-
-    Note the flags `R`,`T` removes their corresponding flag, which are present
-    at default.
+    Parses the given string where each capital letter represents a flag as
+    listed below. The flags `R` and `T` can further be specialized to only apply
+    to forward or backward rays by appending a lower case `f` or `b`
+    respectively.
 
     Flags:
      - `B` : `BLACK_BODY`
@@ -511,20 +536,15 @@ def parseMaterialFlags(flags: str) -> MaterialFlags:
      - `V` : `VOLUME_BORDER`
     """
 
-    # edge case: empty input
-    if len(flags) == 0:
-        return MaterialFlags(0)
-
-    # unify capitalization
-    flags = flags.upper()
-
-    # iterate characters
-    result: MaterialFlags = MaterialFlags.NO_REFLECT | MaterialFlags.NO_TRANSMIT
-    for flag in flags:
-        if flag in _materialFlagsMap.keys():
-            result ^= _materialFlagsMap[flag]
+    # tokenize
+    tokens = re.findall(r"[A-Z][a-z]*", flags)
+    # parse tokens
+    result = MaterialFlags.NO_REFLECT | MaterialFlags.NO_TRANSMIT
+    for token in tokens:
+        if token in _materialFlagsMap:
+            result ^= _materialFlagsMap[token]
         else:
-            raise ValueError(f"Unknown material flag '{flag}'")
+            raise ValueError(f"Unknown material flag '{token}'")
     # done
     return result
 
@@ -1058,7 +1078,7 @@ class MaterialStore:
             raise ValueError(
                 f"Material {material.name} has not been previously allocated"
             )
-        
+
         # fetch names of references media
         inside, outside = material.inside, material.outside
         if isinstance(inside, Medium):

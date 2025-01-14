@@ -74,17 +74,19 @@ MediumConstants lookUpMedium(const Medium medium, float lambda) {
 
 /////////////////////////////////// MATERIAL ///////////////////////////////////
 
-//Material flag bits encoding ray intersection behaviour
-const uint MATERIAL_BLACK_BODY_BIT    = 0x00000001; //Rays gets ccompletyl absorped
-const uint MATERIAL_DETECTOR_BIT      = 0x00000002; //Rays reached a target
-// const uint MATERIAL_SOURCE_BIT        = 0x00000004; //Rays reached a light source
-const uint MATERIAL_NO_REFLECT_BIT    = 0x00000008; //Rays never reflect
-const uint MATERIAL_NO_TRANSMIT_BIT   = 0x00000010; //Rays never transmit
-const uint MATERIAL_VOLUME_BORDER_BIT = 0x00000020; //No geometric effect on Rays
+//Material flag bits encoding ray intersection behavior
+const uint MATERIAL_BLACK_BODY_BIT      = 0x00000001; //Rays gets completely absorbed
+const uint MATERIAL_DETECTOR_BIT        = 0x00000002; //Rays reached a target
+// const uint MATERIAL_SOURCE_BIT          = 0x00000004; //Rays reached a light source
+const uint MATERIAL_NO_REFLECT_FWD_BIT  = 0x00000008; //Forward rays never reflect
+const uint MATERIAL_NO_REFLECT_BWD_BIT  = 0x00000010; //Backward rays never reflect
+const uint MATERIAL_NO_TRANSMIT_FWD_BIT = 0x00000020; //Forward rays never transmit
+const uint MATERIAL_NO_TRANSMIT_BWD_BIT = 0x00000040; //Backward rays never transmit
+const uint MATERIAL_VOLUME_BORDER_BIT   = 0x00000080; //No geometric effect on Rays
 
 //Materials are assigned to geometries, which with their normals pointing
 //outwards define an inside and an outside. Both directions can be assigned
-//flags to define the behaviour of rays intersecting the geometry.
+//flags to define the behavior of rays intersecting the geometry.
 layout(buffer_reference, scalar, buffer_reference_align=8) buffer Material {
     Medium inside;
     Medium outside;
