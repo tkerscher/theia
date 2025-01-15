@@ -217,7 +217,7 @@ void simulateCamera(
             idx, dim,
             params.propagation
         );
-        //on sucess...
+        //on success...
         if (result >= 0) {
             //connect camera ray to light vertices
             completePath(ray, cam, i);

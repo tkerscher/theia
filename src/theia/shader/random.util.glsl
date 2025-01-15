@@ -9,7 +9,7 @@ float normalizeUint(uint i) {
     return min(ONE_MINUS_EPSILON, i * EPSILON);
 
     //alternative version; faster, but less precise
-    //interprets the lower 24bit as mantisse
+    //interprets the lower 24bit as mantissa
     // return uintBitsToFloat((state & 0x7FFFFF) | 0x3F800000) - 1.0;
 }
 vec2 normalizeUint(uvec2 v) {

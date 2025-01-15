@@ -10,7 +10,7 @@
 #ifdef POLARIZATION
 
 /**
- * Combines the given rays creating a hit. Returns RESULT_CODE_SUCCES, if the
+ * Combines the given rays creating a hit. Returns RESULT_CODE_SUCCESS, if the
  * created hit is within bounds.
  * Assumes the rays are already anti-parallel, i.e. it will not perform any
  * scattering to align them.
@@ -170,7 +170,7 @@ ResultCode combineRaysAligned(
 #endif //#ifdef POLARIZATION
 
 /**
- * Combines the given rays creating a hit. Returns RESULT_CODE_SUCCES, if the
+ * Combines the given rays creating a hit. Returns RESULT_CODE_SUCCESS, if the
  * created hit is within bounds.
  * Performs ONE extra scatter to align the ray with the light source, but
  * assumes the given SourceRay points to the ray's current position.

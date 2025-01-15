@@ -63,7 +63,7 @@ void onEvent(const PolarizedForwardRay ray, ResultCode code, uint idx, uint i) {
     onEvent(ray.state, code, ray.stokes, ray.polRef, idx, i);
 }
 void onEvent(const PolarizedBackwardRay ray, ResultCode code, uint idx, uint i) {
-    //we dont have a stokes vector in backward mode -> set stokes to zero
+    //we don not have a stokes vector in backward mode -> set stokes to zero
     onEvent(ray.state, code, vec4(0.0), ray.polRef, idx, i);
 }
 
@@ -75,7 +75,7 @@ void onEvent(const UnpolarizedForwardRay ray, ResultCode code, uint idx, uint i)
     onEvent(ray.state, code, stokes, polRef, idx, i);
 }
 void onEvent(const UnpolarizedBackwardRay ray, ResultCode code, uint idx, uint i) {
-    //we dont have a stokes vector in backward mode -> set stokes to zero
+    //we don not have a stokes vector in backward mode -> set stokes to zero
     onEvent(ray.state, code, vec4(0.0), vec3(0.0), idx, i);
 }
 

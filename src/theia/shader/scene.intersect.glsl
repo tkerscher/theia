@@ -21,7 +21,7 @@ struct SurfaceHit {
 
     //Geometries mark a boundary between an inside and an outside volume.
     //Their normals distinguish them by pointing outwards.
-    //Materials finally assign both volums a medium.
+    //Materials finally assign both volumes a medium.
 
     Material material;      ///< Material of the intersected geometry
     bool inward;            ///< Direction of ray respective to geometry

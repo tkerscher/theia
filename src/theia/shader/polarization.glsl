@@ -33,7 +33,7 @@ mat4 alignPolRef(vec3 rayDir, vec3 oldRef, vec3 newRef) {
     );
 }
 
-//creates rotation matrix to rotate the ref vector to be ortogonal to the plane
+//creates rotation matrix to rotate the ref vector to be orthogonal to the plane
 //of scattering from old to new. Assumes all vectors to be normalized
 mat4 rotatePolRef(vec3 dir, vec3 ref, vec3 new, out vec3 new_ref) {
     //new reference should be normal to dir and new -> cross product

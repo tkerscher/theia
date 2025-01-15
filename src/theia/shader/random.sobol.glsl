@@ -5,7 +5,7 @@
 
 #include "random.util.glsl"
 
-//Based on the implementation presented in pbrt v4:
+//Based on the implementation presented in PBRT v4:
 //M. Pharr, W. Jakob, G. Humphreys: Physical Based Rendering, 4th Edition. 2023
 
 #ifndef _SOBOL_NO_SCRAMBLE

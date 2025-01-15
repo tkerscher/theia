@@ -16,16 +16,16 @@ CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
 
     //assemble camera ray
     return createCameraRay(
-        cameraParams.position,   //ray position
-        dir,                        //ray direction
-        polRef,                     //ray polRef
-        mat4(1.0),                  //ray mueller matrix
-        FOUR_PI,                    //contrib
-        cameraParams.timeDelta,  //time delta
-        vec3(0.0, 0.0, 0.0),        //hit position
-        -dir,                       //hit direction
-        dir,                        //hit normal
-        polRef                      //hit polRef
+        cameraParams.position,  //ray position
+        dir,                    //ray direction
+        polRef,                 //ray polRef
+        mat4(1.0),              //ray mueller matrix
+        FOUR_PI,                //contrib
+        cameraParams.timeDelta, //time delta
+        vec3(0.0, 0.0, 0.0),    //hit position
+        -dir,                   //hit direction
+        dir,                    //hit normal
+        polRef                  //hit polRef
     );
 }
 

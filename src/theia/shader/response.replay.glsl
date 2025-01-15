@@ -25,7 +25,7 @@ layout(local_size_x = BLOCK_SIZE) in;
 #define REPLAY_HIT_QUEUE_POLARIZED
 #undef HIT_QUEUE_POLARIZED
 #endif
-//user provided reponse function
+//user provided response function
 #include "response.glsl"
 
 //check for queue mismatch

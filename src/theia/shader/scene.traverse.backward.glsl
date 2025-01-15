@@ -106,7 +106,7 @@ ResultCode processHit(
         //neither reflect nor transmit -> absorb
         result = RESULT_CODE_RAY_ABSORBED;
     }
-    #else //#idef DISABLE_TRANSMISSION
+    #else //#ifndef DISABLE_TRANSMISSION
     if (canReflect) {
         reflectRay(ray, surface);
     }
@@ -126,7 +126,7 @@ ResultCode processHit(
 */
 ResultCode trace(
     inout BackwardRay ray,      ///< Ray to trace using its current state
-    out SurfaceHit hit,         ///< Resultin hit (includes misses)
+    out SurfaceHit hit,         ///< Resulting hit (includes misses)
     uint idx, inout uint dim,   ///< RNG state
     PropagateParams params      ///< Propagation parameters
 ) {
@@ -154,7 +154,7 @@ ResultCode trace(
     if (result <= ERROR_CODE_MAX_VALUE)
         return result;
     
-    //fetch actual travelled distance if we hit anything
+    //fetch actual traveled distance if we hit anything
     if (hit.valid) {
         dist = distance(ray.state.position, hit.worldPos);
     }

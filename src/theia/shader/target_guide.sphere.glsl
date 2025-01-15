@@ -21,7 +21,7 @@ TargetGuideSample sampleTargetGuide(vec3 observer, uint idx, inout uint dim) {
     float cosMin = 1.0 - sqrt(max(1.0 - sin2Max, 0.0));
     //for narrow cones we run out of numerical precision (around 1)
     //causing cosMin to always be zero
-    // -> use taylor aprox instead
+    // -> use taylor approximation instead
     if (sin2Max < 0.00068523f /* sin^2(1.5 deg) */) {
         //sqrt(1-x^2) ~= 1 - x^2/2 + O(x^4)
         // -> 1 - sqrt(1-x^2) ~= x^2/2
@@ -59,7 +59,7 @@ TargetGuideSample evalTargetGuide(vec3 observer, vec3 direction) {
     float cosMin = 1.0 - sqrt(max(1.0 - sin2Max, 0.0));
     //for narrow cones we run out of numerical precision (around 1)
     //causing cosMin to always be zero
-    // -> use taylor aprox instead
+    // -> use taylor approximation instead
     if (sin2Max < 0.00068523f /* sin^2(1.5 deg) */) {
         //sqrt(1-x^2) ~= 1 - x^2/2 + O(x^4)
         // -> 1 - sqrt(1-x^2) ~= x^2/2

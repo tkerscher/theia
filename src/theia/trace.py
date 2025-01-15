@@ -1064,7 +1064,7 @@ class SceneForwardTracer(Tracer):
             polarized=polarized,
         )
 
-        # fetch scene's medium if none is specifed
+        # fetch scene's medium if none is specified
         if sourceMedium is None:
             sourceMedium = scene.medium
         # save params

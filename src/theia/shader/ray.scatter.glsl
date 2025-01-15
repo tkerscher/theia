@@ -15,7 +15,7 @@ void scatterRayIS(inout RayState ray, vec3 dir) {
 }
 
 /**
- * Scatters ray in the given direction assuming it is abritrary, i.e. this will
+ * Scatters ray in the given direction assuming it is arbitrary, i.e. this will
  * apply both the phase function and scattering coefficient.
 */
 void scatterRay(inout RayState ray, vec3 dir) {

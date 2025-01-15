@@ -18,7 +18,7 @@ CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
     float localX = cameraParams.width * (u.x - 0.5);
     float localY = cameraParams.height * (u.y - 0.5);
     vec3 localPos = vec3(localX, localY, 0.0);
-    //transform to sceen coord space
+    //transform to screen coord space
     vec3 rayPos = objToWorld * localPos + cameraParams.offset;
 
     //sample direction
@@ -60,7 +60,7 @@ CameraSample sampleCamera(float wavelength, uint idx, inout uint dim) {
     float localX = cameraParams.width * (u.x - 0.5);
     float localY = cameraParams.height * (u.y - 0.5);
     vec3 localPos = vec3(localX, localY, 0.0);
-    //transform to sceen coord space
+    //transform to screen coord space
     vec3 rayPos = objToWorld * localPos + cameraParams.offset;
     vec3 rayNrm = transpose(cameraParams.view) * vec3(0.0, 0.0, 1.0);
     //calculate contribution

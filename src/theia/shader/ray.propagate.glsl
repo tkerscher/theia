@@ -223,7 +223,7 @@ void alignRayToHit(
 
 /**
  * Propagates the ray to the specified hit position and updates it accordingly.
- * Updates the polarization state to be in the plance of incidence (polRef is
+ * Updates the polarization state to be in the plane of incidence (polRef is
  * perpendicular to it)
  * NOTE: This function does not check if hitPos lies in the ray's direction.
 */

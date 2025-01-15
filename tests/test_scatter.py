@@ -83,7 +83,7 @@ def test_scatterDir(rng, shaderUtil):
     bins = 32
     counts, _ = np.histogram(phi_out, bins=bins)
     counts = counts / N
-    thres = 1.0 / np.sqrt(N / bins)  # exptected error
+    thres = 1.0 / np.sqrt(N / bins)  # expected error
     assert np.abs(counts - 1.0 / bins).max() < thres
 
 
@@ -235,7 +235,7 @@ def test_volumeScatter(rng, shaderUtil):
     dir_in = queries["dir"]
     dir_out = result["dir"]
     cos_theta = np.multiply(dir_in, dir_out).sum(-1)
-    # test lambertian disitribution
+    # test lambertian distribution
     bins = np.histogram(cos_theta[:N_EMPTY], bins=10, range=(-1, 1))[0]
     assert np.abs(bins / N_EMPTY - 0.1).max() < 0.1  # low statistic
     assert np.allclose(result["prob"][:N_EMPTY], 1.0 / (4.0 * np.pi))
@@ -248,7 +248,7 @@ def test_volumeScatter(rng, shaderUtil):
     # create a local euclidean cosy from input direction as one axis
     # the ratio of the projection onto the other two axis is the tan
     # since we expect uniform, we are free to rotate around the input direction
-    # See prbt v4: chapter 3.3.3
+    # See PBRT v4: chapter 3.3.3
     s = np.copysign(1.0, dir_in[:, 2])
     a = -1.0 / (s + dir_in[:, 2])
     b = a * dir_in[:, 0] * dir_in[:, 1]

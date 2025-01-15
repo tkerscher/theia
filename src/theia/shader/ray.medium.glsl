@@ -17,7 +17,7 @@ Medium getMedium(BackwardRay ray) {
 }
 #else
 //here we expect a getMedium() for fetching the global medium to be defined
-//to hide this detail, we still define funtions taking a ray.
+//to hide this detail, we still define functions taking a ray.
 Medium getMedium(ForwardRay ray) {
     return getMedium();
 }

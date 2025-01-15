@@ -28,7 +28,7 @@ HitItem createHit(
 
     //create pol ref in object space
     vec3 hitPolRef = perpendicularTo(objHitDir, objHitNormal);
-    //for non-orthogonal trasformations the transformed polRef may not lie in
+    //for non-orthogonal transformations the transformed polRef may not lie in
     //the plane of incidence, but require a rotation of the stokes parameter
     //this also handles the case where the plane of incidence is degenerate
     //and the "random" chosen references frame do not align

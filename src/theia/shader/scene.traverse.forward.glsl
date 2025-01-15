@@ -83,7 +83,7 @@ ResultCode processHit(
     //create response if allowed
     if (allowResponse && isDet && hit.customId == targetId) {
         createResponse(ray, hit, surface, isAbs);
-        //dont return early as the ray is allowed to carry on
+        //do not return early as the ray is allowed to carry on
         //(e.g. partially reflect)
         result = RESULT_CODE_RAY_DETECTED;
     }
@@ -382,7 +382,7 @@ ResultCode processInteraction(
         dim++;
     }
     else {
-        //dont bother scattering on the last iteration (we wont hit anything)
+        //do not bother scattering on the last iteration (we wont hit anything)
         //this also prevents MIS to sample paths one longer than PATH_LENGTH
         if (!last) {
             processScatter(

@@ -9,9 +9,9 @@
 
 /**
 Since GLSL has no inheritance, we need to get a creative to work around. We want
-different types of rays describing their behaviour, e.g. unpolarized/polarized
+different types of rays describing their behavior, e.g. unpolarized/polarized
 or which direction they propagate. This allows to pass information about the
-behavious at compile time without the need to carry flags along making the code
+behaviors at compile time without the need to carry flags along making the code
 also more readable.
 
 We achieve this by having the "base class" as member no matter what.
@@ -135,7 +135,7 @@ Medium getMedium(const RayState ray) {
 *                                POLARIZED RAY                                 *
 *******************************************************************************/
 
-//for polarized simulation the ray has different behaviour and data depending on
+//for polarized simulation the ray has different behavior and data depending on
 //direction of the propagation, i.e. starting from the light source (forward) or
 //from the camera/detector (backward)
 

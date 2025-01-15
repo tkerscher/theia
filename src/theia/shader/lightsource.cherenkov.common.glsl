@@ -39,7 +39,7 @@ float frank_tamm(float n, float lambda) {
     //for better numerical stability, convert lambda from nm -> µm (closer to one)
     lambda *= 1e-3;
     float result = FRANK_TAMM_CONST / (lambda*lambda) * (1.0 - (1.0 / (n*n)));
-    //result will be negative for n < 1.0 -> no radition (zero contrib)
+    //result will be negative for n < 1.0 -> no radiation (zero contrib)
     return max(result, 0.0);
 }
 

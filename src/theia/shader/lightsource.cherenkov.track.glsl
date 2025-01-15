@@ -67,7 +67,7 @@ SourceRay sampleLight(float wavelength, uint idx, inout uint dim) {
     float segmentLength = distance(start.pos, end.pos);
     //calculate contribution
     float contrib = TWO_PI * float(track.trackLength) * segmentLength;
-    //use Frank-Thamm to calculate radiance
+    //use Frank-Tamm to calculate radiance
     contrib *= frank_tamm(n, wavelength);
 
 #ifdef POLARIZATION
