@@ -1,0 +1,16 @@
+elif
+fract
+glsl
+ifdef
+ifndef
+inout
+isinf
+isnan
+ivec
+mat
+readonly
+rgba
+uaddCarry
+umulExtended
+uvec
+writeonly

@@ -1,0 +1,46 @@
+{
+    "version": "0.2",
+    "language": "en",
+    "allowCompoundWords": true,
+    "dictionaryDefinitions": [
+        { "name": "glsl", "path": "./dictionaries/glsl.txt"}
+    ],
+    "languageSettings": [
+        {"languageId": "glsl", "dictionaries": ["glsl"]}
+    ],
+    "words": [
+        "Kahan",
+        "Haines",
+        "Henyey",
+        "Jonasz",
+        "Junge",
+        "Kokhanovsky",
+        "Fournier",
+        "Jakob",
+        "Pharr",
+        "Veach",
+        "Sobol",
+        "Zhang",
+        "PBRT",
+        "QRNG",
+        "tamm",
+        "ascontiguousarray",
+        "barys",
+        "blas",
+        "coef",
+        "dbar",
+        "glsl",
+        "hephaistos",
+        "interp",
+        "loadtxt",
+        "ndarray",
+        "nbytes",
+        "savez",
+        "theia",
+        "tlas",
+        "trafo",
+        "unorm",
+        "urandom",
+        "uvec"
+    ]
+}
