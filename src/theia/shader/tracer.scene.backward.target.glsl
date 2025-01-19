@@ -97,6 +97,9 @@ void traceMain() {
         allowResponse = result != RESULT_CODE_RAY_SCATTERED;
         #endif
     }
+
+    //finished trace loop, but could go further
+    onEvent(ray, RESULT_CODE_MAX_ITER, idx, PATH_LENGTH + 1);
 }
 
 void main() {

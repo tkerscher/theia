@@ -108,6 +108,9 @@ void traceMain() {
         allowResponse = true;
 #endif
     }
+
+    //finished trace loop, but could go further
+    onEvent(ray, RESULT_CODE_MAX_ITER, idx, PATH_LENGTH + 1);
 }
 
 void main() {

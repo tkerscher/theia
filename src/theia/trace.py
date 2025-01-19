@@ -90,6 +90,7 @@ class EventStatisticCallback(TraceEventCallback):
             ("decayed", c_uint32),
             ("absorbed", c_uint32),
             ("missed", c_uint32),
+            ("maxIter", c_uint32),
             ("error", c_uint32),
         ]
 
@@ -124,6 +125,11 @@ class EventStatisticCallback(TraceEventCallback):
     def detected(self) -> int:
         """Number of rays detected"""
         return self._stat.detected
+
+    @property
+    def maxIter(self) -> int:
+        """Number of rays that reached the maximum path length"""
+        return self._stat.maxIter
 
     @property
     def missed(self) -> int:
@@ -307,6 +313,10 @@ class EventResultCode(IntEnum):
     """Ray reached max life time"""
     RAY_ABSORBED = -3
     """Ray hit absorber"""
+    RAY_MISSED = -4
+    """Ray meant to create a hit missed target"""
+    MAX_ITER = -5
+    """Tracing reached max iteration"""
     ERROR_CODE_MAX_VALUE = -10
     """Max value for an error code"""
     ERROR_UNKNOWN = -10

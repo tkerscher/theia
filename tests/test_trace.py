@@ -735,6 +735,7 @@ def test_EventStatisticCallback():
     assert stats.lost == 0
     assert stats.decayed == 0
     assert stats.volume == 0
+    assert stats.maxIter == 0
     assert stats.error == 0
     # run pipeline
     pl.runPipeline(tracer.collectStages())
@@ -748,6 +749,7 @@ def test_EventStatisticCallback():
     assert stats.lost > 0
     assert stats.decayed > 0
     assert stats.volume > 0
+    assert stats.maxIter > 0
     assert stats.error == 0
     total = (
         stats.absorbed
@@ -769,6 +771,7 @@ def test_EventStatisticCallback():
     assert stats.lost == 0
     assert stats.decayed == 0
     assert stats.volume == 0
+    assert stats.maxIter == 0
     assert stats.error == 0
 
 

@@ -158,6 +158,9 @@ void traceMain() {
             scatterRay(ray, random2D(idx, dim));
         }
     }
+
+    //finished loop, but could go further
+    onEvent(ray, RESULT_CODE_MAX_ITER, idx, iPath);
 }
 
 void main() {

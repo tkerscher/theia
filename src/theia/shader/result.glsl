@@ -19,6 +19,7 @@ const ResultCode RESULT_CODE_RAY_LOST       = -1;
 const ResultCode RESULT_CODE_RAY_DECAYED    = -2;
 const ResultCode RESULT_CODE_RAY_ABSORBED   = -3;
 const ResultCode RESULT_CODE_RAY_MISSED     = -4;
+const ResultCode RESULT_CODE_MAX_ITER       = -5;
 
 const ResultCode ERROR_CODE_MAX_VALUE       = -10;
 const ResultCode ERROR_CODE_UNKNOWN         = -10;

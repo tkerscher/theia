@@ -260,6 +260,9 @@ void traceMain() {
         if (result < 0)
             return;
     }
+
+    //finished trace loop, but could go further
+    onEvent(ray, RESULT_CODE_MAX_ITER, idx, PATH_LENGTH + 2);
 }
 
 void main() {
