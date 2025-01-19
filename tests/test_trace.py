@@ -473,6 +473,89 @@ def test_SceneBackwardTracer(
         assert stats.volume > 0
 
 
+@pytest.mark.parametrize("disableVolumeBorder", [True, False])
+@pytest.mark.parametrize("disableTransmission", [True, False])
+@pytest.mark.parametrize("disableTarget", [True, False])
+def test_SceneBackwardTargetTracer(
+    disableVolumeBorder: bool, disableTransmission: bool, disableTarget: bool
+) -> None:
+    if not hp.isRaytracingEnabled():
+        pytest.skip("ray tracing not supported")
+
+    N = 32 * 256
+    MAX_PATH = 10
+    T0, T1 = 10.0 * u.ns, 20.0 * u.ns
+    T_MAX = 1.0 * u.us
+    cam_pos = (-1.0, -7.0, 0.0) * u.m
+
+    # create materials
+    water = WaterModel().createMedium()
+    glass = theia.material.BK7Model().createMedium()
+    mat = theia.material.Material("mat", glass, water, flags=("RL", "B"))
+    matStore = theia.material.MaterialStore([mat])
+    # create scene
+    store = theia.scene.MeshStore(
+        {"cube": "assets/cube.ply", "sphere": "assets/sphere.stl"}
+    )
+    r, d = 40.0 * u.m, 5.0 * u.m
+    r_scale = 0.99547149974733 * u.m  # radius of inscribed sphere (icosphere)
+    r_insc = r * r_scale
+    x, y, z = 10.0, 5.0, -5.0
+    t1 = Transform.TRS(scale=r, translate=(x, y, z + r + d))
+    c1 = store.createInstance("sphere", "mat", t1, detectorId=1)
+    t2 = Transform.TRS(
+        scale=r, translate=(x, y, z - r - d), rotate=(0.0, 0.0, 1.0, 110.0)
+    )
+    c2 = store.createInstance("sphere", "mat", t2, detectorId=2)
+    scene = theia.scene.Scene(
+        [c1, c2], matStore.material, medium=matStore.media["water"]
+    )
+    guide = SphereTargetGuide(position=(x, y, z - r - d), radius=r)
+
+    # calculate min time
+    target_pos = (x, y, z - r - d) * u.m  # detector #2
+    d_min = np.sqrt(np.square(np.subtract(target_pos, cam_pos)).sum(-1)) - r
+    v_max = np.max(water.group_velocity)
+    t_min = d_min / v_max + T0
+
+    # create pipeline stages
+    rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
+    photons = theia.light.UniformWavelengthSource()
+    camera = theia.camera.PointCamera(position=cam_pos, timeDelta=T0)
+    recorder = theia.response.HitRecorder()
+    stats = theia.trace.EventStatisticCallback()
+    tracer = theia.trace.SceneBackwardTargetTracer(
+        N,
+        camera,
+        photons,
+        recorder,
+        rng,
+        scene,
+        maxPathLength=MAX_PATH,
+        targetId=2,
+        targetGuide=None if disableTarget else guide,
+        maxTime=T_MAX,
+        callback=stats,
+        disableTransmission=disableTransmission,
+        disableVolumeBorder=disableVolumeBorder,
+    )
+    # run pipeline
+    pl.runPipeline(tracer.collectStages())
+
+    # check hits
+    hits = recorder.view(0)
+    assert hits.count > 0
+    assert hits.count <= tracer.maxHits
+    hits = hits[: hits.count]
+
+    r_hits = np.sqrt(np.square(hits["position"]).sum(-1))
+    assert np.all((r_hits <= 1.0) & (r_hits >= r_scale))
+    assert np.allclose(np.square(hits["normal"]).sum(-1), 1.0)
+    assert np.min(hits["time"]) >= t_min
+    assert np.max(hits["time"]) <= T_MAX
+    assert np.all(hits["contrib"] >= 0.0)
+
+
 @pytest.mark.parametrize("polarized", [True, False])
 @pytest.mark.parametrize("disableTransmission", [True, False])
 def test_BidirectionalPathTracer(

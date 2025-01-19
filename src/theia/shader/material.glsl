@@ -77,7 +77,7 @@ MediumConstants lookUpMedium(const Medium medium, float lambda) {
 //Material flag bits encoding ray intersection behavior
 const uint MATERIAL_BLACK_BODY_BIT      = 0x00000001; //Rays gets completely absorbed
 const uint MATERIAL_DETECTOR_BIT        = 0x00000002; //Rays reached a target
-// const uint MATERIAL_SOURCE_BIT          = 0x00000004; //Rays reached a light source
+const uint MATERIAL_LIGHT_SOURCE_BIT    = 0x00000004; //Rays reached a light source
 const uint MATERIAL_NO_REFLECT_FWD_BIT  = 0x00000008; //Forward rays never reflect
 const uint MATERIAL_NO_REFLECT_BWD_BIT  = 0x00000010; //Backward rays never reflect
 const uint MATERIAL_NO_TRANSMIT_FWD_BIT = 0x00000020; //Forward rays never transmit

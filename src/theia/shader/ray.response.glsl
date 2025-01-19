@@ -53,7 +53,31 @@ HitItem createHit(
     );
 }
 
+//createHit() with PolarizedBackwardRay not possible, as it gives us a Mueller
+//matrix, whereas HitItem expects a Stokes vector
+
 #else
+
+HitItem createHit(
+    const RayState state,
+    vec3 objHitPos,
+    vec3 objHitNormal,
+    mat3 worldToObj
+) {
+    float contrib = state.lin_contrib * exp(state.log_contrib);
+
+    //transform ray direction to object space
+    vec3 objHitDir = normalize(worldToObj * state.direction);
+
+    return HitItem(
+        objHitPos,
+        objHitDir,
+        objHitNormal,
+        state.wavelength,
+        state.time,
+        contrib
+    );
+}
 
 HitItem createHit(
     const UnpolarizedForwardRay ray,
@@ -61,19 +85,16 @@ HitItem createHit(
     vec3 objHitNormal,
     mat3 worldToObj
 ) {
-    float contrib = ray.state.lin_contrib * exp(ray.state.log_contrib);
+    return createHit(ray.state, objHitPos, objHitNormal, worldToObj);
+}
 
-    //transform ray direction to object space
-    vec3 objHitDir = normalize(worldToObj * ray.state.direction);
-
-    return HitItem(
-        objHitPos,
-        objHitDir,
-        objHitNormal,
-        ray.state.wavelength,
-        ray.state.time,
-        contrib
-    );
+HitItem createHit(
+    const UnpolarizedBackwardRay ray,
+    vec3 objHitPos,
+    vec3 objHitNormal,
+    mat3 worldToObj
+) {
+    return createHit(ray.state, objHitPos, objHitNormal, worldToObj);
 }
 
 #endif

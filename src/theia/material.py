@@ -460,6 +460,12 @@ class MaterialFlags(IntFlag):
     applied.
     """
 
+    LIGHT_SOURCE = 0x04
+    """
+    Marks the material as light source. Supporting such material is optional for
+    tracers.
+    """
+
     NO_REFLECT_FWD = 0x08
     """
     Forbids tracer to reflect forward rays from the material, but still takes
@@ -507,6 +513,7 @@ class MaterialFlags(IntFlag):
 _materialFlagsMap = {
     "B": MaterialFlags.BLACK_BODY,
     "D": MaterialFlags.DETECTOR,
+    "L": MaterialFlags.LIGHT_SOURCE,
     "R": MaterialFlags.NO_REFLECT,
     "Rbf": MaterialFlags.NO_REFLECT,
     "Rfb": MaterialFlags.NO_REFLECT,
@@ -531,6 +538,7 @@ def parseMaterialFlags(flags: str) -> MaterialFlags:
     Flags:
      - `B` : `BLACK_BODY`
      - `D` : `DETECTOR`
+     - `L` : `LIGHT_SOURCE`
      - `R` : removes `NO_REFLECT`
      - `T` : removes `NO_TRANSMIT`
      - `V` : `VOLUME_BORDER`

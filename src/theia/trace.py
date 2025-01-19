@@ -1456,6 +1456,260 @@ class SceneBackwardTracer(Tracer):
         return [self._program.dispatch(self._groups)]
 
 
+class SceneBackwardTargetTracer(Tracer):
+    """
+    Path tracer sampling paths starting at the camera. Traces rays against the
+    geometries defined by the provided scene to simulate accurate intersections
+    and shadowing. However, unlike `SceneBackwardTracer` this tracer does not
+    include a light source. Instead it creates hits at surface intersections
+    with materials that has the `LIGHT_SOURCE_BIT` set.
+
+    Parameters
+    ----------
+    batchSize: int
+        Number of rays to simulate per run. Note that a single ray may generate
+        up to two times `maxPathLength` hits if a target guide is provided.
+    camera: Camera
+        Source producing camera rays.
+    wavelengthSource: WavelengthSource
+        Source to sample wavelengths from
+    response: HitResponse
+        Response function simulating the detector
+    rng: RNG
+        Generator for creating random numbers
+    scene: Scene
+        Scene in which the rays are traced
+    callback: TraceEventCallback, default=EmptyEventCallback()
+        Callback called for each tracing event. See `TraceEventCallback`.
+    medium: Optional[int], default=None
+        Medium the camera is emerged in. Defaults to the scene's medium.
+        Overrides scene's medium if present.
+    maxPathLength: int, default=6
+        Maximum number of events per simulated ray. An event includes volume
+        scatter and scene intersections.
+    targetId: int, default=0
+        Id of the light source, the tracer should try to hit.
+        Hits on other sources are ignored to make estimates easier.
+    targetGuide: TargetGuide | None, default=None
+        Optional target proxy used to sample scatter directions towards it.
+    scatterCoefficient: float | None, default=None
+        Scatter coefficient used for sampling ray lengths. Tuning this parameter
+        affects the time distribution of the hits. If None, tracer will use the
+        scattering length of the media the ray currently propagates.
+    maxTime: float, default=1000.0 ns
+        Max total time including delay from camera and travel time after which a
+        ray gets stopped
+    disableTransmission: bool, default=False
+        Disables GPU code handling transmission, which may improve performance.
+        Rays will default to always reflect where possible.
+    disableVolumeBorder: bool, default=False
+        Disables GPU code handling volume borders, which may improve performance
+        if there are none. Settings this to `True` while the scene contains
+        volume border will produce wrong results.
+    blockSize: int, default=128
+        Number of threads in a single work group
+    code: bytes | None, default=None
+        Cached compiled byte code. If `None` compiles it from source.
+        The given byte code is not checked and must match the given
+        configuration
+
+    Stage Parameters
+    ----------------
+    targetId: int
+        Id of the light source, the tracer should try to hit.
+    scatterCoefficient: float
+        Scatter coefficient used for sampling ray lengths. Zero or negative
+        values will cause the tracer to use the current scattering length
+        instead.
+    maxTime: float
+        Max total time including delay from the source and travel time, after
+        which a ray gets stopped
+
+    Note
+    ----
+    This tracer creates hit at the light source!
+    """
+
+    name = "Scene Backward Target Tracer"
+
+    class TraceParams(Structure):
+        _fields_ = [
+            ("_medium", buffer_reference),
+            ("targetId", c_uint32),
+            ("scatterCoefficient", c_float),
+            ("_lowerBBoxCorner", vec3),
+            ("_upperBBoxCorner", vec3),
+            ("maxTime", c_float),
+            ("_maxDist", c_float),
+        ]
+
+    def __init__(
+        self,
+        batchSize: int,
+        camera: Camera,
+        wavelengthSource: WavelengthSource,
+        response: HitResponse,
+        rng: RNG,
+        scene: Scene,
+        *,
+        callback: TraceEventCallback = EmptyEventCallback(),
+        medium: int | None = None,
+        maxPathLength: int = 6,
+        targetId: int = 0,
+        targetGuide: TargetGuide | None = None,
+        scatterCoefficient: float | None = None,
+        maxTime: float = 1000.0 * u.ns,
+        disableTransmission: bool = False,
+        disableVolumeBorder: bool = False,
+        blockSize: int = 128,
+        code: bytes | None = None,
+    ) -> None:
+        # check if ray tracing was enabled
+        if not hp.isRaytracingEnabled():
+            raise RuntimeError("Ray tracing is not supported on this system!")
+
+        # Calculate max hits
+        maxHits = batchSize * maxPathLength
+        rngStride = 3
+        if targetGuide is not None:
+            maxHits *= 2
+            rngStride += 2 + targetGuide.nRNGSamples
+        # init tracer
+        nRNG = camera.nRNGSamples + wavelengthSource.nRNGSamples
+        nRNG += rngStride * maxPathLength
+        super().__init__(
+            response,
+            {"TraceParams": self.TraceParams},
+            batchSize=batchSize,
+            blockSize=blockSize,
+            maxHits=maxHits,
+            normalization=1.0 / batchSize,
+            nRNGSamples=nRNG,
+            polarized=False,  # Not yet supported
+        )
+
+        # fetch scene's medium if none is specified
+        if medium is None:
+            medium = scene.medium
+        # save params
+        if scatterCoefficient is None:
+            scatterCoefficient = 0.0
+        self._wavelengthSource = wavelengthSource
+        self._callback = callback
+        self._camera = camera
+        self._rng = rng
+        self._scene = scene
+        self._targetGuide = targetGuide
+        self._maxPathLength = maxPathLength
+        self._transmissionDisabled = disableTransmission
+        self._volumeBorderDisabled = disableVolumeBorder
+        self.setParams(
+            targetId=targetId,
+            scatterCoefficient=scatterCoefficient,
+            _medium=medium,
+            maxTime=maxTime,
+            _lowerBBoxCorner=scene.bbox.lowerCorner,
+            _upperBBoxCorner=scene.bbox.upperCorner,
+            _maxDist=scene.bbox.diagonal,
+        )
+        # calculate group size
+        self._groups = -(batchSize // -blockSize)
+
+        # compile code if needed
+        if code is None:
+            preamble = createPreamble(
+                BATCH_SIZE=batchSize,
+                BLOCK_SIZE=blockSize,
+                DISABLE_MIS=targetGuide is None,
+                DISABLE_TRANSMISSION=disableTransmission,
+                DISABLE_VOLUME_BORDER=disableVolumeBorder,
+                PATH_LENGTH=maxPathLength,
+            )
+            guideCode = "" if targetGuide is None else targetGuide.sourceCode
+            headers = {
+                "callback.glsl": callback.sourceCode,
+                "camera.glsl": camera.sourceCode,
+                "response.glsl": response.sourceCode,
+                "rng.glsl": rng.sourceCode,
+                "photon.glsl": wavelengthSource.sourceCode,
+                "target_guide.glsl": guideCode,
+            }
+            code = compileShader("tracer.scene.backward.target.glsl", preamble, headers)
+        self._code = code
+        # create program
+        self._program = hp.Program(self._code)
+        # bind scene
+        self._program.bindParams(Geometries=scene.geometries, tlas=scene.tlas)
+
+    @property
+    def callback(self) -> TraceEventCallback:
+        """Callback called for each tracing event"""
+        return self._callback
+
+    @property
+    def camera(self) -> Camera:
+        """Source producing camera rays"""
+        return self._camera
+
+    @property
+    def code(self) -> bytes:
+        """Compiled source code. Can be used for caching"""
+        return self._code
+
+    @property
+    def maxPathLength(self) -> int:
+        """Maximum number of events per simulated ray"""
+        return self._maxPathLength
+
+    @property
+    def rng(self) -> RNG:
+        """Generator for creating random numbers"""
+        return self._rng
+
+    @property
+    def scene(self) -> Scene:
+        """Scene in which the rays are traced"""
+        return self._scene
+
+    @property
+    def targetGuide(self) -> TargetGuide | None:
+        """Optional target guide used for sampling scatter directions"""
+        return self._targetGuide
+
+    @property
+    def transmissionDisabled(self) -> bool:
+        """Whether transmission is disabled"""
+        return self._transmissionDisabled
+
+    @property
+    def volumeBorderDisabled(self) -> bool:
+        """Whether volume borders are disabled"""
+        return self._volumeBorderDisabled
+
+    @property
+    def wavelengthSource(self) -> WavelengthSource:
+        """Source used to sample wavelengths"""
+        return self._wavelengthSource
+
+    def collectStages(self) -> list[PipelineStage]:
+        stages = [self.rng, self.wavelengthSource, self.camera]
+        if self.targetGuide is not None:
+            stages.append(self.targetGuide)
+        stages.extend([self, self.callback, self.response])
+        return stages
+
+    def run(self, i: int) -> list[hp.Command]:
+        self._bindParams(self._program, i)
+        self.callback.bindParams(self._program, i)
+        self.camera.bindParams(self._program, i)
+        self.wavelengthSource.bindParams(self._program, i)
+        self.response.bindParams(self._program, i)
+        self.rng.bindParams(self._program, i)
+        if self.targetGuide is not None:
+            self.targetGuide.bindParams(self._program, i)
+        return [self._program.dispatch(self._groups)]
+
+
 class DirectLightTracer(Tracer):
     """
     Path tracer directly connecting light source and camera without any

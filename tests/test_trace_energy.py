@@ -711,6 +711,92 @@ def test_SceneBackwardTracer_MultiMedia(polarized: bool):
     assert abs(estimate / estimate_fwd - 1.0) < 0.02  # maybe a bit large?
 
 
+def test_SceneBackwardTargetTrace() -> None:
+    """Tests SceneBackwardTargetTracer"""
+    if not hp.isRaytracingEnabled():
+        pytest.skip("ray tracing not supported")
+
+    # Scene settings
+    position = (12.0, 15.0, 0.2) * u.m
+    cam_pos = (10.0, 16.0, 0.0) * u.m  # offset camera
+    radius = 10.0 * u.m
+    radius_inner = 5.0 * u.m
+    # the mesh is not really a sphere
+    # to prevent all camera rays to be produced outside, we need to scale camera
+    r_scale = 0.99547149974733 * u.m  # radius of inscribed sphere (icosphere)
+    r_insc = radius * r_scale
+    t0 = 10.0 * u.ns
+    lam = 400.0 * u.nm  # doesn't really matter
+    # tracer settings
+    max_length = 40
+    scatter_coef = 0.3
+    maxTime = float("inf")
+    # simulation settings
+    batch_size = 1024 * 1024
+    n_batches = 20
+
+    # create both media and material. Use Vacuum for outside
+    # set mu_a=0 so we can skip the calculation to remove it
+    n_inner, n_outer = 1.2, 1.8
+    media_inner = MediumModel(0.0, 0.04, 0.9, n=n_inner).createMedium(name="inner")
+    media_outer = MediumModel(0.0, 0.01, 0.9, n=n_outer).createMedium(name="outer")
+    mat_det = theia.material.Material("det", media_outer, None, flags="BL")
+    # need both reflection and transmission to recover all the energy
+    mat_inner = theia.material.Material("inner", media_inner, media_outer, flags="TR")
+    matStore = theia.material.MaterialStore([mat_det, mat_inner])
+
+    # create scene
+    meshStore = theia.scene.MeshStore({"sphere": "assets/sphere.stl"})
+    t_inner = Transform.TRS(scale=radius_inner, translate=position)
+    t_det = Transform.TRS(scale=radius, translate=position)
+    inner = meshStore.createInstance("sphere", "inner", t_inner)
+    det = meshStore.createInstance("sphere", "det", t_det, detectorId=1)
+    scene = theia.scene.Scene([inner, det], matStore.material)
+
+    # creating tracing pipeline
+    photons = theia.light.ConstWavelengthSource(lam)
+    camera = theia.camera.PointCamera(position=cam_pos, timeDelta=t0)
+    rng = theia.random.PhiloxRNG(key=0xC0FFEE)
+    response = theia.response.HistogramHitResponse(
+        theia.response.UniformValueResponse(), nBins=400, binSize=100.0 * u.ns
+    )
+    # stats = theia.trace.EventStatisticCallback()
+    tracer = theia.trace.SceneBackwardTargetTracer(
+        batch_size,
+        camera,
+        photons,
+        response,
+        rng,
+        scene,
+        maxPathLength=max_length,
+        # callback=stats,
+        scatterCoefficient=scatter_coef,
+        targetId=1,
+        medium=matStore.media["inner"],
+        maxTime=maxTime,
+    )
+    rng.autoAdvance = tracer.nRNGSamples
+
+    # create pipeline + scheduler
+    hists = []
+
+    def process(config: int, task: int) -> None:
+        hists.append(response.result(config).copy())
+
+    pipeline = pl.Pipeline(tracer.collectStages())
+    scheduler = pl.PipelineScheduler(pipeline, processFn=process)
+    # create batches
+    scheduler.schedule([{} for _ in range(n_batches)])
+    scheduler.wait()
+    # combine histograms
+    hist = np.mean(hists, 0)
+    estimate = hist.sum()
+
+    # check estimate
+    expected = 4.0 * np.pi * (n_inner / n_outer) ** 2
+    assert abs(estimate / expected - 1.0) < 0.0005
+
+
 @pytest.mark.parametrize(
     "mu_a,mu_s,mu_sample,g,disableDirect,sampleTarget,polarized,err",
     [
