@@ -25,11 +25,12 @@
 layout(local_size_x = BLOCK_SIZE) in;
 
 #ifdef DISABLE_MIS
-#define SCENE_TRAVERSE_BACKWARD_TARGET_DISABLE_MIS
+#define SCENE_TRAVERSE_DISABLE_MIS
 #endif
 
 #include "ray.propagate.glsl"
-#include "scene.traverse.backward.target.glsl"
+#define SCENE_TRAVERSE_BACKWARD
+#include "scene.traverse.glsl"
 
 #include "camera.common.glsl"
 #include "response.common.glsl"

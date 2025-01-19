@@ -28,10 +28,11 @@
 layout(local_size_x = BLOCK_SIZE) in;
 
 //disable shadow rays in scene traverse
-#define SCENE_TRAVERSE_FORWARD_DISABLE_MIS 1
+#define SCENE_TRAVERSE_DISABLE_MIS 1
 #define SCENE_TRAVERSE_BACKWARD_DISABLE_SHADOW_RAYS 1
 
-#include "scene.traverse.forward.glsl"
+#define SCENE_TRAVERSE_FORWARD
+#include "scene.traverse.glsl"
 #include "scene.traverse.backward.glsl"
 
 #include "lightsource.scatter.glsl"

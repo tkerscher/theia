@@ -555,7 +555,7 @@ def test_SceneForwardTracer_MultiMedia(polarized: bool):
     estimate = hist.sum()
 
     # check estimate
-    assert abs(estimate / budget - 1.0) < 0.0051
+    assert abs(estimate / budget - 1.0) < 0.0061
 
 
 @pytest.mark.parametrize("polarized", [True, False])

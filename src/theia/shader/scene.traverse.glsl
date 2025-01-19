@@ -1,28 +1,38 @@
-#ifndef _INCLUDE_SCENE_TRAVERSE_FORWARD
-#define _INCLUDE_SCENE_TRAVERSE_FORWARD
+#ifndef _INCLUDE_SCENE_TRAVERSE
+#define _INCLUDE_SCENE_TRAVERSE
 
 #include "ray.glsl"
-#include "ray.medium.glsl"
 #include "ray.propagate.glsl"
 #include "ray.response.glsl"
 #include "ray.scatter.glsl"
 #include "ray.surface.glsl"
 #include "ray.util.glsl"
+#include "result.glsl"
 #include "scene.intersect.glsl"
 
 //user provided code
 #include "rng.glsl"
 #include "response.glsl"
-#ifndef SCENE_TRAVERSE_FORWARD_DISABLE_MIS
+#ifndef SCENE_TRAVERSE_DISABLE_MIS
 #include "target_guide.common.glsl"
 #include "target_guide.glsl"
 #endif
 
+#if defined(SCENE_TRAVERSE_FORWARD) && !defined(SCENE_TRAVERSE_BACKWARD)
+#define RAY ForwardRay
+#define MATERIAL_TARGET_BIT MATERIAL_DETECTOR_BIT
+#elif !defined(SCENE_TRAVERSE_FORWARD) && defined(SCENE_TRAVERSE_BACKWARD)
+#define RAY BackwardRay
+#define MATERIAL_TARGET_BIT MATERIAL_LIGHT_SOURCE_BIT
+#else
+#error "No scene traverse direction specified!"
+#endif
+
 /**
- * Creates a response from the given ray and surface hit.
+ * Create a response from the given ray and surface hit
 */
 void createResponse(
-    ForwardRay ray,                     ///< Ray that generated the hit
+    RAY ray,                            ///< Ray that generated that hit
     const SurfaceHit hit,               ///< Surface hit
     const SurfaceReflectance surface,   ///< Surface properties
     bool absorb                         ///< True, if the surface absorbs the ray
@@ -46,17 +56,17 @@ void createResponse(
  * Process the surface hit the given ray produced.
 */
 ResultCode processHit(
-    inout ForwardRay ray,       ///< Ray that generated the hit
-    const SurfaceHit hit,       ///< Surface hit
-    const PropagateParams prop, ///< Propagation parameters
-    uint targetId,              ///< Id of target
-    float u,                    ///< Random number
-    bool allowResponse          ///< Whether a detector hit should create a response
+    inout RAY ray,                  ///< Ray that generated the hit
+    const SurfaceHit hit,           ///< Surface hit
+    const PropagateParams params,   ///< Propagation parameters
+    uint targetId,                  ///< Id of target
+    float u,                        ///< Random number
+    bool allowResponse              ///< Whether a detector hit should create a response
 ) {
     //propagate ray to hit
     //this also sets reference frame for polarization to plane of incidence
     ResultCode result = propagateRayToHit(
-        ray, hit.worldPos, hit.worldNrm, prop
+        ray, hit.worldPos, hit.worldNrm, params
     );
     if (result < 0) {
         return result;
@@ -66,10 +76,10 @@ ResultCode processHit(
 
     //process flags
     bool isAbs = (hit.flags & MATERIAL_BLACK_BODY_BIT) != 0;
-    bool isDet = (hit.flags & MATERIAL_DETECTOR_BIT) != 0;
+    bool isTarget = (hit.flags & MATERIAL_TARGET_BIT) != 0;
     bool volBorder = (hit.flags & MATERIAL_VOLUME_BORDER_BIT) != 0;
-    bool canTransmit = (hit.flags & MATERIAL_NO_TRANSMIT_FWD_BIT) == 0;
-    bool canReflect = (hit.flags & MATERIAL_NO_REFLECT_FWD_BIT) == 0;
+    bool canTransmit = (hit.flags & MATERIAL_NO_TRANSMIT_BWD_BIT) == 0;
+    bool canReflect = (hit.flags & MATERIAL_NO_REFLECT_BWD_BIT) == 0;
 
     //get surface properties
     SurfaceReflectance surface = fresnelReflect(
@@ -81,7 +91,7 @@ ResultCode processHit(
     );
 
     //create response if allowed
-    if (allowResponse && isDet && hit.customId == targetId) {
+    if (allowResponse && isTarget && hit.customId == targetId) {
         createResponse(ray, hit, surface, isAbs);
         //do not return early as the ray is allowed to carry on
         //(e.g. partially reflect)
@@ -139,14 +149,14 @@ ResultCode processHit(
  * response if applicable.
 */
 void processShadowRay(
-    ForwardRay ray,         ///< Shadow ray
-    const SurfaceHit hit,   ///< Surface hit of shadow ray
-    uint targetId,          ///< Id of target
-    PropagateParams params  ///< Propagation parameters
+    RAY ray,                        ///< Shadow ray
+    const SurfaceHit hit,           ///< Surface hit of shadow ray
+    uint targetId,                  ///< Id of target
+    const PropagateParams params    ///< Propagation parameters
 ) {
     //check if we hit target
-    bool isDet = (hit.flags & MATERIAL_DETECTOR_BIT) != 0;
-    if (!hit.valid || hit.customId != targetId || !isDet) return; //hit something else
+    bool isTarget = (hit.flags & MATERIAL_TARGET_BIT) != 0;
+    if (!hit.valid || hit.customId != targetId || !isTarget) return; //hit something else
     //propagate ray to hit
     if (propagateRayToHit(ray, hit.worldPos, hit.worldNrm, params) < 0) return;
 
@@ -163,16 +173,17 @@ void processShadowRay(
     bool black = (hit.flags & MATERIAL_BLACK_BODY_BIT) != 0;
     createResponse(ray, hit, surface, black);
 }
+
 /**
  * Traces an independent shadow ray based on the given one in a new direction.
 */
 void traceShadowRay(
-    ForwardRay ray,             ///< Ray the shadow one is based on
-    vec3 dir,                   ///< Direction of shadow ray
-    float dist,                 ///< Max distance of shadow ray
-    uint targetId,              ///< Id of target
-    PropagateParams params,     ///< Propagation parameters
-    float weight                ///< Weight of shadow ray applied to its hits
+    RAY ray,                        ///< Ray the shadow one is based on
+    vec3 dir,                       ///< Direction of shadow ray
+    float dist,                     ///< Max distance of shadow ray
+    uint targetId,                  ///< Id of target
+    const PropagateParams params,   ///< Propagation parameters
+    float weight                    ///< Weight of shadow ray applied to its hits
 ) {
     //scatter local ray into dir (takes care of polarization)
     scatterRayIS(ray, dir);
@@ -196,7 +207,7 @@ void traceShadowRay(
     processShadowRay(ray, hit, targetId, params);
 }
 
-#ifndef SCENE_TRAVERSE_FORWARD_DISABLE_MIS
+#ifndef SCENE_TRAVERSE_DISABLE_MIS
 
 //MIS is a sampling method that combines multiple distributions using weights
 //to minimize variance increase. Allows to use specialized distributions (here
@@ -215,10 +226,10 @@ void traceShadowRay(
 //to improve precision, we already reduce the fraction where possible
 
 void sampleTargetMIS(
-    ForwardRay ray,
+    RAY ray,
     uint targetId,
     uint idx, inout uint dim,
-    const PropagateParams params    
+    const PropagateParams params
 ) {
     //Here we'll use the following naming scheme: pXY, where:
     // X: prob, evaluated distribution
@@ -253,28 +264,6 @@ void sampleTargetMIS(
 
 #endif
 
-/**
- * Process a volume scatter event produced by trace().
- *  - Samples new ray direction
- *  - If not disabled, MIS shadow rays
- *
- * NOTE: In case MIS is enabled it expects a global accessible array
- *       Sphere targets[] where it can fetch the target sphere for MIS.
-*/
-void processScatter(
-    inout ForwardRay ray,           ///< Ray to scatter
-    uint targetId,                  ///< Id of target
-    uint idx, inout uint dim,             ///< RNG state
-    const PropagateParams params    ///< Propagation params
-) {
-    #ifndef SCENE_TRAVERSE_FORWARD_DISABLE_MIS
-    sampleTargetMIS(ray, targetId, idx, dim, params);
-    #endif
-
-    //scatter ray in new direction
-    scatterRay(ray, random2D(idx, dim));
-}
-
 /*
  * Traces the given ray and propagates it. Creates a SurfaceHit describing if
  * a surface was hit and holds additional information about the hit.
@@ -283,28 +272,27 @@ void processScatter(
  * detector to create a response.
 */
 ResultCode trace(
-    inout ForwardRay ray,       ///< Ray to trace using its current state
-    out SurfaceHit hit,         ///< Resulting hit (includes misses)
-    uint targetId,              ///< Id of target
-    uint idx, inout uint dim,   ///< RNG state
-    PropagateParams params,     ///< Propagation parameters
-    bool allowResponse          ///< Whether detector hits can create a response
+    inout RAY ray,                  ///< Ray to trace using its current state
+    out SurfaceHit hit,             ///< Resulting hit (includes misses)
+    uint targetId,                  ///< Id of target
+    uint idx, inout uint dim,       ///< RNG state
+    const PropagateParams params,   ///< Propagation parameters
+    bool allowResponse              ///< Whether detector hits can create a response
 ) {
     //health check ray
     if (isRayBad(ray))
         return ERROR_CODE_RAY_BAD;
-    vec3 dir = normalize(ray.state.direction); //just to be safe
+    vec3 dir = normalize(ray.state.direction);
 
     //sample distance
-    float u = random(idx, dim);
-    float dist = sampleScatterLength(ray, params, u);
+    float dist = sampleScatterLength(ray, params, random(idx, dim));
 
     //next event estimate target by extending ray if possible
     //only if allowResponse is true
-    #ifndef SCENE_TRAVERSE_FORWARD_DISABLE_MIS
+    #ifndef SCENE_TRAVERSE_DISABLE_MIS
     float sampledDist = dist;
     TargetGuideSample guideSample = evalTargetGuide(ray.state.position, dir);
-    //check if we have a chance on hitting the detector by extending ray
+    //check if we have a chance on hitting the target by extending the ray
     bool mis_target = allowResponse && guideSample.prob > 0.0;
     if (mis_target) {
         //check if we actually extended the ray
@@ -323,18 +311,19 @@ ResultCode trace(
         ray.state.position,
         0.0, //t_min; self-intersections handled via offsets
         dir,
-        dist);
+        dist
+    );
     rayQueryProceedEXT(rayQuery);
     ResultCode result = processRayQuery(ray.state, rayQuery, hit);
     if (result <= ERROR_CODE_MAX_VALUE)
         return result;
-
-    //fetch actual travelled distance if we hit anything
+    
+    //fetch actual traveled distance if we hit anything
     if (hit.valid) {
         dist = distance(ray.state.position, hit.worldPos);
     }
 
-    #ifndef SCENE_TRAVERSE_FORWARD_DISABLE_MIS
+    #ifndef SCENE_TRAVERSE_DISABLE_MIS
     //Check if hit was actually our shadow ray
     if (mis_target && hit.valid && dist > sampledDist) {
         //create response
@@ -361,13 +350,13 @@ ResultCode trace(
  *  - If MIS enabled and allowResponse, samples detector to create shadow rays
 */
 ResultCode processInteraction(
-    inout ForwardRay ray,       ///< Ray to process
-    const SurfaceHit hit,       ///< Hit to process (maybe invalid, i.e. no hit)
-    uint targetId,              ///< Id of target
-    uint idx, inout uint dim,   ///< RNG state
-    PropagateParams params,     ///< Propagation parameters
-    bool allowResponse,         ///< Whether detector hit by chance are allowed to create a response
-    bool last                   ///< True on last iteration (skips MIS)
+    inout RAY ray,                  ///< Ray to process
+    const SurfaceHit hit,           ///< Hit to process (maybe invalid, i.e. no hit)
+    uint targetId,                  ///< Id of target
+    uint idx, inout uint dim,       ///< RNG state
+    const PropagateParams params,   ///< Propagation parameters
+    bool allowResponse,             ///< Whether detector hit by chance are allowed to create a response
+    bool last                       ///< True on last iteration (skips MIS)
 ) {
     ResultCode result;
     //handle either intersection or scattering
@@ -379,18 +368,18 @@ ResultCode processInteraction(
             random(idx, dim),
             allowResponse
         );
-        dim++;
     }
     else {
         //do not bother scattering on the last iteration (we wont hit anything)
         //this also prevents MIS to sample paths one longer than PATH_LENGTH
         if (!last) {
-            processScatter(
-                ray,
-                targetId,
-                idx, dim,
-                params
-            );
+            #ifndef SCENE_TRAVERSE_DISABLE_MIS
+            //trace shadow ray
+            sampleTargetMIS(ray, targetId, idx, dim, params);
+            #endif
+
+            //scatter ray in new direction
+            scatterRay(ray, random2D(idx, dim));
         }
         result = RESULT_CODE_RAY_SCATTERED;
     }
