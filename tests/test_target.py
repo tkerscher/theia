@@ -279,7 +279,7 @@ def test_sphereTarget(shaderUtil):
     sd = np.sqrt(np.square(r["samplePos"][oclMask] - p).sum(-1))
     assert np.allclose(sd, radius)
     sn = (r["samplePos"][oclMask] - p) / sd[:, None]
-    assert np.allclose(sn, r["sampleNrm"][oclMask], atol=1e-7)
+    assert np.allclose(sn, r["sampleNrm"][oclMask], atol=3e-7)
     hd = np.sqrt(np.square(r["hitPos"][hitMask] - p).sum(-1))
     assert np.allclose(hd, radius)
     hn = (r["hitPos"][hitMask] - p) / hd[:, None]

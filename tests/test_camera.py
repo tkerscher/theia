@@ -369,12 +369,12 @@ def test_coneCamera(polarized: bool):
     rays = sampler.cameraView(0)
     assert np.allclose(rays["position"], pos)
     assert np.allclose(np.square(rays["direction"]).sum(-1), 1.0)
-    assert np.all(np.multiply(rays["direction"], dir).sum(-1) >= (1.0 - theta))
+    assert np.all(np.multiply(rays["direction"], dir).sum(-1) >= theta)
     assert np.allclose(rays["contrib"], 2.0 * np.pi * theta)
     assert np.allclose(rays["timeDelta"], 0.0)
     assert np.allclose(rays["hitPosition"], (0.0, 0.0, 0.0))
     assert np.allclose(np.square(rays["hitDirection"]).sum(-1), 1.0)
-    assert np.all(rays["hitDirection"][:, 2] <= -(1.0 - theta))
+    assert np.all(rays["hitDirection"][:, 2] <= -theta)
     assert np.allclose(rays["hitNormal"], (0.0, 0.0, 1.0))
     if polarized:
         # polarization ref was automatically generated, so just test its properties
@@ -410,7 +410,7 @@ def test_coneCamera_direct(shaderUtil, polarized: bool):
     assert np.allclose(r["rayPos"], pos)
     assert np.allclose(np.square(r["rayDir"]).sum(-1), 1.0)
     assert np.all(r["lightDir"] == -r["rayDir"])
-    assert np.all(np.multiply(r["rayDir"][m], dir).sum(-1) >= (1.0 - theta))
+    assert np.all(np.multiply(r["rayDir"][m], dir).sum(-1) >= theta)
     assert np.allclose(r["sampleNrm"], dir)
     assert np.all(r["rayContrib"][m] == 1.0)
     assert np.all(r["sampleContrib"] == 1.0)
@@ -418,7 +418,7 @@ def test_coneCamera_direct(shaderUtil, polarized: bool):
     assert np.all(r["rayPos"] == r["samplePos"])
     assert np.allclose(r["hitPos"], (0.0, 0.0, 0.0))
     assert np.allclose(np.square(r["hitDir"]).sum(-1), 1.0)
-    assert np.all(r["hitDir"][:, 2][m] <= -(1.0 - theta))
+    assert np.all(r["hitDir"][:, 2][m] <= -theta)
     assert np.allclose(r["hitNrm"], (0.0, 0.0, 1.0))
     if polarized:
         # polarization ref was automatically generated, so just test its properties

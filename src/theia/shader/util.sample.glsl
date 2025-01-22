@@ -21,7 +21,7 @@ vec3 sphericalToCartessian(float phi, float cos_theta) {
 */
 vec3 sampleDirectionCone(float cos_opening, vec2 rng) {
     float phi = TWO_PI * rng.x;
-    float cos_theta = 1.0 - cos_opening * rng.y;
+    float cos_theta = (1.0 - rng.y) + cos_opening * rng.y;
     return sphericalToCartessian(phi, cos_theta);
 }
 
