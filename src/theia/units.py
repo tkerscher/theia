@@ -1,5 +1,6 @@
 from __future__ import annotations
 from collections.abc import Iterable
+from math import pi
 from typing import Final, Literal, TypeVar
 
 
@@ -195,6 +196,9 @@ c: Final[Unit] = CompoundUnit(299792458.0, [m], [s])
 # wavelength
 um: Final[Unit] = Unit("wavelength", 1000.0)
 nm: Final[Unit] = Unit("wavelength", 1.0)
+# angle
+rad: Final[Unit] = Unit("angle", 1.0)
+deg: Final[Unit] = Unit("angle", pi / 180.0)
 
 
 def convert(data: T, unit: Unit) -> T:
