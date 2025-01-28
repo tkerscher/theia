@@ -12,12 +12,14 @@ import trimesh.scene
 import trimesh.visual
 
 import theia.units as u
+from theia.material import MaterialStore
 
 from collections.abc import Iterable, Mapping
 from ctypes import Structure, c_float, c_uint64
 from dataclasses import dataclass
 from numpy.typing import NDArray, ArrayLike
 from pathlib import Path
+from types import MappingProxyType
 
 
 __all__ = [
@@ -508,13 +510,13 @@ class MeshStore:
     Class managing the lifetime of single meshes allowing to reuse them.
     """
 
-    def __init__(self, meshes: dict[str, hp.Mesh | str]) -> None:
+    def __init__(self, meshes: Mapping[str, hp.Mesh | str]) -> None:
         """
         Creates a new MeshStore managing the lifetime of meshes.
 
         Parameters
         ----------
-        meshes: dict of named meshes (hephaistos.Mesh or filepath)
+        meshes: mapping of named meshes (hephaistos.Mesh or filepath)
         """
         # load all meshes that are specified as file paths
         self._keys = list(meshes.keys())
@@ -614,7 +616,7 @@ class Scene:
     def __init__(
         self,
         instances: Iterable[MeshInstance],
-        materials: Mapping[str, int],
+        materials: MaterialStore | Mapping[str, int],
         *,
         medium: int = 0,
         bbox: RectBBox | None = None,
@@ -622,6 +624,9 @@ class Scene:
         instances = list(instances)
         if len(instances) == 0:
             raise ValueError("No instances given. Scene cannot be empty!")
+        # fetch materials from store if needed
+        if isinstance(materials, MaterialStore):
+            materials = materials.material
         # collect geometries
         geometries = hp.ArrayBuffer(Scene.GLSLGeometry, len(instances))
         for i, inst in enumerate(instances):
@@ -693,12 +698,12 @@ class SceneTemplate:
     ----------
     file: str | Path
         Path to the file containing the scene to be loaded
-    materials: dict[str, int] | None, default=None
+    materials: MaterialStore | Mapping[str, int] | None, default=None
         Material map used when creating scenes from this template. If None, it
         must be explicitly passed to `createScene`.
     templateTransform: Transform | None, default=None
         Optional transformation to be applied to the loaded template
-    detectorIdMap: dict[str, int] | None, default=None
+    detectorIdMap: Mapping[str, int] | None, default=None
         Optional map of instances to their detectorId. Instances not mapped will
         receive an id of 0. If None, each instance gets a unique id starting
         from 1 counting up.
@@ -725,10 +730,10 @@ class SceneTemplate:
         self,
         file: str | Path,
         *,
-        materials: dict[str, int] | None = None,
+        materials: MaterialStore | Mapping[str, int] | None = None,
         sceneMedium: int = 0,
         templateTransform: Transform | None = None,
-        detectorIdMap: dict[str, int] | None = None,
+        detectorIdMap: Mapping[str, int] | None = None,
         detectorMaterial: set[str] | None = None,
     ) -> None:
         # load file
@@ -786,13 +791,13 @@ class SceneTemplate:
             instance = self.InstanceInfo(instanceName, meshName, trafo, mat, detId)
             instances[instanceName] = instance
 
-        self._instances = instances
-        self._materials = materials
+        self._instances = MappingProxyType(instances)
+        self.materials = materials
         self._sceneMedium = sceneMedium
         self._idStride = nextId - 1
 
     @property
-    def materials(self) -> dict[str, int] | None:
+    def materials(self) -> Mapping[str, int] | None:
         """
         Material map used when creating scenes from this template. If None, it
         must be explicitly passed to `createScene`.
@@ -800,7 +805,9 @@ class SceneTemplate:
         return self._materials
 
     @materials.setter
-    def materials(self, value: dict[str, int] | None) -> None:
+    def materials(self, value: MaterialStore | Mapping[str, int] | None) -> None:
+        if isinstance(value, MaterialStore):
+            value = value.material
         self._materials = value
 
     @property
@@ -809,7 +816,7 @@ class SceneTemplate:
         return self._store
 
     @property
-    def instances(self) -> dict[str, InstanceInfo]:
+    def instances(self) -> MappingProxyType[str, InstanceInfo]:
         return self._instances
 
     @property
@@ -825,12 +832,12 @@ class SceneTemplate:
         self,
         tempInstance: Iterable[Transform] | None = None,
         *,
-        materials: dict[str, int] | None = None,
+        materials: MaterialStore | Mapping[str, int] | None = None,
         sceneMedium: int = 0,
         sceneTransformation: Transform | None = None,
         sceneBBox: RectBBox | None = None,
         detectorIdStride: int = 0,
-    ) -> Scene:
+    ) -> tuple[Scene, dict[tuple[str, int], int]]:
         """
         Creates a new scene consisting of copies of this template for each given
         transformation, which is applied to the corresponding copy.
@@ -840,7 +847,7 @@ class SceneTemplate:
         tempInstance: Iterable[Transform] | None, default=None
             List of `Transform` for each template instance. If None, a single
             instance without a transformation is used.
-        materials: dict[str, int] | None, default=None
+        materials: MaterialStore | Mapping[str, int] | None, default=None
             Material map used when creating scenes from this template. If None,
             uses the one passed to the template.
         sceneMedium: int, default=0
@@ -869,6 +876,8 @@ class SceneTemplate:
             materials = self.materials
         if materials is None:
             raise ValueError("No material mapping was provided!")
+        if isinstance(materials, MaterialStore):
+            materials = materials.material
         # single instance
         if tempInstance is None:
             tempInstance = [None]
