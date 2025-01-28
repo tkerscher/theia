@@ -73,6 +73,12 @@ def compileShader(file: str, preamble: str = "", headers: dict[str, str] = {}) -
     headers: { str: str }, default={}
         map of runtime header files mapping file name to source code
     """
+    # headers may contain user data
+    # quick sanity check to generate a more meaningfull error
+    for header, content in headers.items():
+        if not isinstance(content, str):
+            raise ValueError(f'Header "{header}" does not contain a string!')
+
     code = preamble + "\n" + loadShader(file)
     try:
         return getCompiler().compile(code, headers)
