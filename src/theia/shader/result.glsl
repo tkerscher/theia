@@ -23,7 +23,7 @@ const ResultCode RESULT_CODE_MAX_ITER       = -5;
 
 const ResultCode ERROR_CODE_MAX_VALUE       = -10;
 const ResultCode ERROR_CODE_UNKNOWN         = -10;
-const ResultCode ERROR_CODE_MEDIA_MISSMATCH = -11;
+const ResultCode ERROR_CODE_MEDIA_MISMATCH  = -11;
 const ResultCode ERROR_CODE_TRACE_ABORT     = -12;
 const ResultCode ERROR_CODE_RAY_BAD         = -13;
 

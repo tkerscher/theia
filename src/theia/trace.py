@@ -92,6 +92,7 @@ class EventStatisticCallback(TraceEventCallback):
             ("missed", c_uint32),
             ("maxIter", c_uint32),
             ("error", c_uint32),
+            ("mismatch", c_uint32),
         ]
 
     def __init__(self) -> None:
@@ -132,6 +133,11 @@ class EventStatisticCallback(TraceEventCallback):
         return self._stat.maxIter
 
     @property
+    def mismatch(self) -> int:
+        """Number of rays aborted due to hitting unexpected media"""
+        return self._stat.mismatch
+
+    @property
     def missed(self) -> int:
         """Number of rays that missed the target"""
         return self._stat.missed
@@ -168,6 +174,12 @@ class EventStatisticCallback(TraceEventCallback):
     def bindParams(self, program: Program, i: int) -> None:
         super().bindParams(program, i)
         program.bindParams(Statistics=self._tensor)
+
+    def __str__(self) -> str:
+        fields = sorted([f[0] for f in self.Statistic._fields_])
+        just = max(len(f) for f in fields)
+        lines = [f"{f.rjust(just)}: {getattr(self, f):,}" for f in fields]
+        return "\n".join(lines)
 
 
 class TrackRecordCallback(TraceEventCallback):

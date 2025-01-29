@@ -15,10 +15,10 @@ layout(scalar) writeonly buffer Statistics {
     uint missed;
     uint maxIter;
     uint error;
+    uint mismatch;
 } stats;
 
 void onEvent(const RayState ray, ResultCode code, uint idx, uint i) {
-    uint n;
     switch(code) {
     case RESULT_CODE_RAY_CREATED:
         atomicAdd(stats.created, 1);
@@ -50,12 +50,14 @@ void onEvent(const RayState ray, ResultCode code, uint idx, uint i) {
     case RESULT_CODE_MAX_ITER:
         atomicAdd(stats.maxIter, 1);
         break;
-    default:
-        //collect all errors in one statistic
-        if (code <= ERROR_CODE_MAX_VALUE) {
-            atomicAdd(stats.error, 1);
-        }
+    case ERROR_CODE_MEDIA_MISMATCH:
+        atomicAdd(stats.mismatch, 1);
         break;
+    }
+
+    //collect all errors in one statistic
+    if (code <= ERROR_CODE_MAX_VALUE) {
+        atomicAdd(stats.error, 1);
     }
 }
 

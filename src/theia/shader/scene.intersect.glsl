@@ -114,7 +114,7 @@ ResultCode processRayQuery(
     //address of expected ray medium
     uvec2 medium = hit.inward ? uvec2(hit.material.outside) : uvec2(hit.material.inside);
     if (ray.medium != medium)
-        return ERROR_CODE_MEDIA_MISSMATCH; 
+        return ERROR_CODE_MEDIA_MISMATCH; 
     
     //translate from object to world space
     hit.worldNrm = normalize(vec3(hit.objNrm * world2Obj));

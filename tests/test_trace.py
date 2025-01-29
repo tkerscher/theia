@@ -737,6 +737,7 @@ def test_EventStatisticCallback():
     assert stats.volume == 0
     assert stats.maxIter == 0
     assert stats.error == 0
+    assert stats.mismatch == 0
     # run pipeline
     pl.runPipeline(tracer.collectStages())
 
@@ -751,6 +752,7 @@ def test_EventStatisticCallback():
     assert stats.volume > 0
     assert stats.maxIter > 0
     assert stats.error == 0
+    assert stats.mismatch == 0
     total = (
         stats.absorbed
         + stats.hit
@@ -773,6 +775,7 @@ def test_EventStatisticCallback():
     assert stats.volume == 0
     assert stats.maxIter == 0
     assert stats.error == 0
+    assert stats.mismatch == 0
 
 
 @pytest.mark.parametrize("polarized", [True, False])
