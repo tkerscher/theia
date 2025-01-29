@@ -26,10 +26,16 @@ layout(scalar) writeonly buffer TrackBuffer {
 
 //base event handler
 void onEvent(const RayState ray, ResultCode code, uint idx, uint i) {
+    //ignore max iter event (it does not progress the track)
+    if (code == RESULT_CODE_MAX_ITER) return;
+    
     //update track length & code; we'll keep the last update
     //(assume ordered call to onEvent())
     trackBuffer.n[idx] = i;
     trackBuffer.code[idx] = code;
+
+    //check boundary
+    if (i >= TRACK_LENGTH) return;
 
     trackBuffer.x[i][idx] = ray.position.x;
     trackBuffer.y[i][idx] = ray.position.y;
@@ -42,7 +48,13 @@ void onEvent(const RayState ray, ResultCode code, uint idx, uint i) {
 
 //common code to declutter
 void onEvent(const RayState ray, ResultCode code, vec4 stokes, vec3 polRef, uint idx, uint i) {
+    //ignore max iter event (it does not progress the track)
+    if (code == RESULT_CODE_MAX_ITER) return;
+
     onEvent(ray, code, idx, i);
+
+    //check boundary
+    if (i >= TRACK_LENGTH) return;
 
     trackBuffer.i[i][idx] = stokes.x;
     trackBuffer.q[i][idx] = stokes.y;
