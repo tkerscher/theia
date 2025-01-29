@@ -45,6 +45,8 @@ class Transform:
     def __init__(self, matrix: NDArray[np.float32] | None = None) -> None:
         self._arr = np.identity(4)
         if matrix is not None:
+            # ensure it is an array
+            matrix = np.asarray_chkfinite(matrix)
             # check shape
             if matrix.shape != (3, 4):
                 raise ValueError("matrix must be of shape (3,4)!")
@@ -273,6 +275,14 @@ class Transform:
             raise TypeError(other)
         self._arr = other._arr @ self._arr
         return self
+
+    def __repr__(self):
+        pre = "Transform("
+        txt = np.array2string(self.numpy(), separator=",", prefix=pre, suffix=")")
+        return pre + txt + ")"
+
+    def __str__(self):
+        return np.array_str(self.numpy(), precision=5, suppress_small=True)
 
 
 class RectBBox:
