@@ -314,9 +314,11 @@ ResultCode trace(
         dist
     );
     rayQueryProceedEXT(rayQuery);
-    ResultCode result = processRayQuery(ray.state, rayQuery, hit);
-    if (result <= ERROR_CODE_MAX_VALUE)
-        return result;
+    ResultCode queryResult = processRayQuery(ray.state, rayQuery, hit);
+    //skip checking result. This allows for better debugging as the ray will
+    //contain the position of where the error occurred.
+    // if (result <= ERROR_CODE_MAX_VALUE)
+    //     return result;
     
     //fetch actual traveled distance if we hit anything
     if (hit.valid) {
@@ -325,7 +327,7 @@ ResultCode trace(
 
     #ifndef SCENE_TRAVERSE_DISABLE_MIS
     //Check if hit was actually our shadow ray
-    if (mis_target && hit.valid && dist > sampledDist) {
+    if (mis_target && hit.valid && dist > sampledDist && queryResult >= 0) {
         //create response
         processShadowRay(ray, hit, targetId, params);
         //act like we didn't actually hit anything
@@ -335,11 +337,12 @@ ResultCode trace(
     #endif
 
     //propagate ray
-    result = propagateRay(ray, dist, params);
+    ResultCode propResult = propagateRay(ray, dist, params);
     updateRayIS(ray, dist, params, hit.valid);
 
-    //done
-    return result;
+    //return earlier stop code
+    return queryResult <= ERROR_CODE_MAX_VALUE ? queryResult : propResult;
+    // return queryResult < 0 ? queryResult : propResult;
 }
 
 /**
