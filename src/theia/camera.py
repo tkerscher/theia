@@ -285,6 +285,15 @@ class CameraRaySampler(PipelineStage):
         `None` if retrieve was set to False.
         """
         return self.wavelengthBuffer(i).view if self.retrieve else None
+    
+    def collectStages(self) -> list[PipelineStage]:
+        """
+        Returns a list of all stages involved with this sampler in the correct
+        order suitable for creating a pipeline.
+        """
+        stages = [] if self.rng is None else [self.rng]
+        stages.extend([self.wavelengthSource, self.camera, self])
+        return stages
 
     def run(self, i: int) -> list[hp.Command]:
         self._bindParams(self._program, i)
