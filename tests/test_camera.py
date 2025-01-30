@@ -370,7 +370,7 @@ def test_coneCamera(polarized: bool):
     assert np.allclose(rays["position"], pos)
     assert np.allclose(np.square(rays["direction"]).sum(-1), 1.0)
     assert np.all(np.multiply(rays["direction"], dir).sum(-1) >= theta)
-    assert np.allclose(rays["contrib"], 2.0 * np.pi * theta)
+    assert np.allclose(rays["contrib"], 2.0 * np.pi * (1.0 - theta))
     assert np.allclose(rays["timeDelta"], 0.0)
     assert np.allclose(rays["hitPosition"], (0.0, 0.0, 0.0))
     assert np.allclose(np.square(rays["hitDirection"]).sum(-1), 1.0)

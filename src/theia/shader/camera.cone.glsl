@@ -32,7 +32,7 @@ CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
         rayDir,                                     //ray direction
         polRef,                                     //ray polRef
         mat4(1.0),                                  //ray mueller matrix
-        TWO_PI * cameraParams.cosOpeningAngle,   //contrib
+        TWO_PI * (1.0 - cameraParams.cosOpeningAngle), //contrib
         0.0,                                        //time delta
         vec3(0.0, 0.0, 0.0),                        //hit position
         localDir,                                   //hit direction
