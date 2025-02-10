@@ -139,6 +139,8 @@ def test_SceneForwardTracer_GroundTruth(
     ] * n_batches  # rng advances on its own, so we dont have to update any params
     scheduler.schedule(tasks)
     scheduler.wait()
+    # destroy scheduler to allow for freeing resources
+    scheduler.destroy()
 
     # concat results
     time = np.concatenate([b["time"] for b in batches])
@@ -270,6 +272,8 @@ def test_SceneForwardTracer_Crosscheck(
     ] * n_batches  # rng advances on its own, so no updates
     scheduler.schedule(tasks)
     scheduler.wait()
+    # destroy scheduler to allow for freeing resources
+    scheduler.destroy()
     # combine histograms
     truth_hist = np.mean(hists, 0)
     truth = truth_hist.sum()
@@ -313,6 +317,8 @@ def test_SceneForwardTracer_Crosscheck(
     ] * n_batches  # rng advances on its own, so no updates
     scheduler.schedule(tasks)
     scheduler.wait()
+    # destroy scheduler to allow for freeing resources
+    scheduler.destroy()
     # combine histograms
     hist = np.mean(hists, 0)
     estimate = hist.sum()
@@ -447,6 +453,8 @@ def test_SceneBackwardTracer(
     ] * n_batches  # rng advances on its own, so we dont have to update any params
     scheduler.schedule(tasks)
     scheduler.wait()
+    # destroy scheduler to allow for freeing resources
+    scheduler.destroy()
 
     # calculate direct contribution without attenuation
     directContrib = budget * np.exp(-mu_s * r_insc)
@@ -550,6 +558,8 @@ def test_SceneForwardTracer_MultiMedia(polarized: bool):
     # create batches
     scheduler.schedule([{} for _ in range(n_batches)])
     scheduler.wait()
+    # destroy scheduler to allow for freeing resources
+    scheduler.destroy()
     # combine histograms
     hist = np.mean(hists, 0)
     estimate = hist.sum()
@@ -659,6 +669,8 @@ def test_SceneBackwardTracer_MultiMedia(polarized: bool):
     # create batches
     scheduler.schedule([{} for _ in range(n_batches)])
     scheduler.wait()
+    # destroy scheduler to allow for freeing resources
+    scheduler.destroy()
     # combine histograms
     hist = np.mean(hists, 0)
     estimate_bwd = hist.sum()
@@ -698,6 +710,8 @@ def test_SceneBackwardTracer_MultiMedia(polarized: bool):
     # create batches
     scheduler.schedule([{} for _ in range(n_batches)])
     scheduler.wait()
+    # destroy scheduler to allow for freeing resources
+    scheduler.destroy()
     # combine histograms
     hist = np.mean(hists, 0)
     estimate_fwd = hist.sum()
@@ -788,6 +802,8 @@ def test_SceneBackwardTargetTrace() -> None:
     # create batches
     scheduler.schedule([{} for _ in range(n_batches)])
     scheduler.wait()
+    # destroy scheduler to allow for freeing resources
+    scheduler.destroy()
     # combine histograms
     hist = np.mean(hists, 0)
     estimate = hist.sum()
@@ -901,6 +917,8 @@ def test_VolumeForwardTracer(
     ] * n_batches
     scheduler.schedule(tasks)
     scheduler.wait()
+    # destroy scheduler to allow for freeing resources
+    scheduler.destroy()
 
     # calculate direct contribution without attenuation
     directContrib = budget * np.exp(-mu_s * radius)
@@ -1019,6 +1037,8 @@ def test_VolumeBackwardTracer(
     ] * n_batches
     scheduler.schedule(tasks)
     scheduler.wait()
+    # destroy scheduler to allow for freeing resources
+    scheduler.destroy()
 
     # calculate direct contribution without attenuation
     directContrib = budget * np.exp(-mu_s * radius)
@@ -1152,6 +1172,8 @@ def test_BidirectionalPathTracer(
     ] * n_batches  # rng advances on its own, so we dont have to update any params
     scheduler.schedule(tasks)
     scheduler.wait()
+    # destroy scheduler to allow for freeing resources
+    scheduler.destroy()
 
     # estimate for single scatter contributions
     rng = theia.random.PhiloxRNG(key=0xC0FFEE)
@@ -1194,6 +1216,8 @@ def test_BidirectionalPathTracer(
     ] * 50  # rng advances on its own, so we dont have to update any params
     scheduler.schedule(tasks)
     scheduler.wait()
+    # destroy scheduler to allow for freeing resources
+    scheduler.destroy()
 
     # check for energy conservation
     singleEstimate = singleTotal / (batch_size * 50)
@@ -1280,6 +1304,8 @@ def test_DirectTracer(mu_a: float, mu_s: float, g: float, polarized: bool):
     ] * n_batches
     scheduler.schedule(tasks)
     scheduler.wait()
+    # destroy scheduler to allow for freeing resources
+    scheduler.destroy()
 
     # concat results
     time = np.concatenate([b["time"] for b in batches])

@@ -19,6 +19,15 @@ def gpu():
     hp.getCurrentDevice()
 
 
+@pytest.fixture(scope="function", autouse=True)
+def cleanup_gpu():
+    # first run test
+    yield
+
+    # cleanup
+    hp.destroyResources()
+
+
 class ShaderUtil:
     """Collections of helper functions"""
 
