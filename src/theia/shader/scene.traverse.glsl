@@ -34,7 +34,7 @@
 void createResponse(
     RAY ray,                            ///< Ray that generated that hit
     const SurfaceHit hit,               ///< Surface hit
-    const SurfaceReflectance surface,   ///< Surface properties
+    const Reflectance surface,   ///< Surface properties
     bool absorb                         ///< True, if the surface absorbs the ray
 ) {
     //if target is not absorbing, we have to emulate a transmission before the
@@ -42,7 +42,7 @@ void createResponse(
     if (!absorb) {
         //remember current direction, as transmitRay also refracts
         vec3 dir = ray.state.direction;
-        transmitRay(ray, surface);
+        transmitRay(ray, hit, surface);
         ray.state.direction = dir;
     }
 
@@ -66,7 +66,7 @@ ResultCode processHit(
     //propagate ray to hit
     //this also sets reference frame for polarization to plane of incidence
     ResultCode result = propagateRayToHit(
-        ray, hit.worldPos, hit.worldNrm, params
+        ray, hit.worldPos, hit.rayNrm, params
     );
     if (result < 0) {
         return result;
@@ -82,13 +82,7 @@ ResultCode processHit(
     bool canReflect = (hit.flags & MATERIAL_NO_REFLECT_BWD_BIT) == 0;
 
     //get surface properties
-    SurfaceReflectance surface = fresnelReflect(
-        hit.material,
-        ray.state.wavelength,
-        ray.state.constants.n,
-        ray.state.direction,
-        hit.worldNrm
-    );
+    Reflectance surface = fresnelReflect(ray.state, hit);
 
     //create response if allowed
     if (allowResponse && isTarget && hit.customId == targetId) {
@@ -103,7 +97,7 @@ ResultCode processHit(
 
     #ifndef DISABLE_VOLUME_BORDER
     if (volBorder) {
-        crossBorder(ray, hit.material, hit.rayNrm, hit.inward);
+        crossBorder(ray, hit);
         return RESULT_CODE_VOLUME_HIT;
     }
     #endif
@@ -114,17 +108,17 @@ ResultCode processHit(
     if (canReflect && canTransmit) {
         //importance sample what to do
         if (u < r) {
-            reflectRayIS(ray, surface);
+            reflectRayIS(ray, hit, surface);
         }
         else {
-            transmitRayIS(ray, surface);
+            transmitRayIS(ray, hit, surface);
         }
     }
     else if (canReflect) { //can only reflect
-        reflectRay(ray, surface); // non IS version
+        reflectRay(ray, hit, surface); // non IS version
     }
     else if (canTransmit) { //can only transmit
-        transmitRay(ray, surface); // non IS version
+        transmitRay(ray, hit, surface); // non IS version
     }
     else {
         //neither reflect nor transmit -> absorb
@@ -132,7 +126,7 @@ ResultCode processHit(
     }
     #else //#ifndef DISABLE_TRANSMISSION
     if (canReflect) {
-        reflectRay(ray, surface);
+        reflectRay(ray, hit, surface);
     }
     else {
         //neither reflect nor transmit -> absorb
@@ -158,16 +152,10 @@ void processShadowRay(
     bool isTarget = (hit.flags & MATERIAL_TARGET_BIT) != 0;
     if (!hit.valid || hit.customId != targetId || !isTarget) return; //hit something else
     //propagate ray to hit
-    if (propagateRayToHit(ray, hit.worldPos, hit.worldNrm, params) < 0) return;
+    if (propagateRayToHit(ray, hit.worldPos, hit.rayNrm, params) < 0) return;
 
     //get surface properties
-    SurfaceReflectance surface = fresnelReflect(
-        hit.material,
-        ray.state.wavelength,
-        ray.state.constants.n,
-        ray.state.direction,
-        hit.worldNrm
-    );
+    Reflectance surface = fresnelReflect(ray.state, hit);
 
     //create response
     bool black = (hit.flags & MATERIAL_BLACK_BODY_BIT) != 0;

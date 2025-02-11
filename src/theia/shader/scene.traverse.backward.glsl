@@ -52,7 +52,7 @@ ResultCode processHit(
     //propagate ray to hit
     //this also sets reference frame for polarization to plane of incidence
     ResultCode result = propagateRayToHit(
-        ray, hit.worldPos, hit.worldNrm, prop
+        ray, hit.worldPos, hit.rayNrm, prop
     );
     if (result < 0) {
         return result;
@@ -66,20 +66,14 @@ ResultCode processHit(
     bool canReflect = (hit.flags & MATERIAL_NO_REFLECT_BWD_BIT) == 0;
 
     //get surface properties
-    SurfaceReflectance surface = fresnelReflect(
-        hit.material,
-        ray.state.wavelength,
-        ray.state.constants.n,
-        ray.state.direction,
-        hit.worldNrm
-    );
+    Reflectance surface = fresnelReflect(ray.state, hit);
 
     //stop tracing if ray was absorbed
     if (isAbs) return RESULT_CODE_RAY_ABSORBED;
 
     #ifndef DISABLE_VOLUME_BORDER
     if (volBorder) {
-        crossBorder(ray, hit.material, hit.rayNrm, hit.inward);
+        crossBorder(ray, hit);
         return RESULT_CODE_VOLUME_HIT;
     }
     #endif
@@ -90,17 +84,17 @@ ResultCode processHit(
     if (canReflect && canTransmit) {
         //importance sample what to do
         if (u < r) {
-            reflectRayIS(ray, surface);
+            reflectRayIS(ray, hit, surface);
         }
         else {
-            transmitRayIS(ray, surface);
+            transmitRayIS(ray, hit, surface);
         }
     }
     else if (canReflect) { //can only reflect
-        reflectRay(ray, surface); // non IS version
+        reflectRay(ray, hit, surface); // non IS version
     }
     else if (canTransmit) { //can only transmit
-        transmitRay(ray, surface); // non IS version
+        transmitRay(ray, hit, surface); // non IS version
     }
     else {
         //neither reflect nor transmit -> absorb
@@ -108,7 +102,7 @@ ResultCode processHit(
     }
     #else //#ifndef DISABLE_TRANSMISSION
     if (canReflect) {
-        reflectRay(ray, surface);
+        reflectRay(ray, hit, surface);
     }
     else {
         //neither reflect nor transmit -> absorb

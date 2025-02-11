@@ -4,6 +4,7 @@
 #include "material.glsl"
 #include "ray.glsl"
 #include "scatter.surface.glsl"
+#include "scene.types.glsl"
 
 /**
  * Offsets ray position from surface hits to prevent self-intersection, i.e.
@@ -42,15 +43,13 @@ vec3 offsetRay(vec3 p, vec3 n) {
 */
 void crossBorder(
     inout RayState ray,     ///< Ray to update
-    Material material,      ///< Material of the border
-    vec3 rayNormal,         ///< Normal of the surface as seen by the ray
-    bool inward             ///< Whether to cross the border in- or outwards
+    const SurfaceHit hit    ///< Hit describing the border
 ) {
     //push ray to the other side
-    ray.position = offsetRay(ray.position, -rayNormal);
+    ray.position = offsetRay(hit.worldPos, -hit.rayNrm);
 
     //update medium & constants
-    Medium medium = inward ? material.inside : material.outside;
+    Medium medium = hit.inward ? hit.material.inside : hit.material.outside;
     ray.medium = uvec2(medium);
     ray.constants = lookUpMedium(medium, ray.wavelength);
 }
@@ -64,12 +63,13 @@ void crossBorder(
  *       to the plane of incidence.
 */
 void reflectRayIS(
-    inout RayState ray,                 ///< Ray to reflect
-    const SurfaceReflectance surface    ///< Description of surface
+    inout RayState ray,     ///< Ray to reflect
+    const SurfaceHit hit,   ///< Hit description
+    const Reflectance refl  ///< Description of surface
 ) {
     //update ray state
-    ray.position = offsetRay(ray.position, surface.rayNormal);
-    ray.direction = normalize(reflect(ray.direction, surface.rayNormal));
+    ray.position = offsetRay(hit.worldPos, hit.rayNrm);
+    ray.direction = normalize(reflect(ray.direction, hit.rayNrm));
 }
 /**
  * Reflects the ray from the given surface and updates its state accordingly.
@@ -79,14 +79,15 @@ void reflectRayIS(
  *       to the plane of incidence.
 */
 void reflectRay(
-    inout RayState ray,                 ///< Ray to reflect
-    const SurfaceReflectance surface    ///< Description of surface
+    inout RayState ray,     ///< Ray to reflect
+    const SurfaceHit hit,   ///< Hit description
+    const Reflectance refl  ///< Description of surface
 ) {
     //reflect ray
-    reflectRayIS(ray, surface);
+    reflectRayIS(ray, hit, refl);
     //apply reflectance
-    float s = surface.r_s;
-    float p = surface.r_p;
+    float s = refl.r_s;
+    float p = refl.r_p;
     ray.lin_contrib *= 0.5 * (s*s + p*p);
 }
 
@@ -99,14 +100,15 @@ void reflectRay(
  *       to the plane of incidence.
 */
 void transmitRayIS(
-    inout RayState ray,                 ///< Ray to transmit
-    const SurfaceReflectance surface    ///< Description of surface
+    inout RayState ray,     ///< Ray to transmit
+    const SurfaceHit hit,   ///< Hit description
+    const Reflectance refl  ///< Description of surface
 ) {
     //cross border
-    crossBorder(ray, surface.material, surface.rayNormal, surface.inward);
+    crossBorder(ray, hit);
     //calculate new direction
-    float eta = surface.n_in / surface.n_tr;
-    ray.direction = normalize(refract(ray.direction, surface.rayNormal, eta));
+    float eta = refl.n_in / refl.n_tr;
+    ray.direction = normalize(refract(ray.direction, hit.rayNrm, eta));
 }
 /**
  * Transmits the ray through the given surface and updates it accordingly.
@@ -118,23 +120,24 @@ void transmitRayIS(
 */
 void transmitRay(
     inout RayState ray,
-    const SurfaceReflectance surface
+    const SurfaceHit hit,
+    const Reflectance refl
 ) {
     //transmit ray
-    transmitRayIS(ray, surface);
+    transmitRayIS(ray, hit, refl);
     //apply transmittance
-    float s = surface.r_s;
-    float p = surface.r_p;
+    float s = refl.r_s;
+    float p = refl.r_p;
     ray.lin_contrib *= 1.0 - 0.5 * (s*s + p*p); // T = 1 - R
 }
 
 ///////////////////////////////  Specialization ////////////////////////////////
 
-void crossBorder(inout ForwardRay ray, Material material, vec3 rayNormal, bool inward) {
-    crossBorder(ray.state, material, rayNormal, inward);
+void crossBorder(inout ForwardRay ray, const SurfaceHit hit) {
+    crossBorder(ray.state, hit);
 }
-void crossBorder(inout BackwardRay ray, Material material, vec3 rayNormal, bool inward) {
-    crossBorder(ray.state, material, rayNormal, inward);
+void crossBorder(inout BackwardRay ray, const SurfaceHit hit) {
+    crossBorder(ray.state, hit);
 }
 
 #ifdef POLARIZATION
@@ -143,99 +146,107 @@ void crossBorder(inout BackwardRay ray, Material material, vec3 rayNormal, bool 
 
 void reflectRayIS(
     inout PolarizedForwardRay ray,
-    const SurfaceReflectance surface
+    const SurfaceHit hit,
+    const Reflectance refl
 ) {
     //reflect ray
-    reflectRayIS(ray.state, surface);
+    reflectRayIS(ray.state, hit, refl);
 
     //update stokes vector
     //assume polRef is in the plane of incidence
-    ray.stokes = polarizerMatrix(surface.r_p, surface.r_s) * ray.stokes;
+    ray.stokes = polarizerMatrix(refl.r_p, refl.r_s) * ray.stokes;
 }
 void reflectRay(
     inout PolarizedForwardRay ray,
-    const SurfaceReflectance surface
+    const SurfaceHit hit,
+    const Reflectance refl
 ) {
-    reflectRay(ray.state, surface);
-    ray.stokes = polarizerMatrix(surface.r_p, surface.r_s) * ray.stokes;
+    reflectRay(ray.state, hit, refl);
+    ray.stokes = polarizerMatrix(refl.r_p, refl.r_s) * ray.stokes;
 }
 
 void reflectRayIS(
     inout PolarizedBackwardRay ray,
-    const SurfaceReflectance surface
+    const SurfaceHit hit,
+    const Reflectance refl
 ) {
     //reflect ray
-    reflectRayIS(ray.state, surface);
+    reflectRayIS(ray.state, hit, refl);
 
     //update mueller matrix
     //assume polRef is in the plane of incidence
-    ray.mueller = ray.mueller * polarizerMatrix(surface.r_p, surface.r_s);
+    ray.mueller = ray.mueller * polarizerMatrix(refl.r_p, refl.r_s);
 }
 void reflectRay(
     inout PolarizedBackwardRay ray,
-    const SurfaceReflectance surface
+    const SurfaceHit hit,
+    const Reflectance refl
 ) {
-    reflectRay(ray.state, surface);
-    ray.mueller = ray.mueller * polarizerMatrix(surface.r_p, surface.r_s);
+    reflectRay(ray.state, hit, refl);
+    ray.mueller = ray.mueller * polarizerMatrix(refl.r_p, refl.r_s);
 }
 
 void transmitRayIS(
     inout PolarizedForwardRay ray,
-    const SurfaceReflectance surface
+    const SurfaceHit hit,
+    const Reflectance refl
 ) {
     //transmit ray
-    transmitRayIS(ray.state, surface);
+    transmitRayIS(ray.state, hit, refl);
 
     //forward rays transport importance, which cancel the factor eta^2
     //See PBRT or Veach' thesis
 
     //update stokes vector
     //assume polRef is in the plane of incidence
-    float eta = surface.n_in / surface.n_tr;
-    float t_s = surface.r_s + 1.0;
-    float t_p = (surface.r_p + 1.0) * eta;
+    float eta = refl.n_in / refl.n_tr;
+    float t_s = refl.r_s + 1.0;
+    float t_p = (refl.r_p + 1.0) * eta;
     ray.stokes = polarizerMatrix(t_p, t_s) * ray.stokes;
 }
 void transmitRay(
     inout PolarizedForwardRay ray,
-    const SurfaceReflectance surface
+    const SurfaceHit hit,
+    const Reflectance refl
 ) {
-    transmitRay(ray.state, surface);
+    transmitRay(ray.state, hit, refl);
 
-    float eta = surface.n_in / surface.n_tr;
-    float t_s = surface.r_s + 1.0;
-    float t_p = (surface.r_p + 1.0) * eta;
+    float eta = refl.n_in / refl.n_tr;
+    float t_s = refl.r_s + 1.0;
+    float t_p = (refl.r_p + 1.0) * eta;
     ray.stokes = polarizerMatrix(t_p, t_s) * ray.stokes;
 }
 
 void transmitRayIS(
     inout PolarizedBackwardRay ray,
-    const SurfaceReflectance surface
+    const SurfaceHit hit,
+    const Reflectance refl
 ) {
     //transmit ray
-    transmitRayIS(ray.state, surface);
+    transmitRayIS(ray.state, hit, refl);
 
     //transmitting radiance takes an additional factor eta^2
-    float eta = surface.n_in / surface.n_tr;
+    float eta = refl.n_in / refl.n_tr;
     ray.state.lin_contrib *= eta * eta;
 
     //update mueller matrix
     //assume polRef is in the plane of incidence
-    float t_s = surface.r_s + 1.0;
-    float t_p = (surface.r_p + 1.0) * eta;
+    float t_s = refl.r_s + 1.0;
+    float t_p = (refl.r_p + 1.0) * eta;
     ray.mueller = ray.mueller * polarizerMatrix(t_p, t_s);
 }
 void transmitRay(
     inout PolarizedBackwardRay ray,
-    const SurfaceReflectance surface
+    const SurfaceHit hit,
+    const Reflectance refl
 ) {
-    transmitRay(ray.state, surface);
+    transmitRay(ray.state, hit, refl);
 
-    float eta = surface.n_in / surface.n_tr;
+    float eta = refl.n_in / refl.n_tr;
     ray.state.lin_contrib *= eta * eta;
 
-    float t_s = surface.r_s + 1.0;
-    float t_p = (surface.r_p + 1.0) * eta;
+    float t_s = refl.r_s + 1.0;
+    float t_p = (refl.r_p + 1.0) * eta;
     ray.mueller = ray.mueller * polarizerMatrix(t_p, t_s);
 }
 
@@ -243,65 +254,73 @@ void transmitRay(
 
 void reflectRayIS(
     inout UnpolarizedForwardRay ray,
-    const SurfaceReflectance surface
+    const SurfaceHit hit,
+    const Reflectance refl
 ) {
-    reflectRayIS(ray.state, surface);
+    reflectRayIS(ray.state, hit, refl);
 }
 void reflectRayIS(
     inout UnpolarizedBackwardRay ray,
-    const SurfaceReflectance surface
+    const SurfaceHit hit,
+    const Reflectance refl
 ) {
-    reflectRayIS(ray.state, surface);
+    reflectRayIS(ray.state, hit, refl);
 }
 
 void reflectRay(
     inout UnpolarizedForwardRay ray,
-    const SurfaceReflectance surface
+    const SurfaceHit hit,
+    const Reflectance refl
 ) {
-    reflectRay(ray.state, surface);
+    reflectRay(ray.state, hit, refl);
 }
 void reflectRay(
     inout UnpolarizedBackwardRay ray,
-    const SurfaceReflectance surface
+    const SurfaceHit hit,
+    const Reflectance refl
 ) {
-    reflectRay(ray.state, surface);
+    reflectRay(ray.state, hit, refl);
 }
 
 void transmitRayIS(
     inout UnpolarizedForwardRay ray,
-    const SurfaceReflectance surface
+    const SurfaceHit hit,
+    const Reflectance refl
 ) {
     //transmit ray
-    transmitRayIS(ray.state, surface);
+    transmitRayIS(ray.state, hit, refl);
 
     //forward rays transport importance, which cancel the factor eta^2
     //See PBRT or Veach' thesis
 }
 void transmitRayIS(
     inout UnpolarizedBackwardRay ray,
-    const SurfaceReflectance surface
+    const SurfaceHit hit,
+    const Reflectance refl
 ) {
-    transmitRayIS(ray.state, surface);
+    transmitRayIS(ray.state, hit, refl);
 
     //transmitting radiance takes an additional factor eta^2
-    float eta = surface.n_in / surface.n_tr;
+    float eta = refl.n_in / refl.n_tr;
     ray.state.lin_contrib *= eta * eta;
 }
 
 void transmitRay(
     inout UnpolarizedForwardRay ray,
-    const SurfaceReflectance surface
+    const SurfaceHit hit,
+    const Reflectance refl
 ) {
     //transmit ray
-    transmitRay(ray.state, surface);
+    transmitRay(ray.state, hit, refl);
 }
 void transmitRay(
     inout UnpolarizedBackwardRay ray,
-    const SurfaceReflectance surface
+    const SurfaceHit hit,
+    const Reflectance refl
 ) {
-    transmitRay(ray.state, surface);
+    transmitRay(ray.state, hit, refl);
 
-    float eta = surface.n_in / surface.n_tr;
+    float eta = refl.n_in / refl.n_tr;
     ray.state.lin_contrib *= eta * eta;
 }
 

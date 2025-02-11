@@ -105,12 +105,12 @@ Ray sampleRay(uint idx) {
 #endif
 
 //use function for easy copy
-Ray doReflect(Ray ray, const SurfaceReflectance surface) {
-    reflectRay(ray, surface);
+Ray doReflect(Ray ray, const SurfaceHit hit, const Reflectance refl) {
+    reflectRay(ray, hit, refl);
     return ray;
 }
-Ray doTransmit(Ray ray, const SurfaceReflectance surface) {
-    transmitRay(ray, surface);
+Ray doTransmit(Ray ray, const SurfaceHit hit, const Reflectance refl) {
+    transmitRay(ray, hit, refl);
     return ray;
 }
 
@@ -141,17 +141,22 @@ void main() {
     ray.mueller = mat4(1.0);
     #endif
 
-    //calculate surface reflectance
-    SurfaceReflectance surface = fresnelReflect(
-        push.mat,
-        ray.state.wavelength,
-        ray.state.constants.n,
-        ray.state.direction,
-        push.normal
+    //assemble dummy hit
+    bool inward = dot(ray.state.direction, push.normal) <= 0.0;
+    vec3 normal = inward ? push.normal : -push.normal;
+    SurfaceHit hit = SurfaceHit(
+        true, push.mat, inward,
+        0, 0,
+        ray.state.position, normal,
+        ray.state.position, push.normal, ray.state.direction,
+        mat3(1.0)
     );
+
+    //calculate surface reflectance
+    Reflectance surface = fresnelReflect(ray.state, hit);
     //reflect and transmit
-    Ray refl = doReflect(ray, surface);
-    Ray trans = doTransmit(ray, surface);
+    Ray refl = doReflect(ray, hit, surface);
+    Ray trans = doTransmit(ray, hit, surface);
 
     //create result and save it
     r[i] = createResult(ray, refl, trans);
