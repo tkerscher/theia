@@ -25,6 +25,8 @@ This allows us to build a chain of trust: After testing this, we can use it to
 check other tracers.
 """
 
+pytestmark = pytest.mark.slow
+
 
 class MediumModel(
     theia.material.DispersionFreeMedium,
