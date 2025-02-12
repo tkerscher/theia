@@ -26,16 +26,6 @@ vec3 sampleDirectionCone(float cos_opening, vec2 rng) {
 }
 
 /**
- * Samples a random direction in the upper hemisphere along the positive z axis.
- * Excludes vectors in the xy-plane, i.e. z=0.
-*/
-vec3 sampleHemisphere(vec2 rng) {
-    float phi = TWO_PI * rng.x;
-    float cos_theta = 1.0 - rng.y; //exclude 0.0
-    return sphericalToCartessian(phi, cos_theta);
-}
-
-/**
  * Samples unit disk in the xy-plane at z=0.
 */
 vec3 sampleUnitDisk(vec2 rng) {
@@ -59,6 +49,33 @@ vec3 sampleUnitDisk(vec2 rng) {
     }
 
     return vec3(r * cos(phi), r * sin(phi), 0.0);
+}
+
+/**
+ * Samples a random direction in the upper hemisphere along the positive z axis.
+ * Excludes vectors in the xy-plane, i.e. z=0.
+*/
+vec3 sampleHemisphere(vec2 rng) {
+    float phi = TWO_PI * rng.x;
+    float cos_theta = 1.0 - rng.y; //exclude 0.0
+    return sphericalToCartessian(phi, cos_theta);
+}
+
+/**
+ * Samples a random direction in the upper hemisphere along the positive z axis
+ * weighted by the cosine of the angle to the z axis.
+ * Excludes vectors in the xy-plane, i.e. z=0.
+*/
+vec3 sampleHemisphereCosine(vec2 rng) {
+    //Here we use Malley's Method by projecting a disk onto a hemisphere.
+    //See PBRT 4th Ed., Ch. 13.6.3
+    vec2 d = sampleUnitDisk(rng).xy;
+    float z = sqrt(max(0, 1.0 - dot(d, d)));
+    return vec3(d, z);
+}
+float sampleHemisphereCosinePdf(vec3 dir) {
+    //cos(theta) / pi
+    return INV_PI * dir.z;
 }
 
 /**
