@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.resources
 import hephaistos as hp
 import numpy as np
 
@@ -269,98 +268,68 @@ class PhiloxRNG(RNG):
 
 class SobolQRNG(RNG):
     """
-    Sobol sequence optionally scrambled using fast Owen scrambling.
+    Shuffled Owen-scrambled Sobol sampler based on the paper "Practical
+    Hash-based Owen Scrambling" by Brent Burley, 2020, Journal of Computer
+    Graphics Techniques.
 
     Parameters
     ----------
     seed: int | None, default=None
-        Base seed used for scrambling. If None, asks the system to create a
-        random one. Ignored if scrambled is False.
+        Base seed used for scrambling. If None and `advanceSeed` is provided, a
+        seed will be drawn from the host side random number generator, otherwise
+        a random seed from the OS will be used.
     offset: int, default=0
         Offset into the sequence. Can be used to split draws into multiple runs.
         Should not be used to skip samples altogether.
-    scramble: bool, default=True
-        Wether to scramble the sequence
-    autoAdvance: int, default=0
-        Amount the offset gets incremented with each update call.
+    advanceSeed: int | None, default=None
+        Seeding for host side random number generator used to alter the device
+        side seed between runs. If None, seed will not be altered between runs.
 
     Stage Parameters
     ----------------
-    seed: int | None, default=None
-        Base seed used for scrambling. If None, asks the system to create a
-        random one. Ignored if scrambled is False.
+    seed: int
+        Base seed used for scrambling.
     offset: int, default=0
         Offset into the sequence. Can be used to split draws into multiple runs.
         Should not be used to skip samples altogether.
-    autoAdvance: int, default=0
-        Amount the offset gets incremented with each update call.
-
-    Note
-    ----
-    Only supports drawing samples up to dimension 1024
+    advanceSeed: int | None, default=None
+        Seeding for host side random number generator used to alter the device
+        side seed between runs. If None, seed will not be altered between runs.
     """
 
     class SobolParams(Structure):
         _fields_ = [("seed", c_uint32), ("offset", c_uint32)]
-
-    _sourceCode = ShaderLoader("random.sobol.glsl")
 
     def __init__(
         self,
         *,
         seed: int | None = None,
         offset: int = 0,
-        scrambled: bool = True,
-        autoAdvance: int = 0,
+        advanceSeed: int | None = None,
     ) -> None:
-        super().__init__({"SobolParams": self.SobolParams}, {"autoAdvance"})
+        super().__init__({"SobolParams": self.SobolParams}, {"advanceSeed"})
         # save params
-        self._scrambled = scrambled
-        if seed is None:
+        if seed is None and advanceSeed is None:
             seed = urandom(4)
-        self.setParams(seed=seed, offset=offset, autoAdvance=autoAdvance)
+        self.setParams(seed=seed, offset=offset, advanceSeed=advanceSeed)
 
-        # load sobol matrices
-        path = importlib.resources.files("theia").joinpath("data/sobolmatrices.npy")
-        matrices = np.load(path)
-        # upload to device
-        self._matrices = hp.IntTensor(matrices.flatten())
-        # while it would make sense to cache the matrices between instances,
-        # we'd have to somehow detect when the device was destroyed and recreate
-        # the tensor. Since it's not that big, this is far easier and safer
+    sourceCode = ShaderLoader("random.sobol.glsl")
 
     @property
-    def autoAdvance(self) -> int:
-        """Amount the offset gets incremented with each update call."""
-        return self._autoAdvance
+    def advanceSeed(self) -> int | None:
+        """
+        Seeding for host side random number generator used to alter the device
+        side seed between runs. If None, seed will not be altered between runs.
+        """
+        return self._advanceSeed
 
-    @autoAdvance.setter
-    def autoAdvance(self, value: int) -> int:
-        self._autoAdvance = value
-
-    @property
-    def scrambled(self) -> bool:
-        """Wether the sequence is scrambled"""
-        return self._scrambled
-
-    @property
-    def sourceCode(self) -> str:
-        # add preamble if needed
-        if not self.scrambled:
-            # add define to disable scrambling if needed
-            # multiple #define are allowed so dont sweat about putting it before
-            # the include guard
-            preamble = "#define _SOBOL_NO_SCRAMBLE\n\n"
-            return preamble + self._sourceCode
-        else:
-            return self._sourceCode
+    @advanceSeed.setter
+    def advanceSeed(self, value: int | None) -> None:
+        self._advanceSeed = value
+        self._hostRNG = None if value is None else np.random.default_rng(value)
 
     def _finishParams(self, i: int) -> None:
-        if self.autoAdvance != 0:
-            offset = self.getParam("offset")
-            self.setParam("offset", offset + self.autoAdvance)
+        if self._hostRNG is not None:
+            seed = int.from_bytes(self._hostRNG.bytes(4))
+            self.setParam("seed", seed)
         super()._finishParams(i)
-
-    def bindParams(self, program: hp.Program, i: int) -> None:
-        super().bindParams(program, i)
-        program.bindParams(SobolMatrices=self._matrices)

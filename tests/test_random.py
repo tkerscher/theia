@@ -69,8 +69,7 @@ def test_uvec4_conversion():
 
 def test_sobol():
     sobol = theia.random.SobolQRNG(seed=0xC0FFEE)
-    # sobol is limited to 1024 samples
-    generator = theia.random.RNGBufferSink(sobol, 32_768, 1024)
+    generator = theia.random.RNGBufferSink(sobol, 256 * 1024, 128)
     retrieve = pl.RetrieveTensorStage(generator.tensor)
 
     pl.runPipeline([sobol, generator, retrieve])
@@ -82,12 +81,12 @@ def test_sobol():
     data = retrieve.view(0)
     hist = np.histogram(data, bins=20)[0]
     max_dev = np.abs((hist * 20.0 / generator.capacity) - 1.0).max()
-    assert max_dev < 0.001  # TODO: What is a reasonable value here?
+    assert max_dev < 1e-5  # TODO: What is a reasonable value here?
 
     # test auto advance
     offset = sobol.getParam("offset")
     assert offset == 0
-    advance = 128
-    sobol.setParam("autoAdvance", advance)
+    oldSeed = sobol.seed
+    sobol.setParam("advanceSeed", 0xABBAABBA)
     sobol.update(0)
-    assert sobol.getParam("offset") - offset == advance
+    assert oldSeed != sobol.seed
