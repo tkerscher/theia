@@ -29,6 +29,7 @@ __all__ = [
     "EventResultCode",
     "EventStatisticCallback",
     "SceneBackwardTracer",
+    "SceneBackwardTargetTracer",
     "SceneForwardTracer",
     "Tracer",
     "TraceEventCallback",
