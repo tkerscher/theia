@@ -7,10 +7,10 @@ import hephaistos as hp
 import numpy as np
 from scipy.interpolate import CubicSpline
 
-from ctypes import Structure, c_float, c_uint32, c_uint64, memmove, sizeof
+from ctypes import Structure, c_float, c_uint32, c_uint64, sizeof
 from types import MappingProxyType
 
-from theia.lookup import *
+from theia.lookup import Table, getTableSize
 import theia.units as u
 
 import json
@@ -920,7 +920,7 @@ class MaterialStore:
             # assume we only add new tables
             if data is not None:
                 size = getTableSize(data)
-                self._table_ptr[name] = (alloc(size, TABLE_ALIGNMENT), size)
+                self._table_ptr[name] = (alloc(size, Table.ALIGNMENT), size)
 
         def allocMedium(medium: Medium | str | None):
             if medium is None:
@@ -1035,8 +1035,8 @@ class MaterialStore:
         data_size = getTableSize(data)
         if data_size > size:
             raise ValueError(f"Table {name} does not fit in previous allocation")
-        table = createTable(data)
-        memmove(ptr, table.ctypes.data, data_size)
+        table = Table(data)
+        table.copy(ptr)
         return self._table_adr[name]
 
     def updateMedium(self, medium: Medium) -> None:

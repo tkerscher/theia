@@ -5,12 +5,12 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 layout(buffer_reference, scalar, buffer_reference_align=4) readonly buffer Table1D {
-    float nx; //Number of samples - 1; float to save casting
+    int nx; //Number of samples
     float samples[];
 };
 
 layout(buffer_reference, scalar, buffer_reference_align=4) readonly buffer Table2D {
-    float nu, nv; //Number of samples per dim - 1; float to save casting
+    int nu, nv; //Number of samples per dim
     float samples[];
 };
 
@@ -20,7 +20,7 @@ float lookUp(const Table1D table, float u, float nullValue) {
 
     u = clamp(u, 0.0, 1.0);
 
-    u *= table.nx;
+    u *= float(table.nx - 1);
 
     int lo = int(floor(u));
     int hi = int(ceil(u));
@@ -40,16 +40,15 @@ vec2 lookUpDx(const Table1D table, float u, vec2 nullValue) {
         return nullValue;
 
     u = clamp(u, 0.0, 1.0);
-    u *= table.nx;
+    u *= float(table.nx - 1);
 
     //we have to ensure lo and hi are distinct
-    int iMax = int(table.nx);
     int lo = max(int(floor(u)), 0);
-    int hi = min(lo + 1, iMax);
+    int hi = min(lo + 1, table.nx - 1);
     float l = fract(u);
 
     int lolo = max(lo - 1, 0);
-    int hihi = min(hi + 1, iMax);
+    int hihi = min(hi + 1, table.nx - 1);
 
     // look one further in each direction for numerical derivative
     float vLoLo = table.samples[lolo];
@@ -68,7 +67,7 @@ vec2 lookUpDx(const Table1D table, float u, vec2 nullValue) {
     // float dx = mix(dxLo, dxHi, l) * table.nx;
     float value = vLo * (1.0 - l) + vHi * l;
     float dx = dxLo * (1.0 - l) + dxHi * l;
-    dx *= table.nx; // compensate parameter change
+    dx *= float(table.nx - 1); // compensate parameter change
 
     return vec2(value, dx);
 }
@@ -83,9 +82,12 @@ float lookUp2D(const Table2D table, float u, float v, float nullValue) {
     u = clamp(u, 0.0, 1.0);
     v = clamp(v, 0.0, 1.0);
 
-    int stride = int(table.nu) + 1;
-    u *= table.nu;
-    v *= table.nv;
+    u *= float(table.nu - 1);
+    v *= float(table.nv - 1);
+    //We adopt the row-major memory layout from numpy:
+    //axis 0 (u) maps to rows, axis 1 (v) to columns
+    //-> stride between rows
+    int stride = table.nv;
 
     int u_lo = int(floor(u));
     int u_hi = int(ceil(u));
@@ -95,10 +97,10 @@ float lookUp2D(const Table2D table, float u, float v, float nullValue) {
     int v_hi = int(ceil(v));
     float vl = fract(v);
 
-    int Q11 = v_lo * stride + u_lo;
-    int Q12 = v_lo * stride + u_hi;
-    int Q21 = v_hi * stride + u_lo;
-    int Q22 = v_hi * stride + u_hi;
+    int Q11 = stride * u_lo + v_lo;
+    int Q12 = stride * u_hi + v_lo;
+    int Q21 = stride * u_lo + v_hi;
+    int Q22 = stride * u_hi + v_hi;
 
     // for whatever reason mix() can't handle inf...
     // float lo = mix(table.samples[Q11], table.samples[Q12], ul);

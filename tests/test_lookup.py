@@ -20,17 +20,17 @@ def sampleData1D():
 def test_sampleTable1D(sampleData1D):
     # test boundary
     data = np.array([[0.0, 0.0], [10.0, 10.0]])
-    sample = theia.lookup.sampleTable1D(data, 10)[1:]  # drop header
+    sample = theia.lookup.sampleTable1D(data, 10).data
     assert abs(sample.min()) < 1e-5
     assert abs(sample.max() < 10.0) < 1e-5
     assert len(sample) == 10
     # test arbitrary boundary
-    sample = theia.lookup.sampleTable1D(data, 10, boundary=(5.0, 8.0))[1:]
+    sample = theia.lookup.sampleTable1D(data, 10, boundary=(5.0, 8.0)).data
     assert abs(sample.min() - 5.0) < 1e-5
     assert abs(sample.max() - 8.0) < 1e-5
     assert len(sample) == 10
     # test cubic spline (error should be minimal)
-    sample = theia.lookup.sampleTable1D(sampleData1D, 1024)[1:]  # drop header
+    sample = theia.lookup.sampleTable1D(sampleData1D, 1024).data
     x = np.linspace(0.0, 1.0, 1024)
     y = np.sin(4 * np.pi * x) * np.exp(-x) + (1.0 - x)
     assert np.abs(y - sample).max() < 5e-3  # TODO: what is a sensible value?
@@ -39,7 +39,7 @@ def test_sampleTable1D(sampleData1D):
 def test_lookup1D(sampleData1D, shaderUtil):
     N = 8192
     # prepare gpu
-    table = hp.FloatTensor(theia.lookup.createTable(sampleData1D[:, 1]))
+    table = theia.lookup.Table(sampleData1D[:, 1]).upload()
     tensor = hp.FloatTensor(N)
     buffer = hp.FloatBuffer(N)
     program = shaderUtil.createTestProgram("lookup.test.1D.glsl")
@@ -68,7 +68,7 @@ def test_lookup1D(sampleData1D, shaderUtil):
 def test_lookup1Ddx(sampleData1D, shaderUtil):
     N = 8192
     # prepare gpu
-    table = hp.FloatTensor(theia.lookup.createTable(sampleData1D[:, 1]))
+    table = theia.lookup.Table(sampleData1D[:, 1]).upload()
     valueTensor = hp.FloatTensor(N)
     derivTensor = hp.FloatTensor(N)
     value = hp.FloatBuffer(N)
@@ -107,7 +107,7 @@ def test_lookup1Ddx(sampleData1D, shaderUtil):
 def sampleData2D():
     """Sample data for 2D lookup test. Shape: (x,y,f(x,y))"""
     x = np.linspace(0.0, 1.0, 50)
-    y = np.linspace(0.0, 1.0, 50)
+    y = np.linspace(0.0, 1.0, 100)
     x, y = np.meshgrid(x, y)
     x, y = x.flatten(), y.flatten()
     z = np.sin(2 * np.pi * x) * np.cos(2 * np.pi * y) * (1.0 - y * y) * (1.0 - x * x)
@@ -120,16 +120,17 @@ def test_sampleTable2D(sampleData2D):
     data_y = np.array([0.0, 10.0, 0.0, 10.0])
     data_z = data_x + data_y
     data = np.stack((data_x, data_y, data_z), axis=-1)
-    sample = theia.lookup.sampleTable2D(data, 100, 100, boundaries=(None, (3.0, 8.0)))[
-        2:
-    ]
-    assert len(sample) == 100 * 100
+    bounds = (None, (3.0, 8.0))
+    sample = theia.lookup.sampleTable2D(data, 100, 100, boundaries=bounds).data
+    sample = sample.flatten()
+    assert sample.size == 100 * 100
     assert abs(sample[:100].min() - 3) < 1e-5
     assert abs(sample[:100].max() - 13.0) < 1e-5
     assert abs(sample[::100].min() - 3.0) < 1e-5
     assert abs(sample[::100].max() - 8.0) < 1e-5
     # test cubic spline
-    sample = theia.lookup.sampleTable2D(sampleData2D, 250, 250, mode="cubic")[2:]
+    sample = theia.lookup.sampleTable2D(sampleData2D, 250, 250, mode="cubic").data
+    sample = sample.flatten()
     x = np.linspace(0.0, 1.0, 250)
     y = np.linspace(0.0, 1.0, 250)
     x, y = np.meshgrid(x, y)
@@ -140,7 +141,8 @@ def test_sampleTable2D(sampleData2D):
 def test_lookup2D(sampleData2D, shaderUtil):
     N = 256
     # prepare gpu
-    table = hp.FloatTensor(theia.lookup.createTable(sampleData2D[:, 2].reshape(50, 50)))
+    data = sampleData2D[:, 2].reshape(50, 100)
+    table = theia.lookup.Table(data).upload()
     image = hp.Image(hp.ImageFormat.R32_SFLOAT, N, N)
     buffer = hp.FloatBuffer(N * N)
     program = shaderUtil.createTestProgram("lookup.test.2D.glsl")
@@ -161,8 +163,9 @@ def test_lookup2D(sampleData2D, shaderUtil):
 
     # recreate expected linear interpolation
     x = np.linspace(0.0, 1.0, 50)
+    y = np.linspace(0.0, 1.0, 100)
     # RegularGridInterpolator wants matrix order ij, instead of xy, thus transpose
-    interp = RegularGridInterpolator((x, x), sampleData2D[:, 2].reshape(50, 50).T)
+    interp = RegularGridInterpolator((x, y), data)
     x = np.linspace(0.0, 1.0, N)
     x, y = np.meshgrid(x, x)
     p = np.stack((x.flatten(), y.flatten()), axis=-1)
@@ -173,11 +176,11 @@ def test_lookup2D(sampleData2D, shaderUtil):
 def test_getTableSize(sampleData1D, sampleData2D):
     assert (
         theia.lookup.getTableSize(sampleData1D[:, 1])
-        == theia.lookup.createTable(sampleData1D[:, 1]).nbytes
+        == theia.lookup.Table(sampleData1D[:, 1]).nbytes
     )
     assert (
         theia.lookup.getTableSize(sampleData2D[:, 2])
-        == theia.lookup.createTable(sampleData2D[:, 2]).nbytes
+        == theia.lookup.Table(sampleData2D[:, 2]).nbytes
     )
 
 
@@ -189,9 +192,9 @@ def test_uploadTables(rng):
     tensor, ptr = theia.lookup.uploadTables([t1, t2, t3])
 
     tables = [
-        theia.lookup.createTable(t1),
-        theia.lookup.createTable(t2),
-        theia.lookup.createTable(t3),
+        theia.lookup.Table(t1),
+        theia.lookup.Table(t2),
+        theia.lookup.Table(t3),
     ]
 
     ptr_exp = tensor.address
@@ -201,8 +204,12 @@ def test_uploadTables(rng):
     ptr_exp += tables[1].nbytes
     assert ptr_exp == ptr[2]
 
-    buffer = hp.FloatBuffer(3 + 64 + 16 + 32)
+    size = sum(t.nbytes for t in tables)
+    buffer = hp.ByteBuffer(size)
     hp.execute(hp.retrieveTensor(tensor, buffer))
 
-    expected = np.hstack(tables)
+    expected = np.empty(size, dtype=np.uint8)
+    ptr = expected.ctypes.data
+    for t in tables:
+        ptr += t.copy(ptr)
     assert np.equal(buffer.numpy(), expected).all()

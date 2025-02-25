@@ -15,13 +15,12 @@ from hephaistos import ByteTensor
 from typing import Final, Literal
 
 __all__ = [
-    "createTable",
     "evalTable",
     "getTableSize",
     "sampleTable1D",
     "sampleTable2D",
     "uploadTables",
-    "TABLE_ALIGNMENT",
+    "Table",
 ]
 
 
@@ -29,7 +28,58 @@ def __dir__():
     return __all__
 
 
-TABLE_ALIGNMENT: Final[int] = 4
+class Table:
+    """
+    Encapsulates data used in look up tables on the GPU. Provides methods to
+    create and upload them to the GPU. To minimize the amount of required memory
+    fetches during interpolation, expects the data as the values at equidistant
+    sampling points.
+
+    Parameters
+    ----------
+    data: ArrayLike
+        Values of the equidistant sampling points used for interpolation.
+        Will be converted to floats.
+
+    Note
+    ----
+    Data is stored as 32-bit floats.
+    """
+
+    ALIGNMENT: Final[int] = 4
+    """Memory alignment requirement on the GPU"""
+
+    def __init__(self, data: ArrayLike) -> None:
+        self._data = np.ascontiguousarray(data, dtype=np.float32)
+        self._header = np.array(self._data.shape, dtype=np.int32)
+
+    @property
+    def data(self) -> NDArray[np.float32]:
+        """The underlying data"""
+        return self._data
+
+    @property
+    def nbytes(self) -> int:
+        """Required amount of bytes to store the table"""
+        return self._data.nbytes + self._header.nbytes
+
+    def copy(self, ptr) -> int:
+        """
+        Copies the table to the given memory address and returns the amount of
+        copied bytes.
+        """
+        memmove(ptr, self._header.ctypes.data, self._header.nbytes)
+        ptr = ptr + self._header.nbytes  # dont alter initial ptr
+        memmove(ptr, self._data.ctypes.data, self._data.nbytes)
+        return self.nbytes
+
+    def upload(self) -> hp.ByteTensor:
+        """Uploads the table to the GPU"""
+        buffer = hp.RawBuffer(self.nbytes)
+        tensor = hp.ByteTensor(self.nbytes)
+        self.copy(buffer.address)
+        hp.execute(hp.updateTensor(buffer, tensor))
+        return tensor
 
 
 def getTableSize(a: ArrayLike | tuple[int, ...] | None) -> int:
@@ -45,30 +95,6 @@ def getTableSize(a: ArrayLike | tuple[int, ...] | None) -> int:
         raise RuntimeError("table cannot have zero shape!")
     # header + data
     return (len(a) + sum(a)) * 4  # 4 bytes per float
-
-
-def createTable(data: NDArray):
-    """
-    Transform the given data to be suitable for table lookups on the GPU.
-    It is assumed that the data is uniformly sampled on [0,1] on each dimension.
-
-    Parameters
-    ----------
-    data: ndarray
-        Data to be converted in table format
-
-    Returns
-    -------
-    ndarray
-        Table in suitable format for GPU interpolation
-    """
-    if data.ndim > 2:
-        raise RuntimeError("data must be one or two dimensional!")
-
-    # header is a list with the size of each dimension minus one
-    header = np.array(data.shape) - 1.0
-    data = np.concatenate([header, data.flatten()])
-    return np.ascontiguousarray(data, np.float32)
 
 
 def uploadTables(data: list[NDArray]) -> tuple[ByteTensor, list[int]]:
@@ -89,7 +115,7 @@ def uploadTables(data: list[NDArray]) -> tuple[ByteTensor, list[int]]:
     addresses: list[int]
         Device addresses pointing to the individual tables on the device.
     """
-    tables = [createTable(d) for d in data]
+    tables = [Table(d) for d in data]
     size = sum([table.nbytes for table in tables])
 
     buffer = hp.RawBuffer(size)
@@ -100,9 +126,9 @@ def uploadTables(data: list[NDArray]) -> tuple[ByteTensor, list[int]]:
     ptr = buffer.address
     for table in tables:
         adr_list.append(adr)
-        memmove(ptr, table.ctypes.data, table.nbytes)
-        adr += table.nbytes
-        ptr += table.nbytes
+        n = table.copy(ptr)
+        adr += n
+        ptr += n
 
     hp.execute(hp.updateTensor(buffer, tensor))
 
@@ -121,7 +147,7 @@ def _parseBoundary(data, boundary, n):
 
 def sampleTable1D(
     data, nx=1024, *, boundary=None, mode: Literal["linear", "cubic"] = "linear"
-) -> NDArray[np.float32]:
+) -> Table:
     """
     Creates a 1D table by interpolating the given data either linearly or with
     cubic splines. The data must be provided as a ndarray of shape (N,2) and
@@ -141,15 +167,14 @@ def sampleTable1D(
 
     Returns
     -------
-    ndarray
         Table in suitable format for GPU interpolation
     """
     x = _parseBoundary(data[:, 0], boundary, nx)
     if mode == "linear":
-        return createTable(np.interp(x, data[:, 0], data[:, 1]))
+        return Table(np.interp(x, data[:, 0], data[:, 1]))
     elif mode == "cubic":
         spline = CubicSpline(data[:, 0], data[:, 1])
-        return createTable(spline(x))
+        return Table(spline(x))
     else:
         raise RuntimeError("Unknown interpolation mode!")
 
@@ -161,7 +186,7 @@ def sampleTable2D(
     *,
     boundaries=None,
     mode: Literal["linear", "cubic"] = "linear",
-) -> NDArray[np.float32]:
+) -> Table:
     """
     Creates a 2D table by interpolating the given data either linearly or with
     cubic splines. The data must be provided as a ndarray of shape (N,2) and
@@ -184,7 +209,6 @@ def sampleTable2D(
 
     Returns
     -------
-    ndarray
         Table in suitable format for GPU interpolation
     """
     # parse boundaries
@@ -212,7 +236,7 @@ def sampleTable2D(
     # interpolate
     interp = model(data[:, :2], data[:, 2])
     values = interp(x, y)
-    return createTable(values)
+    return Table(values)
 
 
 def evalTable(f, *ai):
@@ -251,4 +275,4 @@ def evalTable(f, *ai):
     data = np.stack(axes, axis=-1)
 
     # create table and return
-    return createTable(data)
+    return Table(data)
