@@ -15,7 +15,7 @@ def test_record(rng, polarized: bool):
     record = theia.response.HitRecorder(polarized=polarized)
     replay = theia.response.HitReplay(N, record, polarized=polarized)
 
-    samples = replay.view(0)
+    samples = replay.queue.view(0)
     samples["position"] = (10.0 * rng.random((N, 3)) - 5.0) * u.m
     samples["direction"] = rng.random((N, 3))
     samples["normal"] = rng.random((N, 3))
@@ -29,7 +29,7 @@ def test_record(rng, polarized: bool):
 
     runPipeline([replay, record])
 
-    results = record.view(0)
+    results = record.queue.view(0)
     assert results.count == N
     # restore ordering via contrib
     results = results[np.argsort(results["contrib"])]
@@ -67,7 +67,7 @@ def test_histogramResponse(rng):
     )
     replay = theia.response.HitReplay(N, response, blockSize=128)
 
-    samples = replay.view(0)
+    samples = replay.queue.view(0)
     samples["position"] = (10.0 * rng.random((N, 3)) - 5.0) * u.m
     samples["direction"] = rng.random((N, 3))
     samples["normal"] = rng.random((N, 3))
@@ -127,7 +127,7 @@ def test_uniformResponse(rng):
     replay = theia.response.HitReplay(N, response)
     fetch = RetrieveTensorStage(queue)
 
-    hits = replay.view(0)
+    hits = replay.queue.view(0)
     hits["position"] = (10.0 * rng.random((N, 3)) - 5.0) * u.m
     dir = rng.random((N, 3))
     dir = dir / np.sqrt(np.square(dir).sum(-1))[:, None]

@@ -128,23 +128,23 @@ def test_cameraRaySource(rng, polarized: bool):
     sampler = theia.camera.CameraRaySampler(camera, photons, N, polarized=polarized)
 
     # fill input buffer with random numbers
-    raysIn = camera.view(0)
+    raysIn = camera.queue.view(0)
     for field in raysIn.fields:
         raysIn[field] = rng.random(raysIn[field].shape)
-    phIn = photons.view(0)
+    phIn = photons.queue.view(0)
     for field in phIn.fields:
         phIn[field] = rng.random(phIn[field].shape)
     # run
     runPipeline([photons, camera, sampler])
     # check result
-    raysOut = sampler.cameraView(0)
+    raysOut = sampler.cameraQueue.view(0)
     for field in raysOut.fields:
         assert np.allclose(raysIn[field], raysOut[field])
     if polarized:
         assert raysIn.item is theia.camera.PolarizedCameraRayItem
     else:
         assert raysIn.item is theia.camera.CameraRayItem
-    phOut = sampler.wavelengthView(0)
+    phOut = sampler.wavelengthQueue.view(0)
     for field in phOut.fields:
         assert np.allclose(phIn[field], phOut[field])
 
@@ -188,7 +188,7 @@ def test_pencilCamera(polarized: bool):
     runPipeline([photon, camera, sampler])
 
     # check result (use allclose since we compare float <-> double)
-    rays = sampler.cameraView(0)
+    rays = sampler.cameraQueue.view(0)
     assert np.allclose(rays["position"], pos)
     assert np.allclose(rays["direction"], dir)
     assert np.allclose(rays["contrib"], 1.0)
@@ -246,7 +246,7 @@ def test_flatCamera(polarized: bool):
     runPipeline([philox, photon, camera, sampler])
 
     # check result
-    rays = sampler.cameraView(0)
+    rays = sampler.cameraQueue.view(0)
     assert np.abs(rays["position"].max(0) - upperCorner).max() < 5e-3
     assert np.abs(rays["position"].min(0) - lowerCorner).max() < 5e-3
     assert np.abs(rays["hitPosition"].min(0) + (width / 2, length / 2, 0)).max() < 5e-5
@@ -366,7 +366,7 @@ def test_coneCamera(polarized: bool):
     runPipeline([photon, philox, camera, sampler])
 
     # check result
-    rays = sampler.cameraView(0)
+    rays = sampler.cameraQueue.view(0)
     assert np.allclose(rays["position"], pos)
     assert np.allclose(np.square(rays["direction"]).sum(-1), 1.0)
     assert np.all(np.multiply(rays["direction"], dir).sum(-1) >= theta)
@@ -458,7 +458,7 @@ def test_sphericalCamera(polarized: bool):
     runPipeline([philox, photon, camera, sampler])
 
     # check result
-    rays = sampler.cameraView(0)
+    rays = sampler.cameraQueue.view(0)
     p = np.array(position)
     d = np.sqrt(np.square(rays["position"] - p).sum(-1))
     assert np.allclose(d, radius)
@@ -558,7 +558,7 @@ def test_pointCamera(polarized: bool):
     runPipeline([philox, photons, camera, sampler])
 
     # check result
-    rays = sampler.cameraView(0)
+    rays = sampler.cameraQueue.view(0)
     assert np.allclose(rays["position"], position)
     assert np.allclose(rays["hitPosition"], 0.0)
     assert np.allclose(np.square(rays["direction"]).sum(-1), 1.0)
@@ -616,7 +616,7 @@ def test_meshCamera(polarized: bool, inward: bool):
     runPipeline([philox, photon, camera, sampler])
 
     # check result
-    r = sampler.cameraView(0)
+    r = sampler.cameraQueue.view(0)
     assert np.abs(np.abs(r["hitPosition"]).max(1) - 1.0).max() < 1e-6
     assert np.allclose(r["hitPosition"].min(0), (-1, -1, -1))
     assert np.allclose(r["hitPosition"].max(0), (1, 1, 1))

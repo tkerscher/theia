@@ -4,7 +4,7 @@ import numpy as np
 import hephaistos as hp
 from hephaistos.glsl import buffer_reference, mat3, mat4x3, vec3
 from hephaistos.pipeline import PipelineStage, SourceCodeMixin
-from hephaistos.queue import QueueBuffer, QueueTensor, QueueView
+from hephaistos.queue import IOQueue
 
 from ctypes import Structure, c_float, c_uint32
 
@@ -120,8 +120,6 @@ class CameraRaySampler(PipelineStage):
         does not require random numbers.
     polarized: bool, default=True
         Whether to save polarization information.
-    retrieve: bool, default=True
-        Wether the queue gets retrieved from the device after sampling
     batchSize: int
         Number of samples to draw per run
     code: bytes | None, default=None
@@ -150,7 +148,6 @@ class CameraRaySampler(PipelineStage):
         *,
         rng: RNG | None = None,
         polarized: bool = True,
-        retrieve: bool = True,
         batchSize: int = 128,
         code: bytes | None = None,
     ) -> None:
@@ -166,7 +163,6 @@ class CameraRaySampler(PipelineStage):
         self._camera = camera
         self._capacity = capacity
         self._polarized = polarized
-        self._retrieve = retrieve
         self._rng = rng
         self._wavelengthSource = wavelengthSource
         self.setParams(count=capacity, baseCount=0)
@@ -193,19 +189,13 @@ class CameraRaySampler(PipelineStage):
 
         # create queue holding samples
         item = PolarizedCameraRayItem if polarized else CameraRayItem
-        self._camTensor = QueueTensor(item, capacity)
-        self._camBuffer = [
-            QueueBuffer(item, capacity) if retrieve else None for _ in range(2)
-        ]
+        self._camQueue = IOQueue(item, capacity, mode="retrieve")
         item = WavelengthSampleItem
-        self._photonTensor = QueueTensor(item, capacity)
-        self._photonBuffer = [
-            QueueBuffer(item, capacity) if retrieve else None for _ in range(2)
-        ]
+        self._lamQueue = IOQueue(item, capacity, mode="retrieve")
         # bind memory
         self._program.bindParams(
-            CameraQueueOut=self._camTensor,
-            PhotonQueueOut=self._photonTensor,
+            CameraQueueOut=self._camQueue.tensor,
+            PhotonQueueOut=self._lamQueue.tensor,
         )
 
     @property
@@ -217,6 +207,11 @@ class CameraRaySampler(PipelineStage):
     def camera(self) -> Camera:
         """Camera that is sampled"""
         return self._camera
+
+    @property
+    def cameraQueue(self) -> IOQueue:
+        """Queue holding the samples camera rays"""
+        return self._camQueue
 
     @property
     def capacity(self) -> int:
@@ -234,19 +229,9 @@ class CameraRaySampler(PipelineStage):
         return self._polarized
 
     @property
-    def retrieve(self) -> bool:
-        """Wether the queue gets retrieved from the device after sampling"""
-        return self._retrieve
-
-    @property
     def rng(self) -> RNG | None:
         """The random number generator used for sampling. None, if none used."""
         return self._rng
-
-    @property
-    def cameraTensor(self) -> QueueTensor:
-        """Tensor holding the queue storing the samples"""
-        return self._camTensor
 
     @property
     def wavelengthSource(self) -> WavelengthSource:
@@ -254,38 +239,10 @@ class CameraRaySampler(PipelineStage):
         return self._wavelengthSource
 
     @property
-    def wavelengthTensor(self) -> QueueTensor:
-        """Tensor holding the sampled wavelengths"""
-        return self._photonTensor
+    def wavelengthQueue(self) -> IOQueue:
+        """Queue holding the wavelength samples"""
+        return self._lamQueue
 
-    def cameraBuffer(self, i: int) -> QueueBuffer | None:
-        """
-        Buffer holding the i-th queue containing camera samples.
-        `None` if retrieve was set to False.
-        """
-        return self._camBuffer[i]
-
-    def cameraView(self, i: int) -> QueueView | None:
-        """
-        View into the i-th queue containing camera samples.
-        `None` if retrieve was set to `False`.
-        """
-        return self.cameraBuffer(i).view if self.retrieve else None
-
-    def wavelengthBuffer(self, i: int) -> QueueBuffer | None:
-        """
-        Buffer holding the i-th queue containing wavelength samples.
-        `None` if retrieve was set to False.
-        """
-        return self._photonBuffer[i]
-
-    def wavelengthView(self, i: int) -> QueueView | None:
-        """
-        View into the i-th queue containing wavelength samples.
-        `None` if retrieve was set to False.
-        """
-        return self.wavelengthBuffer(i).view if self.retrieve else None
-    
     def collectStages(self) -> list[PipelineStage]:
         """
         Returns a list of all stages involved with this sampler in the correct
@@ -301,15 +258,11 @@ class CameraRaySampler(PipelineStage):
         self.wavelengthSource.bindParams(self._program, i)
         if self.rng is not None:
             self.rng.bindParams(self._program, i)
-        cmds: list[hp.Command] = [self._program.dispatch(self._groups)]
-        if self.retrieve:
-            cmds.extend(
-                [
-                    hp.retrieveTensor(self.cameraTensor, self.cameraBuffer(i)),
-                    hp.retrieveTensor(self.wavelengthTensor, self.wavelengthBuffer(i)),
-                ]
-            )
-        return cmds
+        return [
+            self._program.dispatch(self._groups),
+            *self.cameraQueue.run(i),
+            *self.wavelengthQueue.run(i),
+        ]
 
 
 class HostCamera(Camera):
@@ -352,10 +305,7 @@ class HostCamera(Camera):
 
         # allocate memory
         item = PolarizedCameraRayItem if polarized else CameraRayItem
-        self._buffers = [
-            QueueBuffer(item, capacity, skipCounter=True) for _ in range(2)
-        ]
-        self._tensor = QueueTensor(item, capacity, skipCounter=True)
+        self._queue = IOQueue(item, capacity, mode="update", skipCounter=True)
 
     @property
     def capacity(self) -> int:
@@ -368,6 +318,11 @@ class HostCamera(Camera):
         return self._polarized
 
     @property
+    def queue(self) -> IOQueue:
+        """Queue holding the samples for the next batch"""
+        return self._queue
+
+    @property
     def sourceCode(self) -> str:
         preamble = createPreamble(
             CAMERA_QUEUE_SIZE=self.capacity,
@@ -375,19 +330,9 @@ class HostCamera(Camera):
         )
         return preamble + self._sourceCode
 
-    def buffer(self, i: int) -> int:
-        """Returns the i-th buffer containing the data for the next batch"""
-        return self._buffers[i]
-
-    def view(self, i: int) -> QueueView:
-        """
-        Returns a view of the data inside the i-th buffer
-        """
-        return self.buffer(i).view
-
     def bindParams(self, program: hp.Program, i: int) -> None:
         super().bindParams(program, i)
-        program.bindParams(CameraQueueIn=self._tensor)
+        program.bindParams(CameraQueueIn=self.queue.tensor)
 
     # PipelineStage API
 
@@ -397,7 +342,7 @@ class HostCamera(Camera):
         super().update(i)
 
     def run(self, i: int) -> list[hp.Command]:
-        return [hp.updateTensor(self.buffer(i), self._tensor), *super().run(i)]
+        return [*self.queue.run(i), *super().run(i)]
 
 
 class PencilCamera(Camera):

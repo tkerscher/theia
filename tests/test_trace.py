@@ -73,7 +73,7 @@ def test_VolumeForwardTracer(
     pl.runPipeline(tracer.collectStages())
 
     # check hits
-    hits = recorder.view(0)
+    hits = recorder.queue.view(0)
     assert hits.count > 0
     assert hits.count <= tracer.maxHits
     hits = hits[: hits.count]
@@ -186,7 +186,7 @@ def test_VolumeBackwardTracer(
     pl.runPipeline(tracer.collectStages())
 
     # check hits
-    hits = recorder.view(0)
+    hits = recorder.queue.view(0)
     assert hits.count > 0
     assert hits.count <= tracer.maxHits
     hits = hits[: hits.count]
@@ -312,7 +312,7 @@ def test_SceneForwardTracer(
     pl.runPipeline(tracer.collectStages())
 
     # check hits
-    hits = recorder.view(0)
+    hits = recorder.queue.view(0)
     assert hits.count > 0
     assert hits.count <= tracer.maxHits
     hits = hits[: hits.count]
@@ -434,7 +434,7 @@ def test_SceneBackwardTracer(
     pl.runPipeline(tracer.collectStages())
 
     # check hits
-    hits = recorder.view(0)
+    hits = recorder.queue.view(0)
     assert hits.count > 0
     assert hits.count <= tracer.maxHits
     hits = hits[: hits.count]
@@ -543,7 +543,7 @@ def test_SceneBackwardTargetTracer(
     pl.runPipeline(tracer.collectStages())
 
     # check hits
-    hits = recorder.view(0)
+    hits = recorder.queue.view(0)
     assert hits.count > 0
     assert hits.count <= tracer.maxHits
     hits = hits[: hits.count]
@@ -642,7 +642,7 @@ def test_BidirectionalPathTracer(
     paths, length, codes = track.result(0)
 
     # check hits
-    hits = rec.view(0)
+    hits = rec.queue.view(0)
     # we placed both camera and light source in spheres
     # if there's no transmission allowed, there won't be any light paths
     if disableTransmission:
@@ -996,11 +996,11 @@ def test_tracer_reflection(flag, reflectance, err):
     pipeline = pl.Pipeline(tracer.collectStages())
     # run pipeline
     pipeline.run(0)
-    hits_ref = recorder.view(0)
+    hits_ref = recorder.queue.view(0)
     # run for second detector
     tracer.setParam("targetIdx", 2)
     pipeline.run(1)
-    hits_trans = recorder.view(1)
+    hits_trans = recorder.queue.view(1)
 
     # check result
     assert hits_ref.count + hits_trans.count == N
@@ -1062,7 +1062,7 @@ def test_DirectTracer_volume(polarized: bool):
     pl.runPipeline(tracer.collectStages())
 
     # check hits
-    hits = recorder.view(0)
+    hits = recorder.queue.view(0)
     assert hits.count > 0
     assert hits.count <= tracer.maxHits
     hits = hits[: hits.count]
@@ -1158,7 +1158,7 @@ def test_DirectTracer_scene(polarized: bool):
     pl.runPipeline(tracer.collectStages())
 
     # check hits
-    hits = recorder.view(0)
+    hits = recorder.queue.view(0)
     assert hits.count > 0
     assert hits.count <= tracer.maxHits
     hits = hits[: hits.count]

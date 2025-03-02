@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 import hephaistos as hp
 from hephaistos.pipeline import PipelineStage, SourceCodeMixin
-from hephaistos.queue import QueueBuffer, QueueTensor, QueueView, clearQueue
+from hephaistos.queue import IOQueue, QueueBuffer, QueueTensor, QueueView, clearQueue
 
 from ctypes import Structure, c_float, c_uint32
 
@@ -148,9 +148,6 @@ class HitRecorder(HitResponse):
     ----------
     polarized: bool, default=False
         Whether to save the polarization state.
-    retrieve: bool, default=True
-        Whether the queue gets retrieved from the device after processing.
-        If `True`, clears the queue afterwards.
 
     Note
     ----
@@ -160,24 +157,17 @@ class HitRecorder(HitResponse):
 
     _sourceCode = ShaderLoader("response.record.glsl")
 
-    def __init__(self, *, polarized: bool = False, retrieve: bool = True) -> None:
+    def __init__(self, *, polarized: bool = False) -> None:
         super().__init__()
         # save params
         self._capacity = 0
         self._polarized = polarized
-        self._retrieve = retrieve
-        # set tensor and queue
-        self._tensor = None
-        self._buffer = [None for _ in range(2)]
+        item = PolarizedHitItem if polarized else HitItem
+        self._queue = IOQueue(item, mode="retrieve")
 
     def prepare(self, config: TraceConfig) -> None:
         self._capacity = config.maxHits
-        # create queue
-        item = PolarizedHitItem if config.polarized else HitItem
-        self._tensor = QueueTensor(item, config.maxHits)
-        hp.execute(clearQueue(self._tensor))
-        if self.retrieve:
-            self._buffer = [QueueBuffer(item, config.maxHits) for _ in range(2)]
+        self.queue.initialize(config.maxHits)
 
     @property
     def capacity(self) -> int:
@@ -190,9 +180,9 @@ class HitRecorder(HitResponse):
         return self._polarized
 
     @property
-    def retrieve(self) -> bool:
-        """Wether the queue gets retrieved from the device after processing"""
-        return self._retrieve
+    def queue(self) -> IOQueue:
+        """Queue holding the sampled hits"""
+        return self._queue
 
     @property
     def sourceCode(self) -> str:
@@ -202,33 +192,14 @@ class HitRecorder(HitResponse):
         )
         return preamble + self._sourceCode
 
-    @property
-    def tensor(self) -> QueueTensor | None:
-        """Tensor holding the queue storing the hits"""
-        return self._tensor
-
-    def buffer(self, i: int) -> QueueBuffer | None:
-        """Buffer holding the i-th queue. `None` if retrieve was set to `False`"""
-        return self._buffer[i]
-
-    def view(self, i: int) -> QueueView | None:
-        """View into the i-th queue. `None` if retrieve was set to `False`"""
-        return self.buffer(i).view if self.retrieve else None
-
     def bindParams(self, program: hp.Program, i: int) -> None:
-        if self.tensor is None:
+        if not self.queue.initialized:
             raise RuntimeError("Hit response has not been prepared")
         super().bindParams(program, i)
-        program.bindParams(HitQueueOut=self._tensor)
+        program.bindParams(HitQueueOut=self.queue.tensor)
 
     def run(self, i: int) -> list[hp.Command]:
-        if self.retrieve:
-            return [
-                hp.retrieveTensor(self.tensor, self.buffer(i)),
-                clearQueue(self.tensor),
-            ]
-        else:
-            return []
+        return self.queue.run(i)
 
 
 class HitReplay(PipelineStage):
@@ -293,13 +264,9 @@ class HitReplay(PipelineStage):
 
         # create queue
         item = PolarizedHitItem if polarized else HitItem
-        self._tensor = QueueTensor(item, capacity)
-        self._buffer = [QueueBuffer(item, capacity) for _ in range(2)]
-        # set buffer item count to max by default
-        for buffer in self._buffer:
-            buffer.view.count = capacity
+        self._queue = IOQueue(item, capacity, mode="update")
         # bind memory
-        self._program.bindParams(HitQueueIn=self._tensor)
+        self._program.bindParams(HitQueueIn=self.queue.tensor)
 
     @property
     def blockSize(self) -> int:
@@ -322,23 +289,20 @@ class HitReplay(PipelineStage):
         return self._polarized
 
     @property
+    def queue(self) -> IOQueue:
+        """Queue containing the samples for the next batch"""
+        return self._queue
+
+    @property
     def response(self) -> HitResponse:
         """Response function called for each hit"""
         return self._response
-
-    def buffer(self, i: int) -> QueueBuffer:
-        """Buffer holding the i-th queue used in the next run"""
-        return self._buffer[i]
-
-    def view(self, i: int) -> QueueView:
-        """View into the i-th queue holding the hits for the next run"""
-        return self.buffer(i).view
 
     def run(self, i: int) -> list[hp.Command]:
         self._bindParams(self._program, i)
         self.response.bindParams(self._program, i)
         return [
-            hp.updateTensor(self.buffer(i), self._tensor),
+            *self.queue.run(i),
             self._program.dispatch(self._groups),
         ]
 

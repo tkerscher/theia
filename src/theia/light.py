@@ -7,7 +7,7 @@ from scipy.stats.sampling import NumericalInversePolynomial
 import hephaistos as hp
 from hephaistos import Program
 from hephaistos.pipeline import PipelineStage, SourceCodeMixin
-from hephaistos.queue import QueueBuffer, QueueTensor, QueueView
+from hephaistos.queue import IOQueue
 
 from ctypes import Structure, c_float, c_int64, c_uint32, sizeof
 from hephaistos.glsl import buffer_reference, vec2, vec3, vec4
@@ -101,13 +101,9 @@ class HostWavelengthSource(WavelengthSource):
         # save params
         self._capacity = capacity
         self._updateFn = updateFn
-
         # allocate memory
-        self._buffers = [
-            QueueBuffer(WavelengthSampleItem, capacity, skipCounter=True)
-            for _ in range(2)
-        ]
-        self._tensor = QueueTensor(WavelengthSampleItem, capacity, skipCounter=True)
+        item = WavelengthSampleItem
+        self._queue = IOQueue(item, capacity, mode="update", skipCounter=True)
 
     @property
     def capacity(self) -> int:
@@ -115,21 +111,18 @@ class HostWavelengthSource(WavelengthSource):
         return self._capacity
 
     @property
+    def queue(self) -> IOQueue:
+        """Queue containing the data for the next batch"""
+        return self._queue
+
+    @property
     def sourceCode(self) -> str:
         preamble = createPreamble(PHOTON_QUEUE_SIZE=self.capacity)
         return preamble + self._sourceCode
 
-    def buffer(self, i: int) -> QueueBuffer:
-        """Returns the i-th buffer containing the data for the next batch"""
-        return self._buffers[i]
-
-    def view(self, i: int) -> QueueView:
-        """Returns a view of the data in the i-th buffer"""
-        return self.buffer(i).view
-
     def bindParams(self, program: Program, i: int) -> None:
         super().bindParams(program, i)
-        program.bindParams(PhotonQueueIn=self._tensor)
+        program.bindParams(PhotonQueueIn=self.queue.tensor)
 
     # PipelineStage API
 
@@ -139,7 +132,7 @@ class HostWavelengthSource(WavelengthSource):
         super().update(i)
 
     def run(self, i: int) -> list[hp.Command]:
-        return [hp.updateTensor(self.buffer(i), self._tensor), *super().run(i)]
+        return [*self.queue.run(i), *super().run(i)]
 
 
 class ConstWavelengthSource(WavelengthSource):
@@ -469,18 +462,13 @@ class LightSampler(PipelineStage):
 
         # create queue holding samples
         item = PolarizedLightSampleItem if polarized else LightSampleItem
-        self._lightTensor = QueueTensor(item, capacity)
-        self._lightBuffer = [
-            QueueBuffer(item, capacity) if retrieve else None for _ in range(2)
-        ]
+        self._lightQueue = IOQueue(item, capacity, mode="retrieve")
         item = WavelengthSampleItem
-        self._photonTensor = QueueTensor(item, capacity)
-        self._photonBuffer = [
-            QueueBuffer(item, capacity) if retrieve else None for _ in range(2)
-        ]
+        self._lamQueue = IOQueue(item, capacity, mode="retrieve")
         # bind memory
         self._program.bindParams(
-            LightQueueOut=self._lightTensor, PhotonQueueOut=self._photonTensor
+            LightQueueOut=self._lightQueue.tensor,
+            PhotonQueueOut=self._lamQueue.tensor,
         )
 
     @property
@@ -499,9 +487,9 @@ class LightSampler(PipelineStage):
         return self._code
 
     @property
-    def lightTensor(self) -> QueueTensor:
-        """Tensor holding the queue storing the light samples"""
-        return self._lightTensor
+    def lightQueue(self) -> IOQueue:
+        """Queue storing the light samples"""
+        return self._lightQueue
 
     @property
     def polarized(self) -> bool:
@@ -529,37 +517,9 @@ class LightSampler(PipelineStage):
         return self._wavelengthSource
 
     @property
-    def wavelengthTensor(self) -> QueueTensor:
-        """Tensor holding the sampled wavelengths"""
-        return self._photonTensor
-
-    def lightBuffer(self, i: int) -> QueueBuffer | None:
-        """
-        Buffer holding the i-th queue containing light samples.
-        `None` if retrieve was set to False.
-        """
-        return self._lightBuffer[i]
-
-    def lightView(self, i: int) -> QueueView | None:
-        """
-        View into the i-th queue containing light samples.
-        `None` if retrieve was set to `False`.
-        """
-        return self.lightBuffer(i).view if self.retrieve else None
-
-    def wavelengthBuffer(self, i: int) -> QueueBuffer | None:
-        """
-        Buffer holding the i-th queue containing wavelength samples.
-        `None` if retrieve was set to False.
-        """
-        return self._photonBuffer[i]
-
-    def wavelengthView(self, i: int) -> QueueView | None:
-        """
-        View into the i-th queue containing wavelength samples.
-        `None` if retrieve was set to False.
-        """
-        return self.wavelengthBuffer(i).view if self.retrieve else None
+    def wavelengthQueue(self) -> IOQueue:
+        """Queue holding the sampled wavelengths"""
+        return self._lamQueue
 
     def run(self, i: int) -> list[hp.Command]:
         self._bindParams(self._program, i)
@@ -568,15 +528,11 @@ class LightSampler(PipelineStage):
 
         if self.rng is not None:
             self.rng.bindParams(self._program, i)
-        cmds: list[hp.Command] = [self._program.dispatch(self._groups)]
-        if self.retrieve:
-            cmds.extend(
-                [
-                    hp.retrieveTensor(self.lightTensor, self.lightBuffer(i)),
-                    hp.retrieveTensor(self.wavelengthTensor, self.wavelengthBuffer(i)),
-                ]
-            )
-        return cmds
+        return [
+            self._program.dispatch(self._groups),
+            *self.lightQueue.run(i),
+            *self.wavelengthQueue.run(i),
+        ]
 
 
 class HostLightSource(LightSource):
@@ -618,10 +574,7 @@ class HostLightSource(LightSource):
 
         # allocate memory
         item = PolarizedLightSampleItem if polarized else LightSampleItem
-        self._buffers = [
-            QueueBuffer(item, capacity, skipCounter=True) for _ in range(2)
-        ]
-        self._tensor = QueueTensor(item, capacity, skipCounter=True)
+        self._queue = IOQueue(item, capacity, mode="update", skipCounter=True)
 
     @property
     def capacity(self) -> int:
@@ -634,6 +587,11 @@ class HostLightSource(LightSource):
         return self._polarized
 
     @property
+    def queue(self) -> IOQueue:
+        """Queue holding the samples for the next batch"""
+        return self._queue
+
+    @property
     def sourceCode(self) -> str:
         preamble = createPreamble(
             LIGHT_QUEUE_SIZE=self.capacity,
@@ -641,19 +599,9 @@ class HostLightSource(LightSource):
         )
         return preamble + self._sourceCode
 
-    def buffer(self, i: int) -> QueueBuffer:
-        """Returns the i-th buffer containing the data for the next batch"""
-        return self._buffers[i]
-
-    def view(self, i: int) -> QueueView:
-        """
-        Returns a view of the data inside the i-th buffer
-        """
-        return self.buffer(i).view
-
     def bindParams(self, program: Program, i: int) -> None:
         super().bindParams(program, i)
-        program.bindParams(LightQueueIn=self._tensor)
+        program.bindParams(LightQueueIn=self.queue.tensor)
 
     # PipelineStage API
 
@@ -663,7 +611,7 @@ class HostLightSource(LightSource):
         super().update(i)
 
     def run(self, i: int) -> list[hp.Command]:
-        return [hp.updateTensor(self.buffer(i), self._tensor), *super().run(i)]
+        return [*self.queue.run(i), *super().run(i)]
 
 
 class ConeLightSource(LightSource):

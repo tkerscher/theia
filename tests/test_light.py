@@ -102,8 +102,8 @@ def test_hostLightSource(rng, polarized: bool):
     sampler = theia.light.LightSampler(light, photon, N, polarized=polarized)
 
     # fill input buffer
-    rays = light.view(0)
-    photons = photon.view(0)
+    rays = light.queue.view(0)
+    photons = photon.queue.view(0)
     x = (rng.random(N) * 10.0 - 5.0) * u.m
     y = (rng.random(N) * 10.0 - 5.0) * u.m
     z = (rng.random(N) * 10.0 - 5.0) * u.m
@@ -127,8 +127,8 @@ def test_hostLightSource(rng, polarized: bool):
 
     # run
     runPipeline([photon, light, sampler])
-    lightResult = sampler.lightView(0)
-    phResult = sampler.wavelengthView(0)
+    lightResult = sampler.lightQueue.view(0)
+    phResult = sampler.wavelengthQueue.view(0)
 
     # check result
     assert lightResult.count == N
@@ -164,7 +164,7 @@ def test_constWavelength():
     sampler = theia.light.LightSampler(light, photons, N, rng=philox)
     # run
     runPipeline([photons, light, sampler])
-    result = sampler.wavelengthView(0)
+    result = sampler.wavelengthQueue.view(0)
 
     # check result
     assert np.all(result["contrib"] == 1.0)
@@ -188,7 +188,7 @@ def test_uniformWavelength(normalize: bool):
     sampler = theia.light.LightSampler(light, photons, N, rng=philox)
     # run
     runPipeline([philox, photons, light, sampler])
-    result = sampler.wavelengthView(0)
+    result = sampler.wavelengthQueue.view(0)
 
     # check result
     assert np.all(result["contrib"] == contrib)
@@ -217,7 +217,7 @@ def test_functionWavelength():
     sampler = theia.light.LightSampler(light, photons, N, rng=philox)
     # run
     runPipeline([philox, photons, light, sampler])
-    result = sampler.wavelengthView(0)
+    result = sampler.wavelengthQueue.view(0)
 
     # check result
     exp_contrib = Fn(lamRange[1]) - Fn(lamRange[0])
@@ -260,7 +260,7 @@ def test_coneLightSource_fwd(polarized: bool):
     )
     # run
     runPipeline([philox, photons, light, sampler])
-    result = sampler.lightView(0)
+    result = sampler.lightQueue.view(0)
 
     # check result
     assert result.count == N
@@ -367,7 +367,7 @@ def test_pencilLightSource(polarized: bool):
     )
     # run
     runPipeline([philox, photons, light, sampler])
-    result = sampler.lightView(0)
+    result = sampler.lightQueue.view(0)
 
     # check result
     assert result.count == N
@@ -398,7 +398,7 @@ def test_sphericalLightSource_fwd(polarized: bool):
     )
     # run
     runPipeline([philox, photons, light, sampler])
-    result = sampler.lightView(0)
+    result = sampler.lightQueue.view(0)
 
     # transform input to numpy array for testing
     position = np.array(position, dtype=np.float32)
@@ -493,8 +493,8 @@ def test_cherenkov_fwd(usePhotons: bool, polarized: bool):
     )
     # run
     runPipeline([philox, photon, light, sampler])
-    samples = sampler.lightView(0)
-    photons = sampler.wavelengthView(0)
+    samples = sampler.lightQueue.view(0)
+    photons = sampler.wavelengthQueue.view(0)
 
     # check result
     distA = np.sqrt(np.square(samples["position"] - startPos).sum(-1))
@@ -612,22 +612,18 @@ def test_cherenkov_bwd(shaderUtil, usePhotons: bool, polarized: bool):
 @pytest.mark.parametrize("polarized", [True, False])
 def test_cherenkovTrack(usePhotons: bool, polarized: bool):
     N = 32 * 256
-    vertices = np.array(
-        [
-            #  x,  y,  z, t
-            [0.0, 0.0, 0.0, 0.0],
-            [1.0, 0.0, 0.0, 20.0],
-            [1.0, 1.0, 0.0, 35.0],
-            [1.0, 1.0, 1.0, 60.0],
-        ]
-    )
-    trackDir = np.array(
-        [
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 0.0, 1.0],
-        ]
-    )
+    vertices = np.array([
+        #  x,  y,  z, t
+        [0.0, 0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0, 20.0],
+        [1.0, 1.0, 0.0, 35.0],
+        [1.0, 1.0, 1.0, 60.0],
+    ])
+    trackDir = np.array([
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+    ])
     dt = np.array([20.0, 15.0, 25.0])
 
     # build media
@@ -653,8 +649,8 @@ def test_cherenkovTrack(usePhotons: bool, polarized: bool):
     # run pipeline
     runPipeline([philox, photon, light, sampler])
     lam0, lam1 = photon.getParam("lambdaRange")
-    samples = sampler.lightView(0)
-    photons = sampler.wavelengthView(0)
+    samples = sampler.lightQueue.view(0)
+    photons = sampler.wavelengthQueue.view(0)
 
     # check result
     assert np.all((samples["position"] >= 0.0) & (samples["position"] <= 1.0))

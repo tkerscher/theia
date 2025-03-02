@@ -129,7 +129,7 @@ def test_SceneForwardTracer_GroundTruth(
     batches = []
 
     def process(config: int, task: int) -> None:
-        batch = dumpQueue(recorder.view(config))
+        batch = dumpQueue(recorder.queue.view(config))
         batches.append(batch)
 
     pipeline = pl.Pipeline(tracer.collectStages())
@@ -433,7 +433,7 @@ def test_SceneBackwardTracer(
 
     def process(config: int, task: int) -> None:
         nonlocal total
-        result = recorder.view(config)
+        result = recorder.queue.view(config)
         result = result[: result.count]
         # undo attenuation
         vg = 1.0 / model.ng * u.c
@@ -897,7 +897,7 @@ def test_VolumeForwardTracer(
 
     def process(config: int, task: int) -> None:
         nonlocal total
-        result = recorder.view(config)
+        result = recorder.queue.view(config)
         result = result[: result.count]
         # undo attenuation
         vg = 1.0 / model.ng * u.c
@@ -1017,7 +1017,7 @@ def test_VolumeBackwardTracer(
 
     def process(config: int, task: int) -> None:
         nonlocal total
-        result = recorder.view(config)
+        result = recorder.queue.view(config)
         result = result[: result.count]
         # undo attenuation
         vg = 1.0 / model.ng * u.c
@@ -1152,7 +1152,7 @@ def test_BidirectionalPathTracer(
 
     def process(config: int, task: int) -> None:
         nonlocal total
-        result = recorder.view(config)
+        result = recorder.queue.view(config)
         result = result[: result.count]
         # undo attenuation
         vg = 1.0 / model.ng * u.c
@@ -1200,7 +1200,7 @@ def test_BidirectionalPathTracer(
 
     def process(config: int, task: int) -> None:
         nonlocal singleTotal
-        result = recorder.view(config)
+        result = recorder.queue.view(config)
         result = result[: result.count]
         # undo attenuation
         vg = 1.0 / model.ng * u.c
@@ -1294,7 +1294,7 @@ def test_DirectTracer(mu_a: float, mu_s: float, g: float, polarized: bool):
     batches = []
 
     def process(config: int, task: int) -> None:
-        batch = dumpQueue(recorder.view(config))
+        batch = dumpQueue(recorder.queue.view(config))
         batches.append(batch)
 
     pipeline = pl.Pipeline(tracer.collectStages())
