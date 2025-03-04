@@ -7,6 +7,9 @@ from hephaistos.queue import IOQueue, QueueBuffer, QueueTensor, QueueView, clear
 
 from ctypes import Structure, c_float, c_uint32
 
+from theia.camera import Camera
+from theia.light import WavelengthSource
+from theia.random import RNG
 from theia.util import ShaderLoader, compileShader, createPreamble
 import theia.units as u
 
@@ -15,6 +18,8 @@ from numpy.typing import NDArray
 
 __all__ = [
     "createValueQueue",
+    "CameraHitResponseItem",
+    "CameraHitResponseSampler",
     "CustomValueResponse",
     "EmptyResponse",
     "Estimator",
@@ -24,7 +29,9 @@ __all__ = [
     "HitRecorder",
     "HitReplay",
     "HitResponse",
+    "PolarizedCameraHitResponseItem",
     "PolarizedHitItem",
+    "SampleValueResponse",
     "StoreValueHitResponse",
     "UniformValueResponse",
     "ValueHitResponse",
@@ -407,6 +414,16 @@ class StoreValueHitResponse(HitResponse):
     queue: QueueTensor | None
         Queue in which the `ValueItem` will be stored.
         If `None` creates one during preparations.
+    updateResponse: bool, default=True
+        If True, when this stage is requested to update by e.g. a pipeline it
+        will also cause the response to update.
+
+    Note
+    ----
+    During the update step in a pipeline, if `updateResponse` is True the
+    response gets also updated making it unnecessary to include as a separate
+    step in most cases. This stage, however, ignores any commands produced by
+    response.run() as it is not clear where to put them chronologically.
     """
 
     name = "Store Value Response"
@@ -414,11 +431,15 @@ class StoreValueHitResponse(HitResponse):
     _sourceCode = ShaderLoader("response.value.store.glsl")
 
     def __init__(
-        self, response: ValueResponse, queue: QueueTensor | None = None
+        self,
+        response: ValueResponse,
+        queue: QueueTensor | None = None,
+        updateResponse: bool = True,
     ) -> None:
         super().__init__()
         self._response = response
         self._queue = queue
+        self._updateResponse = updateResponse
 
     @property
     def queue(self) -> QueueTensor | None:
@@ -442,6 +463,13 @@ class StoreValueHitResponse(HitResponse):
             [guardStart, preamble, self.response.sourceCode, self._sourceCode, guardEnd]
         )
 
+    def bindParams(self, program: hp.Program, i: int) -> None:
+        if self.queue is None:
+            raise RuntimeError("Hit response has not been prepared")
+        super().bindParams(program, i)
+        program.bindParams(ValueQueueOut=self.queue)
+        self.response.bindParams(program, i)
+
     def prepare(self, config: TraceConfig) -> None:
         self.response.prepare(config)
         if self._queue is None:
@@ -452,12 +480,270 @@ class StoreValueHitResponse(HitResponse):
                 f"{self.queue.capacity} but {config.maxHits} needed"
             )
 
-    def bindParams(self, program: hp.Program, i: int) -> None:
-        if self.queue is None:
-            raise RuntimeError("Hit response has not been prepared")
+    def update(self, i):
+        super().update(i)
+        if self._updateResponse:
+            self.response.update(i)
+
+
+class SampleValueResponse(HitResponse):
+    """
+    Response function storing the result of the given `ValueResponse` ordered by
+    the thread id and retrieving them to the host. Meant for testing value
+    response functions.
+
+    Parameters
+    ----------
+    response: ValueResponse
+        Value response function processing hits.
+    updateResponse: bool, default=True
+        If True, when this stage is requested to update by e.g. a pipeline it
+        will also cause the response to update.
+
+    Note
+    ----
+    For now expects a single hit per thread.
+
+    During the update step in a pipeline, if `updateResponse` is True the
+    response gets also updated making it unnecessary to include as a separate
+    step in most cases. This stage, however, ignores any commands produced by
+    response.run() as it is not clear where to put them chronologically.
+    """
+
+    name = "Sample Value Response"
+
+    _sourceCode = ShaderLoader("response.value.sample.glsl")
+
+    def __init__(self, response: ValueResponse, *, updateResponse: bool = True) -> None:
+        super().__init__()
+        self._response = response
+        self._updateResponse = updateResponse
+        # will later be created during prepare()
+        self._tensor = None
+        self._buffer = None
+
+    @property
+    def response(self) -> ValueResponse:
+        """Value response function processing hits."""
+        return self._response
+
+    @property
+    def sourceCode(self) -> str:
+        if self._tensor is None:
+            raise RuntimeError("Response has not been prepared!")
+        # assemble source code
+        guardStart = "#ifndef _INCLUDE_RESPONSE\n#define _INCLUDE_RESPONSE\n"
+        guardEnd = "#endif"
+        # preamble = createPreamble(VALUE_QUEUE_SIZE=self._tensor.size)
+        return "\n".join(
+            [guardStart, self.response.sourceCode, self._sourceCode, guardEnd]
+        )
+
+    def bindParams(self, program, i):
+        if self._tensor is None:
+            raise RuntimeError("Response has not been prepared!")
         super().bindParams(program, i)
-        program.bindParams(ValueQueueOut=self.queue)
+        program.bindParams(ValueQueueOut=self._tensor)
         self.response.bindParams(program, i)
+
+    def prepare(self, config):
+        if config.batchSize != config.maxHits:
+            raise ValueError("batch size must match ")
+        self.response.prepare(config)
+        self._tensor = hp.FloatTensor(config.batchSize)
+        self._buffer = [hp.FloatBuffer(config.batchSize) for _ in range(2)]
+
+    def result(self, i: int) -> NDArray:
+        """Returns the result of the given config"""
+        return self._buffer[i].numpy()
+
+    def update(self, i):
+        super().update(i)
+        if self._updateResponse:
+            self.response.update(i)
+
+    def run(self, i):
+        if self._tensor is None:
+            raise RuntimeError("Response has not been prepared!")
+        return [hp.retrieveTensor(self._tensor, self._buffer[i])]
+
+
+class CameraHitResponseItem(Structure):
+    _fields_ = [
+        ("position", c_float * 3),
+        ("direction", c_float * 3),
+        ("normal", c_float * 3),
+        ("wavelength", c_float),
+        ("timeDelta", c_float),
+        ("contrib", c_float),
+    ]
+
+
+class PolarizedCameraHitResponseItem(Structure):
+    _fields_ = [
+        ("position", c_float * 3),
+        ("direction", c_float * 3),
+        ("normal", c_float * 3),
+        ("wavelength", c_float),
+        ("timeDelta", c_float),
+        ("contrib", c_float),
+        ("polarizationRef", c_float * 3),
+        ("stokes", c_float * 3),
+    ]
+
+
+class CameraHitResponseSampler(PipelineStage):
+    """
+    Util class calling the given hit response with hits sampled from the given
+    camera and storing the results.
+
+    Parameters
+    ----------
+    batchSize: int
+        Number of samples drawn per run
+    wavelengthSource: WavelengthSource
+        Source to sample wavelengths from
+    camera: Camera
+        Camera to sample hits from
+    response: HitResponse
+        Response processing the sampled hits
+    rng: RNG | None, default=None
+        The random number generator used for sampling. May be `None` if both
+        `camera` and `wavelengthSource` do not require random numbers.
+    polarized: bool, default=True
+        Whether to sample and save polarization information
+    blockSize: int, default=128
+        Number of samples drawn per work group
+    code: bytes | None, default=None
+        Compiled source code. If `None`, the byte code get's compiled from
+        source. Note, that the compiled code is not checked. You must ensure
+        it matches the configuration.
+    """
+
+    name = "Camera Hit Response Sampler"
+
+    def __init__(
+        self,
+        batchSize: int,
+        wavelengthSource: WavelengthSource,
+        camera: Camera,
+        response: HitResponse,
+        *,
+        rng: RNG | None = None,
+        polarized: bool = False,
+        blockSize: int = 128,
+        code: bytes | None = None,
+    ) -> None:
+        super().__init__()
+
+        # save params
+        self._batchSize = batchSize
+        self._camera = camera
+        self._response = response
+        self._photons = wavelengthSource
+        self._rng = rng
+        self._polarized = polarized
+        self._blockSize = blockSize
+        self._nRNGSamples = camera.nRNGSamples + wavelengthSource.nRNGSamples
+        if polarized:
+            self._nRNGSamples += 3
+        if self._nRNGSamples > 0 and rng is None:
+            raise ValueError("An RNG is required but none was specified!")
+        # allocate queues
+        item = PolarizedCameraHitResponseItem if polarized else CameraHitResponseItem
+        self._queue = IOQueue(item, batchSize, mode="retrieve", skipCounter=True)
+
+        # prepare response
+        response.prepare(TraceConfig(batchSize, blockSize, batchSize, 1.0, polarized))
+
+        # create code if needed
+        if code is None:
+            preamble = createPreamble(
+                BLOCK_SIZE=blockSize,
+                CAMERA_QUEUE_POLARIZED=polarized,
+                POLARIZATION=polarized,
+                QUEUE_SIZE=batchSize,
+            )
+            headers = {
+                "camera.glsl": camera.sourceCode,
+                "photon.glsl": wavelengthSource.sourceCode,
+                "rng.glsl": "" if rng is None else rng.sourceCode,
+                "response.glsl": response.sourceCode,
+            }
+            code = compileShader("camera.response.sample.glsl", preamble, headers)
+        self._code = code
+        self._program = hp.Program(self._code)
+        # calculate group size
+        self._groups = -(batchSize // -blockSize)
+        # bind memory
+        self._program.bindParams(QueueOut=self._queue.tensor)
+
+    @property
+    def batchSize(self) -> int:
+        """Number of samples per batch"""
+        return self._batchSize
+
+    @property
+    def blockSize(self) -> int:
+        """Number of samples per workgroup"""
+        return self._blockSize
+
+    @property
+    def camera(self) -> Camera:
+        """Camera creating the samples"""
+        return self._camera
+
+    @property
+    def code(self) -> bytes:
+        """Compiled source code. Can be used for caching"""
+        return self._code
+
+    @property
+    def nRNGSamples(self) -> int:
+        """Number of random numbers drawn per sample"""
+        return self._nRNGSamples
+
+    @property
+    def queue(self) -> IOQueue:
+        """Queue holding the sampled items"""
+        return self._queue
+
+    @property
+    def response(self) -> HitResponse:
+        """Response processing the sampled hits"""
+        return self._response
+
+    @property
+    def rng(self) -> RNG | None:
+        """Random number generator used"""
+        return self._rng
+
+    @property
+    def wavelengthSource(self) -> WavelengthSource:
+        """Source from which wavelengths are sampled"""
+        return self._photons
+
+    def collectStages(self) -> list[PipelineStage]:
+        """
+        Returns a list of all pipeline stages involved with this tracer in the
+        correct order suitable for creating a pipeline.
+        """
+        return [
+            *([self.rng] if self.rng is not None else []),
+            self.wavelengthSource,
+            self.camera,
+            self,
+            self.response,
+        ]
+
+    def run(self, i):
+        self._bindParams(self._program, i)
+        self.camera.bindParams(self._program, i)
+        self.wavelengthSource.bindParams(self._program, i)
+        self.response.bindParams(self._program, i)
+        if self.rng is not None:
+            self.rng.bindParams(self._program, i)
+        return [self._program.dispatch(self._groups), *self.queue.run(i)]
 
 
 class HistogramReducer(PipelineStage):

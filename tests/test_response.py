@@ -4,6 +4,10 @@ import numpy as np
 import theia.response
 import theia.units as u
 
+from theia.camera import PointCamera, CameraRayItem, PolarizedCameraRayItem
+from theia.light import UniformWavelengthSource, WavelengthSampleItem
+from theia.random import PhiloxRNG
+
 from hephaistos.pipeline import RetrieveTensorStage, UpdateTensorStage, runPipeline
 from hephaistos.queue import QueueTensor, as_queue
 
@@ -149,3 +153,40 @@ def test_uniformResponse(rng):
 
     # compare with expected results
     assert np.allclose(value, hits["contrib"])
+
+
+@pytest.mark.parametrize("polarized", [True, False])
+def test_CameraHitResponseSamples(polarized: bool):
+    N = 64 * 1024
+
+    # create sampling pipline
+    rng = PhiloxRNG(key=0xC0FFEE)
+    camera = PointCamera()
+    photons = UniformWavelengthSource(lambdaRange=(400.0, 500.0) * u.nm)
+    value = theia.response.UniformValueResponse()
+    response = theia.response.SampleValueResponse(value)
+    sampler = theia.response.CameraHitResponseSampler(
+        N,
+        photons,
+        camera,
+        response,
+        rng=rng,
+        polarized=polarized,
+    )
+    runPipeline(sampler.collectStages())
+
+    # check wether we can access the queue
+    queue = sampler.queue.view(0)
+    result = response.result(0)
+    assert queue.count == N
+    assert len(result) == N
+    if polarized:
+        item = theia.response.PolarizedCameraHitResponseItem
+    else:
+        item = theia.response.CameraHitResponseItem
+    exp_fields = {name for name, type in item._fields_}
+    for field in exp_fields:
+        assert queue[field] is not None
+
+    # we do not check the fields for now as this would make the test a test of
+    # the camera
