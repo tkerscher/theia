@@ -231,6 +231,7 @@ def test_VolumeBackwardTracer(
         assert stats.detected > 0
 
 
+@pytest.mark.parametrize("useRefractedHitDir", [True, False])
 @pytest.mark.parametrize("disableDirect", [True, False])
 @pytest.mark.parametrize("disableVolumeBorder", [True, False])
 @pytest.mark.parametrize("disableTransmission", [True, False])
@@ -242,6 +243,7 @@ def test_SceneForwardTracer(
     disableVolumeBorder: bool,
     disableTransmission: bool,
     disableTarget: bool,
+    useRefractedHitDir: bool,
 ):
     if not hp.isRaytracingEnabled():
         pytest.skip("ray tracing is not supported")
@@ -307,6 +309,7 @@ def test_SceneForwardTracer(
         disableDirectLighting=disableDirect,
         disableTransmission=disableTransmission,
         disableVolumeBorder=disableVolumeBorder,
+        useRefractedHitDir=useRefractedHitDir,
     )
     # run pipeline
     pl.runPipeline(tracer.collectStages())
@@ -476,8 +479,12 @@ def test_SceneBackwardTracer(
 @pytest.mark.parametrize("disableVolumeBorder", [True, False])
 @pytest.mark.parametrize("disableTransmission", [True, False])
 @pytest.mark.parametrize("disableTarget", [True, False])
+@pytest.mark.parametrize("useRefractedHitDir", [True, False])
 def test_SceneBackwardTargetTracer(
-    disableVolumeBorder: bool, disableTransmission: bool, disableTarget: bool
+    disableVolumeBorder: bool,
+    disableTransmission: bool,
+    disableTarget: bool,
+    useRefractedHitDir: bool,
 ) -> None:
     if not hp.isRaytracingEnabled():
         pytest.skip("ray tracing not supported")
@@ -538,6 +545,7 @@ def test_SceneBackwardTargetTracer(
         callback=stats,
         disableTransmission=disableTransmission,
         disableVolumeBorder=disableVolumeBorder,
+        useRefractedHitDir=useRefractedHitDir,
     )
     # run pipeline
     pl.runPipeline(tracer.collectStages())

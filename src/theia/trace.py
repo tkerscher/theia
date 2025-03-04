@@ -1005,6 +1005,11 @@ class SceneForwardTracer(Tracer):
         Disables GPU code handling volume borders, which may improve performance
         if there are none. Settings this to `True` while the scene contains
         volume border will produce wrong results.
+    useRefractedHitDir: bool, default=False
+        If True, uses the refracted ray direction as the incident direction when
+        creating hits. Only affects materials without the `BLACK_BODY` flag,
+        i.e. hits on a surface marked as black body will always use the
+        unrefracted direction regardless of this option.
     blockSize: int, default=128
         Number of threads in a single work group
     code: bytes | None, default=None
@@ -1058,6 +1063,7 @@ class SceneForwardTracer(Tracer):
         disableDirectLighting: bool = False,
         disableTransmission: bool = False,
         disableVolumeBorder: bool = False,
+        useRefractedHitDir: bool = False,
         blockSize: int = 128,
         code: bytes | None = None,
     ) -> None:
@@ -1103,6 +1109,7 @@ class SceneForwardTracer(Tracer):
         self._directLightingDisabled = disableDirectLighting
         self._transmissionDisabled = disableTransmission
         self._volumeBorderDisabled = disableVolumeBorder
+        self._useRefractedHitDir = useRefractedHitDir
         self.setParams(
             targetIdx=targetIdx,
             scatterCoefficient=scatterCoefficient,
@@ -1124,6 +1131,7 @@ class SceneForwardTracer(Tracer):
                 DISABLE_MIS=targetGuide is None,
                 DISABLE_TRANSMISSION=disableTransmission,
                 DISABLE_VOLUME_BORDER=disableVolumeBorder,
+                HIT_USE_TRANSMITTED_DIR=useRefractedHitDir,
                 PATH_LENGTH=maxPathLength,
                 POLARIZATION=polarized,
             )
@@ -1157,6 +1165,11 @@ class SceneForwardTracer(Tracer):
     def directLightingDisabled(self) -> bool:
         """Whether direct lighting is disabled"""
         return self._directLightingDisabled
+    
+    @property
+    def hitsUseRefractedDir(self) -> bool:
+        """Whether the refracted ray direction is used to create hits."""
+        return self._useRefractedHitDir
 
     @property
     def maxPathLength(self) -> int:
@@ -1529,6 +1542,11 @@ class SceneBackwardTargetTracer(Tracer):
         Disables GPU code handling volume borders, which may improve performance
         if there are none. Settings this to `True` while the scene contains
         volume border will produce wrong results.
+    useRefractedHitDir: bool, default=False
+        If True, uses the refracted ray direction as the incident direction when
+        creating hits. Only affects materials without the `BLACK_BODY` flag,
+        i.e. hits on a surface marked as black body will always use the
+        unrefracted direction regardless of this option.
     blockSize: int, default=128
         Number of threads in a single work group
     code: bytes | None, default=None
@@ -1584,6 +1602,7 @@ class SceneBackwardTargetTracer(Tracer):
         maxTime: float = 1000.0 * u.ns,
         disableTransmission: bool = False,
         disableVolumeBorder: bool = False,
+        useRefractedHitDir: bool = False,
         blockSize: int = 128,
         code: bytes | None = None,
     ) -> None:
@@ -1626,6 +1645,7 @@ class SceneBackwardTargetTracer(Tracer):
         self._maxPathLength = maxPathLength
         self._transmissionDisabled = disableTransmission
         self._volumeBorderDisabled = disableVolumeBorder
+        self._useRefractedHitDir = useRefractedHitDir
         self.setParams(
             targetId=targetId,
             scatterCoefficient=scatterCoefficient,
@@ -1646,6 +1666,7 @@ class SceneBackwardTargetTracer(Tracer):
                 DISABLE_MIS=targetGuide is None,
                 DISABLE_TRANSMISSION=disableTransmission,
                 DISABLE_VOLUME_BORDER=disableVolumeBorder,
+                HIT_USE_TRANSMITTED_DIR=useRefractedHitDir,
                 PATH_LENGTH=maxPathLength,
             )
             guideCode = "" if targetGuide is None else targetGuide.sourceCode
@@ -1678,6 +1699,11 @@ class SceneBackwardTargetTracer(Tracer):
     def code(self) -> bytes:
         """Compiled source code. Can be used for caching"""
         return self._code
+
+    @property
+    def hitsUseRefractedDir(self) -> bool:
+        """Whether the refracted ray direction is used to create hits."""
+        return self._useRefractedHitDir
 
     @property
     def maxPathLength(self) -> int:

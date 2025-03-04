@@ -40,10 +40,19 @@ void createResponse(
     //if target is not absorbing, we have to emulate a transmission before the
     //response as we have to subtract the reflected part.
     if (!absorb) {
-        //remember current direction, as transmitRay also refracts
+        #ifdef HIT_USE_TRANSMITTED_DIR
+
+        //use the transmitted ray for hit
+        transmitRay(ray, hit, surface);
+
+        #else
+
+        //call transmitRay for transmission calculation, but restore incident dir
         vec3 dir = ray.state.direction;
         transmitRay(ray, hit, surface);
         ray.state.direction = dir;
+
+        #endif
     }
 
     //create response
