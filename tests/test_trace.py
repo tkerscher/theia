@@ -20,10 +20,15 @@ from common.models import WaterModel
 
 @pytest.mark.parametrize("disableDirect", [True, False])
 @pytest.mark.parametrize("disableTarget", [True, False])
+@pytest.mark.parametrize("disableScattering", [True, False])
 @pytest.mark.parametrize("limitTime", [True, False])
 @pytest.mark.parametrize("polarized", [True, False])
 def test_VolumeForwardTracer(
-    disableDirect: bool, disableTarget: bool, limitTime: bool, polarized: bool
+    disableDirect: bool,
+    disableTarget: bool,
+    disableScattering: bool,
+    limitTime: bool,
+    polarized: bool,
 ):
     N = 32 * 256
     N_SCATTER = 6
@@ -62,8 +67,8 @@ def test_VolumeForwardTracer(
         rng,
         medium=store.media["water"],
         nScattering=N_SCATTER,
+        scatterCoefficient=0.0 if disableScattering else float("NaN"),
         callback=stats,
-        # callback=track,
         maxTime=T_MAX,
         polarized=polarized,
         disableDirectLighting=disableDirect,
@@ -74,7 +79,13 @@ def test_VolumeForwardTracer(
 
     # check hits
     hits = recorder.queue.view(0)
-    assert hits.count > 0
+    if disableDirect and disableScattering:
+        # this combination makes it impossible for the tracer to create hits
+        assert hits.count == 0
+        assert stats.scattered == 0
+        return  # nothing more to check
+    else:
+        assert hits.count > 0
     assert hits.count <= tracer.maxHits
     hits = hits[: hits.count]
 
@@ -104,7 +115,10 @@ def test_VolumeForwardTracer(
     # NOTE: We no longer report hits with zero contrib.
     #       The asserts commented out no longer hold
     assert stats.created == tracer.batchSize
-    assert stats.scattered > 0
+    if disableScattering:
+        assert stats.scattered == 0
+    else:
+        assert stats.scattered > 0
     if disableDirect and disableTarget:
         assert stats.absorbed > 0
         assert stats.detected > 0
@@ -131,10 +145,15 @@ def test_VolumeForwardTracer(
 
 @pytest.mark.parametrize("disableDirect", [True, False])
 @pytest.mark.parametrize("disableTarget", [True, False])
+@pytest.mark.parametrize("disableScattering", [True, False])
 @pytest.mark.parametrize("limitTime", [True, False])
 @pytest.mark.parametrize("polarized", [True, False])
 def test_VolumeBackwardTracer(
-    disableDirect: bool, disableTarget: bool, limitTime: bool, polarized: bool
+    disableDirect: bool,
+    disableTarget: bool,
+    disableScattering: bool,
+    limitTime: bool,
+    polarized: bool,
 ):
     N = 32 * 256
     N_SCATTER = 6
@@ -177,6 +196,7 @@ def test_VolumeBackwardTracer(
         callback=stats,
         medium=store.media["water"],
         nScattering=N_SCATTER,
+        scatterCoefficient=0.0 if disableScattering else float("NaN"),
         target=None if disableTarget else target,
         maxTime=T_MAX if limitTime else 10.0 * u.ms,
         polarized=polarized,
@@ -187,7 +207,13 @@ def test_VolumeBackwardTracer(
 
     # check hits
     hits = recorder.queue.view(0)
-    assert hits.count > 0
+    if disableDirect and disableScattering:
+        # this combination makes it impossible for the tracer to create hits
+        assert hits.count == 0
+        assert stats.scattered == 0
+        return  # nothing more to check
+    else:
+        assert hits.count > 0
     assert hits.count <= tracer.maxHits
     hits = hits[: hits.count]
 
@@ -196,7 +222,8 @@ def test_VolumeBackwardTracer(
     assert np.min(hits["time"]) >= t_min
     if limitTime:
         assert np.max(hits["time"]) <= T_MAX
-    else:
+    elif not disableScattering:
+        # without scattering rays will immediately leave the volume
         assert np.max(hits["time"]) > T_MAX
 
     # sanity check polarization
@@ -217,8 +244,11 @@ def test_VolumeBackwardTracer(
         assert np.abs(np.abs((polRef_exp * polRef).sum(-1))[mask] - 1.0).max() < 1e-6
 
     # check config via stats
-    assert stats.scattered > 0
-    if disableTarget:
+    if disableScattering:
+        assert stats.scattered == 0
+    else:
+        assert stats.scattered > 0
+    if disableTarget or disableScattering:
         assert stats.absorbed == 0
     else:
         assert stats.absorbed > 0
@@ -236,6 +266,7 @@ def test_VolumeBackwardTracer(
 @pytest.mark.parametrize("disableVolumeBorder", [True, False])
 @pytest.mark.parametrize("disableTransmission", [True, False])
 @pytest.mark.parametrize("disableTarget", [True, False])
+@pytest.mark.parametrize("disableScattering", [True, False])
 @pytest.mark.parametrize("polarized", [True, False])
 def test_SceneForwardTracer(
     polarized: bool,
@@ -243,6 +274,7 @@ def test_SceneForwardTracer(
     disableVolumeBorder: bool,
     disableTransmission: bool,
     disableTarget: bool,
+    disableScattering: bool,
     useRefractedHitDir: bool,
 ):
     if not hp.isRaytracingEnabled():
@@ -306,6 +338,7 @@ def test_SceneForwardTracer(
         maxTime=T_MAX,
         polarized=polarized,
         callback=stats,
+        scatterCoefficient=0.0 if disableScattering else float("NaN"),
         disableDirectLighting=disableDirect,
         disableTransmission=disableTransmission,
         disableVolumeBorder=disableVolumeBorder,
@@ -319,6 +352,8 @@ def test_SceneForwardTracer(
     assert hits.count > 0
     assert hits.count <= tracer.maxHits
     hits = hits[: hits.count]
+    if disableScattering:
+        assert stats.scattered == 0
 
     r_hits = np.sqrt(np.square(hits["position"]).sum(-1))
     assert np.all((r_hits <= 1.0) & (r_hits >= r_scale))
@@ -350,12 +385,14 @@ def test_SceneForwardTracer(
 @pytest.mark.parametrize("disableDirect", [True, False])
 @pytest.mark.parametrize("disableVolumeBorder", [True, False])
 @pytest.mark.parametrize("disableTransmission", [True, False])
+@pytest.mark.parametrize("disableScattering", [True, False])
 @pytest.mark.parametrize("polarized", [True, False])
 def test_SceneBackwardTracer(
     polarized: bool,
     disableDirect: bool,
     disableVolumeBorder: bool,
     disableTransmission: bool,
+    disableScattering: bool,
 ):
     if not hp.isRaytracingEnabled():
         pytest.skip("ray tracing is not supported")
@@ -429,6 +466,7 @@ def test_SceneBackwardTracer(
         maxPathLength=N_SCATTER,
         maxTime=T_MAX,
         polarized=polarized,
+        scatterCoefficient=0.0 if disableScattering else float("NaN"),
         disableDirectLighting=disableDirect,
         disableTransmission=disableTransmission,
         disableVolumeBorder=disableVolumeBorder,
@@ -438,6 +476,11 @@ def test_SceneBackwardTracer(
 
     # check hits
     hits = recorder.queue.view(0)
+    if disableScattering and disableDirect:
+        # We can only connect to the light source at scatter points -> expect no hits
+        assert stats.scattered == 0
+        assert hits.count == 0
+        return  # nothing more to test
     assert hits.count > 0
     assert hits.count <= tracer.maxHits
     hits = hits[: hits.count]
@@ -461,8 +504,11 @@ def test_SceneBackwardTracer(
         assert np.abs(np.abs((polRef_exp * polRef).sum(-1))[mask] - 1.0).max() < 1e-6
 
     # check config via stats
-    assert stats.scattered > 0
     assert stats.absorbed > 0
+    if disableScattering:
+        assert stats.scattered == 0
+    else:
+        assert stats.scattered > 0
     if disableDirect:
         assert stats.created == tracer.batchSize
         # there will only be hits from shadow rays

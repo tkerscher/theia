@@ -35,11 +35,12 @@ float sampleScatterLength(
     float u                         ///< Random number used for sampling
 ) {
     float dist = params.maxDist;
-    //negative values indicate that we should IS scattering length
-    float sampleCoef = params.scatterCoefficient <= 0.0 ?
-        ray.constants.mu_s : params.scatterCoefficient;
+    //negative values and NaN indicate that we should IS scattering length
+    //zero equals to no scattering
+    float sampleCoef = params.scatterCoefficient >= 0.0 ?
+        params.scatterCoefficient : ray.constants.mu_s;
     bool canScatter = ray.constants.mu_s > 0.0;
-    if (canScatter) {
+    if (canScatter && sampleCoef != 0.0) {
         //sample exponential distribution
         //use u -> 1.0 - u > 0.0 to be safe on the log
         dist = -log(1.0 - u) / sampleCoef;
@@ -109,10 +110,16 @@ void updateRayIS(
     if (!canScatter)
         return;
     
-    //negative values indicate that we should IS scattering length
-    float sampleCoef = params.scatterCoefficient <= 0.0 ?
-        ray.constants.mu_s : params.scatterCoefficient;
+    //negative values and NaN indicate that we should IS scattering length
+    //zero disables scattering sampling
+    float sampleCoef = params.scatterCoefficient >= 0.0 ?
+        params.scatterCoefficient : ray.constants.mu_s;
     
+    //Note that here we handle correctly the case of sampleCoef == 0.0, i.e.
+    //volume scattering is disabled:
+    // - If we hit something, we add zero to log_contrib, i.e. do nothing
+    // - If we miss, we will discard the ray anyway (ray lost event)
+    //    -> it should be fine to have "nonsense" (inf) contrib
     ray.log_contrib += sampleCoef * dist;
     if (!hit) {
         //if we hit anything, the actual prop is to travel at least dist

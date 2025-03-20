@@ -452,10 +452,12 @@ class VolumeForwardTracer(Tracer):
         Number of simulated scattering events
     target: SphereBBox, default=((0,0,0), r=1.0)
         Sphere the tracer targets
-    scatterCoefficient: float | None, default=None
+    scatterCoefficient: float, default=NaN
         Scatter coefficient used for sampling ray lengths. Tuning this parameter
-        affects the time distribution of the hits. If None, tracer will use the
-        scattering length of the media the ray currently propagates.
+        affects the time distribution of the hits. If negative or NaN, tracer
+        will importance sample the medium the ray currently propagates by
+        using the corresponding scattering coefficient. A value of zero disables
+        volume scattering all together.
     traceBBox: RectBBox, default=(-1km,1km)^3
         Boundary box marking limits beyond tracing of an individual ray is
         stopped
@@ -483,9 +485,9 @@ class VolumeForwardTracer(Tracer):
     Stage Parameters
     ----------------
     scatterCoefficient: float
-        Scatter coefficient used for sampling ray lengths. Zero or negative
-        values will cause the tracer to use the current scattering length
-        instead.
+        Scatter coefficient used for sampling ray lengths. Negative values or
+        NaN will cause the tracer to use the current scattering length
+        instead. A value of zero disables volume scattering all together.
     medium: int
         device address of the medium the scene is emerged in, e.g. the
         address of a water medium for an underwater simulation.
@@ -525,7 +527,7 @@ class VolumeForwardTracer(Tracer):
         medium: int,
         callback: TraceEventCallback = EmptyEventCallback(),
         nScattering: int = 6,
-        scatterCoefficient: float | None = None,
+        scatterCoefficient: float = float("NaN"),
         traceBBox: RectBBox = RectBBox((-1.0 * u.km,) * 3, (1.0 * u.km,) * 3),
         maxTime: float = 1000.0 * u.ns,
         polarized: bool = False,
@@ -558,8 +560,6 @@ class VolumeForwardTracer(Tracer):
             polarized=polarized,
         )
         # save params
-        if scatterCoefficient is None:
-            scatterCoefficient = 0.0
         self._source = source
         self._wavelengthSource = wavelengthSource
         self._rng = rng
@@ -722,10 +722,12 @@ class VolumeBackwardTracer(Tracer):
     target: Optional[Target], default=None
         Target model used to determine self shadowing. If None, this test is
         disabled.
-    scatterCoefficient: float | None, default=None
+    scatterCoefficient: float, default=NaN
         Scatter coefficient used for sampling ray lengths. Tuning this parameter
-        affects the time distribution of the hits. If None, tracer will use the
-        scattering length of the media the ray currently propagates.
+        affects the time distribution of the hits. If negative or NaN, tracer
+        will importance sample the medium the ray currently propagates by
+        using the corresponding scattering coefficient. A value of zero disables
+        volume scattering all together.
     traceBBox: RectBBox, default=(-1km,1km)^3
         Boundary box marking limits beyond tracing of an individual ray is
         stopped
@@ -747,9 +749,9 @@ class VolumeBackwardTracer(Tracer):
     Stage Parameters
     ----------------
     scatterCoefficient: float
-        Scatter coefficient used for sampling ray lengths. Zero or negative
-        values will cause the tracer to use the current scattering length
-        instead.
+        Scatter coefficient used for sampling ray lengths. Negative values or
+        NaN will cause the tracer to use the current scattering length
+        instead. A value of zero disables volume scattering all together.
     medium: int
         device address of the medium the scene is emerged in, e.g. the
         address of a water medium for an underwater simulation.
@@ -763,6 +765,10 @@ class VolumeBackwardTracer(Tracer):
     maxTime: float
         Max total time including delay from the source and travel time, after
         which a ray gets stopped
+
+    Note
+    ----
+    No hits will be created if scattering is disabled.
     """
 
     name = "Volume Backward Tracer"
@@ -790,7 +796,7 @@ class VolumeBackwardTracer(Tracer):
         callback: TraceEventCallback = EmptyEventCallback(),
         nScattering: int = 6,
         target: Target | None = None,
-        scatterCoefficient: float | None = None,
+        scatterCoefficient: float = float("NaN"),
         traceBBox: RectBBox = RectBBox((-1.0 * u.km,) * 3, (1.0 * u.km,) * 3),
         maxTime: float = 1000.0 * u.ns,
         polarized: bool = False,
@@ -829,8 +835,6 @@ class VolumeBackwardTracer(Tracer):
             polarized=polarized,
         )
         # save params
-        if scatterCoefficient is None:
-            scatterCoefficient = 0.0
         self._source = source
         self._camera = camera
         self._wavelengthSource = wavelengthSource
@@ -983,10 +987,12 @@ class SceneForwardTracer(Tracer):
         Hits on other detectors are ignored to make estimates easier.
     targetGuide: TargetGuide | None, default=None
         Optional target proxy used to sample scatter directions towards it.
-    scatterCoefficient: float | None, default=None
+    scatterCoefficient: float, default=NaN
         Scatter coefficient used for sampling ray lengths. Tuning this parameter
-        affects the time distribution of the hits. If None, tracer will use the
-        scattering length of the media the ray currently propagates.
+        affects the time distribution of the hits. If negative or NaN, tracer
+        will importance sample the medium the ray currently propagates by
+        using the corresponding scattering coefficient. A value of zero disables
+        volume scattering all together.
     sourceMedium: int | None, default=None
         Medium surrounding the light source. If None, uses the scene`s medium.
     maxTime: float, default=1000.0 ns
@@ -1022,9 +1028,9 @@ class SceneForwardTracer(Tracer):
     targetIdx: int
         Id of the detector, the tracer should try to hit.
     scatterCoefficient: float
-        Scatter coefficient used for sampling ray lengths. Zero or negative
-        values will cause the tracer to use the current scattering length
-        instead.
+        Scatter coefficient used for sampling ray lengths. Negative values or
+        NaN will cause the tracer to use the current scattering length
+        instead. A value of zero disables volume scattering all together.
     maxTime: float
         Max total time including delay from the source and travel time, after
         which a ray gets stopped
@@ -1056,7 +1062,7 @@ class SceneForwardTracer(Tracer):
         maxPathLength: int = 6,
         targetIdx: int = 0,
         targetGuide: TargetGuide | None = None,
-        scatterCoefficient: float | None = None,
+        scatterCoefficient: float = float("NaN"),
         sourceMedium: int | None = None,
         maxTime: float = 1000.0 * u.ns,
         polarized: bool = False,
@@ -1097,8 +1103,6 @@ class SceneForwardTracer(Tracer):
         if sourceMedium is None:
             sourceMedium = scene.medium
         # save params
-        if scatterCoefficient is None:
-            scatterCoefficient = 0.0
         self._source = source
         self._wavelengthSource = wavelengthSource
         self._callback = callback
@@ -1165,7 +1169,7 @@ class SceneForwardTracer(Tracer):
     def directLightingDisabled(self) -> bool:
         """Whether direct lighting is disabled"""
         return self._directLightingDisabled
-    
+
     @property
     def hitsUseRefractedDir(self) -> bool:
         """Whether the refracted ray direction is used to create hits."""
@@ -1264,10 +1268,12 @@ class SceneBackwardTracer(Tracer):
     maxPathLength: int, default=6
         Maximum number of events per simulated ray. An event includes volume
         scatter and scene intersections.
-    scatterCoefficient: float | None, default=None
+    scatterCoefficient: float, default=NaN
         Scatter coefficient used for sampling ray lengths. Tuning this parameter
-        affects the time distribution of the hits. If None, tracer will use the
-        scattering length of the media the ray currently propagates.
+        affects the time distribution of the hits. If negative or NaN, tracer
+        will importance sample the medium the ray currently propagates by
+        using the corresponding scattering coefficient. A value of zero disables
+        volume scattering all together.
     maxTime: float, default=1000.0 ns
         Max total time including delay from source, camera and travel time after
         which a ray gets stopped
@@ -1293,12 +1299,16 @@ class SceneBackwardTracer(Tracer):
     Stage Parameters
     ----------------
     scatterCoefficient: float
-        Scatter coefficient used for sampling ray lengths. Zero or negative
-        values will cause the tracer to use the current scattering length
-        instead.
+        Scatter coefficient used for sampling ray lengths. Negative values or
+        NaN will cause the tracer to use the current scattering length
+        instead. A value of zero disables volume scattering all together.
     maxTime: float
         Max total time including delay from the source and travel time, after
         which a ray gets stopped
+
+    Note
+    ----
+    No hits will be created if scattering is disabled.
     """
 
     name = "Scene Backward Tracer"
@@ -1326,7 +1336,7 @@ class SceneBackwardTracer(Tracer):
         callback: TraceEventCallback = EmptyEventCallback(),
         medium: int | None = None,
         maxPathLength: int = 6,
-        scatterCoefficient: float | None = None,
+        scatterCoefficient: float = float("NaN"),
         maxTime: float = 1000.0 * u.ns,
         polarized: bool = False,
         disableDirectLighting: bool = False,
@@ -1366,8 +1376,6 @@ class SceneBackwardTracer(Tracer):
             polarized=polarized,
         )
         # save params
-        if scatterCoefficient is None:
-            scatterCoefficient = 0.0
         self._source = source
         self._camera = camera
         self._wavelengthSource = wavelengthSource
@@ -1528,10 +1536,12 @@ class SceneBackwardTargetTracer(Tracer):
         Hits on other sources are ignored to make estimates easier.
     targetGuide: TargetGuide | None, default=None
         Optional target proxy used to sample scatter directions towards it.
-    scatterCoefficient: float | None, default=None
+    scatterCoefficient: float, default=NaN
         Scatter coefficient used for sampling ray lengths. Tuning this parameter
-        affects the time distribution of the hits. If None, tracer will use the
-        scattering length of the media the ray currently propagates.
+        affects the time distribution of the hits. If negative or NaN, tracer
+        will importance sample the medium the ray currently propagates by
+        using the corresponding scattering coefficient. A value of zero disables
+        volume scattering all together.
     maxTime: float, default=1000.0 ns
         Max total time including delay from camera and travel time after which a
         ray gets stopped
@@ -1559,9 +1569,9 @@ class SceneBackwardTargetTracer(Tracer):
     targetId: int
         Id of the light source, the tracer should try to hit.
     scatterCoefficient: float
-        Scatter coefficient used for sampling ray lengths. Zero or negative
-        values will cause the tracer to use the current scattering length
-        instead.
+        Scatter coefficient used for sampling ray lengths. Negative values or
+        NaN will cause the tracer to use the current scattering length
+        instead. A value of zero disables volume scattering all together.
     maxTime: float
         Max total time including delay from the source and travel time, after
         which a ray gets stopped
@@ -1598,7 +1608,7 @@ class SceneBackwardTargetTracer(Tracer):
         maxPathLength: int = 6,
         targetId: int = 0,
         targetGuide: TargetGuide | None = None,
-        scatterCoefficient: float | None = None,
+        scatterCoefficient: float = float("NaN"),
         maxTime: float = 1000.0 * u.ns,
         disableTransmission: bool = False,
         disableVolumeBorder: bool = False,
@@ -1634,8 +1644,6 @@ class SceneBackwardTargetTracer(Tracer):
         if medium is None:
             medium = scene.medium
         # save params
-        if scatterCoefficient is None:
-            scatterCoefficient = 0.0
         self._wavelengthSource = wavelengthSource
         self._callback = callback
         self._camera = camera
@@ -2012,10 +2020,13 @@ class BidirectionalPathTracer(Tracer):
     targetIdx: int, default=0
         Id of the detector, the tracer should generate hits for.
         Hits on other detectors are ignored to make estimates easier.
-    scatterCoefficient: float | None, default=None
+    scatterCoefficient: float, default=NaN
         Scatter coefficient used for sampling ray lengths. Tuning this parameter
-        affects the time distribution of the hits. If None, tracer will use the
-        scattering length of the media the ray currently propagates.
+        affects the time distribution of the hits. If negative or NaN, tracer
+        will importance sample the medium the ray currently propagates by
+        using the corresponding scattering coefficient. A value of zero disables
+        volume scattering all together and should thus not be used for this
+        tracer.
     maxTime: float, default=1000.0 ns
         Max total time including delay from each source and travel time, after
         which no responses are generated.
@@ -2040,9 +2051,10 @@ class BidirectionalPathTracer(Tracer):
     Stage Parameters
     ----------------
     scatterCoefficient: float
-        Scatter coefficient used for sampling ray lengths. Zero or negative
-        values will cause the tracer to use the current scattering length
-        instead.
+        Scatter coefficient used for sampling ray lengths. Negative values or
+        NaN will cause the tracer to use the current scattering length
+        instead. A value of zero disables volume scattering all together and
+        thus should not be used with this tracer.
     maxTime: float
         Max total time including delay from each source and travel time, after
         which no responses are generated.
@@ -2081,7 +2093,7 @@ class BidirectionalPathTracer(Tracer):
         callbackScope: Literal["light", "camera", "both"] = "both",
         lightPathLength: int = 6,
         cameraPathLength: int = 6,
-        scatterCoefficient: float | None = None,
+        scatterCoefficient: float = float("NaN"),
         maxTime: float = 1000.0 * u.ns,
         polarized: bool = False,
         cameraMedium: int | None = None,
@@ -2112,8 +2124,6 @@ class BidirectionalPathTracer(Tracer):
         )
 
         # save params
-        if scatterCoefficient is None:
-            scatterCoefficient = 0.0
         self._wavelengthSource = wavelengthSource
         self._source = source
         self._camera = camera

@@ -826,7 +826,7 @@ def test_SceneBackwardTargetTrace() -> None:
         (0.05, 0.01, 0.05, -0.9, False, True, False, 0.012),
         (0.05, 0.01, 0.05, 0.9, True, True, False, 2.8e-4),
         (0.05, 0.01, 0.05, 0.9, True, False, False, 2.9e-3),
-        (0.05, 0.01, None, 0.9, False, True, True, 2.9e-3),
+        (0.05, 0.01, np.nan, 0.9, False, True, True, 2.9e-3),
         (0.0, 0.005, 0.05, 0.0, False, True, True, 5e-4),
         (0.0, 0.005, 0.05, 0.0, True, True, True, 1.2e-3),
         (0.05, 0.01, 0.05, -0.9, False, True, True, 0.012),
@@ -945,7 +945,7 @@ def test_VolumeForwardTracer(
     [
         (0.0, 0.01, 0.05, 0.0, False, False, 5.5e-3),
         (0.05, 0.005, 0.05, 0.0, False, False, 3.0e-3),
-        (0.05, 0.005, None, 0.0, False, False, 3.0e-3),
+        (0.05, 0.005, np.nan, 0.0, False, False, 3.0e-3),
         (0.0, 0.01, 0.05, 0.0, False, True, 5.1e-3),
         (0.05, 0.005, 0.05, 0.0, True, True, 4.8e-3),
         (0.05, 0.005, 0.05, 0.5, True, False, 8.0e-3),
