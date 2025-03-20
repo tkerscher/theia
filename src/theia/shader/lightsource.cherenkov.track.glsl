@@ -1,9 +1,6 @@
 #ifndef _INCLUDE_LIGHTSOURCE_CHERENKOV
 #define _INCLUDE_LIGHTSOURCE_CHERENKOV
 
-#extension GL_EXT_buffer_reference2 : require
-#extension GL_EXT_buffer_reference_uvec2 : require
-
 #include "math.glsl"
 #include "material.glsl"
 

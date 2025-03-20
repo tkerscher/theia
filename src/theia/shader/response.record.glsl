@@ -1,10 +1,6 @@
 #ifndef _INCLUDE_RESPONSE_RECORD
 #define _INCLUDE_RESPONSE_RECORD
 
-#extension GL_KHR_shader_subgroup_arithmetic : require
-#extension GL_KHR_shader_subgroup_ballot : require
-#extension GL_KHR_shader_subgroup_basic : require
-
 #include "response.queue.glsl"
 
 layout(scalar) writeonly buffer HitQueueOut {

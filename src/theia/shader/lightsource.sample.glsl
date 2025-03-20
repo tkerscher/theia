@@ -1,6 +1,3 @@
-#extension GL_GOOGLE_include_directive : require
-#extension GL_EXT_scalar_block_layout : require
-
 //check macro settings
 #ifndef BATCH_SIZE
 #error "BATCH_SIZE not defined"

@@ -1,8 +1,6 @@
 #ifndef _INCLUDE_RESPONSE_HISTOGRAM
 #define _INCLUDE_RESPONSE_HISTOGRAM
 
-#extension GL_EXT_shader_atomic_float : require
-
 struct Histogram {
     float bins[N_BINS];
 };

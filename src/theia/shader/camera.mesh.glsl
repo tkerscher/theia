@@ -1,8 +1,6 @@
 #ifndef _INCLUDE_CAMERARAYSOURCE_MESH
 #define _INCLUDE_CAMERARAYSOURCE_MESH
 
-#extension GL_EXT_ray_query : require
-
 #include "math.glsl"
 #include "ray.surface.glsl"
 #include "scene.types.glsl"

@@ -1,6 +1,3 @@
-#extension GL_GOOGLE_include_directive : require
-#extension GL_EXT_scalar_block_layout : require
-
 layout(local_size_x = 32) in;
 
 #include "target.common.glsl"

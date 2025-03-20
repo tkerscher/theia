@@ -1,8 +1,6 @@
 #ifndef _PHILOX_INCLUDE
 #define _PHILOX_INCLUDE
 
-#extension GL_KHR_shader_subgroup_vote : require
-
 #include "random.util.glsl"
 
 #define PHILOX_ITERATION 10

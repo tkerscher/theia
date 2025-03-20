@@ -6,6 +6,8 @@ import os.path
 import sys
 import pytest
 
+from theia.util import PREAMBLE
+
 # needed to discover common package...
 sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 
@@ -44,7 +46,7 @@ class ShaderUtil:
             return file.read()
 
     def compileTestShader(self, shader, preamble="", headers={}) -> bytes:
-        source = preamble + "\n" + self.getTestShader(shader)
+        source = "\n".join([PREAMBLE, preamble, self.getTestShader(shader)])
         code = self.compiler.compile(source, headers)
         return code
 

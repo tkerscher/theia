@@ -1,5 +1,3 @@
-#extension GL_GOOGLE_include_directive : require
-
 #include "math.glsl"
 
 layout(local_size_x = 32) in;

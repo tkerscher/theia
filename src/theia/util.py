@@ -60,6 +60,14 @@ class ShaderLoader:
         return self.code
 
 
+# load preamble. We will always need it
+PREAMBLE = loadShader("preamble.glsl")
+"""Contains code shared by all shader, usually enabling extensions"""
+# append ray tracing specific preamble if enabled
+if hp.isRaytracingEnabled():
+    PREAMBLE += loadShader("preamble.raytracing.glsl")
+
+
 def compileShader(file: str, preamble: str = "", headers: dict[str, str] = {}) -> bytes:
     """
     Compiles the given shader code stored inside the libs shader folder.
@@ -79,12 +87,13 @@ def compileShader(file: str, preamble: str = "", headers: dict[str, str] = {}) -
         if not isinstance(content, str):
             raise ValueError(f'Header "{header}" does not contain a string!')
 
-    code = preamble + "\n" + loadShader(file)
+    code = "\n".join([PREAMBLE, preamble, loadShader(file)])
     try:
         return getCompiler().compile(code, headers)
     except RuntimeError as err:
         # Add preamble size to make line numbers useful
-        size = preamble.count("\n") + 1
+        size = PREAMBLE.count("\n") + 1
+        size += preamble.count("\n") + 1
         newTxt = f"(Preamble size: {size})"
         newTxt += "\n" + str(err)
         raise RuntimeError(newTxt) from err

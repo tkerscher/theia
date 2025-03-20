@@ -1,8 +1,3 @@
-#extension GL_GOOGLE_include_directive : require
-#extension GL_EXT_control_flow_attributes : require
-#extension GL_EXT_scalar_block_layout : require
-#extension GL_EXT_shader_atomic_float : require
-
 //check macro settings
 #ifndef BLOCK_SIZE
 #error "BLOCK_SIZE is not defined"

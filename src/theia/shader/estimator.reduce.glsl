@@ -1,5 +1,3 @@
-#extension GL_EXT_scalar_block_layout : require
-
 //parameterization via specialization constants
 layout(local_size_x_id = 1) in;
 layout(constant_id = 2) const uint N_BINS = 100;
