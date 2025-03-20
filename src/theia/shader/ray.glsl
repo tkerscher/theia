@@ -125,6 +125,21 @@ Medium getMedium(const RayState ray) {
 }
 #endif
 
+//calculates the total contribution, i.e. combines linear and logarithmic part
+float getContrib(const RayState ray) {
+    return ray.lin_contrib * exp(ray.log_contrib);
+}
+
+//checks whether ray contains any nan or inf
+bool isRayBad(const RayState ray) {
+    return 
+        any(isnan(ray.position)) ||
+        any(isinf(ray.position)) ||
+        any(isnan(ray.direction)) ||
+        any(isinf(ray.direction)) ||
+        length(ray.direction) <= 0.0;
+}
+
 //Here we handle the switch between polarized and unpolarized rays
 //giving other code a common Ray type, so they don't have to bother
 //with polarization on their own.
@@ -275,5 +290,21 @@ UnpolarizedBackwardRay createRay(
 #define BackwardRay UnpolarizedBackwardRay
 
 #endif
+
+//common overloads (syntactic sugar)
+
+bool isRayBad(const ForwardRay ray) {
+    return isRayBad(ray.state);
+}
+bool isRayBad(const BackwardRay ray) {
+    return isRayBad(ray.state);
+}
+
+float getContrib(const ForwardRay ray) {
+    return getContrib(ray.state);
+}
+float getContrib(const BackwardRay ray) {
+    return getContrib(ray.state);
+}
 
 #endif

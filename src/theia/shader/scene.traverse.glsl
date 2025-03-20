@@ -6,7 +6,6 @@
 #include "ray.response.glsl"
 #include "ray.scatter.glsl"
 #include "ray.surface.glsl"
-#include "ray.util.glsl"
 #include "result.glsl"
 #include "scene.intersect.glsl"
 
@@ -34,7 +33,7 @@
 void createResponse(
     RAY ray,                            ///< Ray that generated that hit
     const SurfaceHit hit,               ///< Surface hit
-    const Reflectance surface,   ///< Surface properties
+    const Reflectance surface,          ///< Surface properties
     bool absorb                         ///< True, if the surface absorbs the ray
 ) {
     //if target is not absorbing, we have to emulate a transmission before the

@@ -98,4 +98,29 @@ ResultCode processRayQuery(
     return RESULT_CODE_SUCCESS;
 }
 
+/**
+ * Checks if observer and target are mutually visible.
+*/
+bool isVisible(vec3 observer, vec3 target) {
+    //Direction and length of shadow ray
+    vec3 dir = target - observer;
+    float dist = length(dir);
+    dir /= dist;
+
+    //create and trace ray query
+    rayQueryEXT rayQuery;
+    rayQueryInitializeEXT(
+        rayQuery, tlas,
+        gl_RayFlagsOpaqueEXT,
+        0xFF,
+        observer,
+        0.0, dir, dist
+    );
+    rayQueryProceedEXT(rayQuery);
+
+    //points are mutable visible if no hit
+    return rayQueryGetIntersectionTypeEXT(rayQuery, true) !=
+        gl_RayQueryCommittedIntersectionTriangleEXT;
+}
+
 #endif

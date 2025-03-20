@@ -6,7 +6,6 @@
 #include "ray.propagate.glsl"
 #include "ray.scatter.glsl"
 #include "ray.surface.glsl"
-#include "ray.util.glsl"
 #include "result.glsl"
 #include "scene.intersect.glsl"
 
@@ -14,31 +13,6 @@
 #include "rng.glsl"
 #include "light.glsl"
 #include "response.glsl"
-
-/**
- * Checks if observer and target are mutually visible.
-*/
-bool isVisible(vec3 observer, vec3 target) {
-    //Direction and length of shadow ray
-    vec3 dir = target - observer;
-    float dist = length(dir);
-    dir /= dist;
-
-    //create and trace ray query
-    rayQueryEXT rayQuery;
-    rayQueryInitializeEXT(
-        rayQuery, tlas,
-        gl_RayFlagsOpaqueEXT,
-        0xFF,
-        observer,
-        0.0, dir, dist
-    );
-    rayQueryProceedEXT(rayQuery);
-
-    //points are mutable visible if no hit
-    return rayQueryGetIntersectionTypeEXT(rayQuery, true) !=
-        gl_RayQueryCommittedIntersectionTriangleEXT;
-}
 
 /**
  * Process the surface hit the given ray produced.

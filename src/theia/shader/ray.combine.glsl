@@ -3,7 +3,6 @@
 
 #include "ray.glsl"
 #include "ray.scatter.glsl"
-#include "ray.util.glsl"
 #include "result.glsl"
 #include "response.common.glsl"
 
