@@ -315,6 +315,7 @@ def test_coneLightSource_bwd(shaderUtil, polarized: bool):
     observer = structured_to_unstructured(result["observer"])
     position = structured_to_unstructured(result["position"])
     direction = structured_to_unstructured(result["direction"])
+    normal = structured_to_unstructured(result["normal"])
     startTime = result["startTime"]
     contrib = result["contrib"]
     # check result
@@ -325,8 +326,9 @@ def test_coneLightSource_bwd(shaderUtil, polarized: bool):
     exp_dir /= d[:, None]
     assert np.allclose(direction, exp_dir)
     assert np.all(startTime == 10.0 * u.ns)
+    cos_nrm = np.abs(np.multiply(normal, direction).sum(-1))
     cos_angle = np.multiply(light_dir[None, :], direction).sum(-1)
-    exp_contrib = budget / ((1.0 - light_opening) * 2.0 * np.pi * d**2)
+    exp_contrib = budget * cos_nrm / ((1.0 - light_opening) * 2.0 * np.pi * d**2)
     exp_contrib = np.where(cos_angle >= light_opening, exp_contrib, 0.0)
     assert np.allclose(contrib, exp_contrib)
     # tests for polarization
@@ -442,6 +444,7 @@ def test_sphericalLightSource_bwd(shaderUtil, polarized: bool):
     observer = structured_to_unstructured(result["observer"])
     position = structured_to_unstructured(result["position"])
     direction = structured_to_unstructured(result["direction"])
+    normal = structured_to_unstructured(result["normal"])
     wavelength = result["wavelength"]
     startTime = result["startTime"]
     contrib = result["contrib"]
@@ -454,7 +457,10 @@ def test_sphericalLightSource_bwd(shaderUtil, polarized: bool):
     exp_dir /= d[:, None]
     assert np.allclose(direction, exp_dir)
     assert np.all(startTime == 10.0 * u.ns)
-    assert np.allclose(contrib, budget / (4.0 * np.pi * d**2))
+    cos_nrm = np.abs(np.multiply(normal, direction).sum(-1))
+    exp_contrib = budget * cos_nrm / (4.0 * np.pi * d**2)
+    # bit larger error, likely precission issues (float vs double)
+    assert np.allclose(contrib, exp_contrib, atol=1e-5)
     # tests for polarization
     if polarized:
         stokes = structured_to_unstructured(result["stokes"])
@@ -566,6 +572,7 @@ def test_cherenkov_bwd(shaderUtil, usePhotons: bool, polarized: bool):
     observer = structured_to_unstructured(result["observer"])
     position = structured_to_unstructured(result["position"])
     direction = structured_to_unstructured(result["direction"])
+    normal = structured_to_unstructured(result["normal"])
     wavelength = result["wavelength"]
     startTime = result["startTime"]
     contrib = result["contrib"]
@@ -588,7 +595,8 @@ def test_cherenkov_bwd(shaderUtil, usePhotons: bool, polarized: bool):
     assert np.allclose(cos_theta, 1.0 / n)
     exp_contrib = 1.0 - (1.0 / n**2)
     sin_theta = np.sqrt(1.0 - cos_theta**2)
-    exp_contrib /= sin_theta * d
+    cos_nrm = np.abs(np.multiply(direction, normal).sum(-1))
+    exp_contrib *= cos_nrm / (sin_theta * d)
     if usePhotons:
         ft_const = c.alpha * 1e9
         exp_contrib *= ft_const / (wavelength**2)

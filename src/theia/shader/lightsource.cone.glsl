@@ -77,8 +77,7 @@ SourceRay sampleLight(
     //calculate contribution (zero if outside cone)
     float cos_angle = dot(rayDir, lightParams.direction);
     float contrib = lightParams.contribBwd * float(cos_angle > lightParams.cosOpeningAngle);
-    float d = distance(observer, lightParams.position);
-    contrib /= d*d;
+    contrib *= dw_dA(lightParams.position, observer, normal);
     //sample start time
     float u = random(idx, dim);
     float startTime = mix(lightParams.t_min, lightParams.t_max, u);

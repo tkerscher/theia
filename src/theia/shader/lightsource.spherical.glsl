@@ -40,10 +40,8 @@ SourceRay sampleLight(
     //sample start time
     float u = random(idx, dim);
     float startTime = mix(lightParams.t_min, lightParams.t_max, u);
-
     //calculate contribution
-    float d = distance(observer, lightParams.position);
-    float contrib = lightParams.contribBwd / (d*d);
+    float contrib = lightParams.contribBwd * dw_dA(lightParams.position, observer, normal);
 
     //assemble source ray
     return createSourceRay(

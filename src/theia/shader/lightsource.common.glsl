@@ -24,6 +24,20 @@ struct SourceRay {
     float contrib;
 };
 
+//jacobian transforming an integral over area (dA) to one over solid angles (dw)
+//normal is the surface normal at the target point or zero if a volume point:
+//       |cos|
+// dw = ------- * dA
+//        r^2
+float dw_dA(vec3 observer, vec3 target, vec3 normal) {
+    vec3 dir = target - observer;
+    float r2 = dot(dir, dir);
+    dir = normalize(dir);
+    
+    float cos_nrm = (normal == vec3(0.0)) ? 1.0 : abs(dot(dir, normal));
+    return cos_nrm / r2;
+}
+
 //The following defines two helper function that handles the mismatch between
 //sources creating (un)polarized samples and the environment enabling
 //polarization, i.e. discards unwanted polarization or inits unpolarized light
