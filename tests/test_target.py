@@ -1,106 +1,19 @@
 import pytest
 
-import hephaistos as hp
 import numpy as np
-from hephaistos.pipeline import PipelineStage, runPipeline
+from hephaistos.pipeline import runPipeline
 
 import theia.target
 from theia.camera import FlatCamera
 from theia.light import ConstWavelengthSource, LightSampler, SphericalLightSource
 from theia.material import Material, MaterialStore
-from theia.random import RNG, PhiloxRNG
+from theia.random import PhiloxRNG
 from theia.scene import MeshStore, RectBBox, Scene, Transform
+from theia.testing import TargetSampler, WaterTestModel
 import theia.units as u
 
-from ctypes import Structure, c_float, c_int32, c_uint32
-from hephaistos.glsl import vec3
-from numpy.lib.recfunctions import structured_to_unstructured
 
-from common.models import WaterModel
-
-
-class TargetSampler(PipelineStage):
-
-    class Item(Structure):
-        _fields_ = [
-            ("observer", vec3),
-            ("direction", vec3),
-            ("samplePos", vec3),
-            ("sampleNrm", vec3),
-            ("sampleProb", c_float),
-            ("sampleValid", c_uint32),
-            ("sampleError", c_int32),
-            ("hitPos", vec3),
-            ("hitNrm", vec3),
-            ("hitProb", c_float),
-            ("hitValid", c_uint32),
-            ("hitError", c_int32),
-            ("occluded", c_uint32),
-        ]
-
-    class Push(Structure):
-        _fields_ = [
-            ("dimMin", vec3),
-            ("dimMax", vec3),
-        ]
-
-    def __init__(
-        self,
-        target: theia.target.Target,
-        capacity: int,
-        *,
-        rng: RNG,
-        sampleBox: RectBBox = RectBBox((-20.0,) * 3, (20.0,) * 3),
-        shaderUtil,
-    ) -> None:
-        super().__init__()
-
-        self._target = target
-        self._rng = rng
-        self._batch = capacity
-        self._groups = -(capacity // -32)
-
-        self._push = self.Push(
-            dimMin=sampleBox.lowerCorner,
-            dimMax=sampleBox.upperCorner,
-        )
-
-        self._tensor = hp.ArrayTensor(self.Item, capacity)
-        self._buffer = [hp.ArrayBuffer(self.Item, capacity) for _ in range(2)]
-
-        headers = {
-            "rng.glsl": rng.sourceCode,
-            "target.glsl": target.sourceCode,
-        }
-        self._program = shaderUtil.createTestProgram(
-            "target.sample.glsl", headers=headers
-        )
-        self._program.bindParams(ResultBuffer=self._tensor)
-
-    def buffer(self, i):
-        return self._buffer[i]
-
-    def getResults(self, i):
-        results = {}
-        data = self._buffer[i].numpy()
-        for name, T in self.Item._fields_:
-            if issubclass(T, (c_float, c_int32, c_uint32)):
-                results[name] = data[name]
-            else:
-                results[name] = structured_to_unstructured(data[name])
-        return results
-
-    def run(self, i: int):
-        self._bindParams(self._program, i)
-        self._target.bindParams(self._program, i)
-        self._rng.bindParams(self._program, i)
-        return [
-            self._program.dispatchPush(bytes(self._push), self._groups),
-            hp.retrieveTensor(self._tensor, self._buffer[i]),
-        ]
-
-
-def test_diskTarget(shaderUtil):
+def test_diskTarget():
     N = 32 * 256
 
     # params
@@ -119,7 +32,7 @@ def test_diskTarget(shaderUtil):
         up=up,
     )
     philox = PhiloxRNG(key=0xC0FFEE)
-    sampler = TargetSampler(target, N, rng=philox, shaderUtil=shaderUtil)
+    sampler = TargetSampler(N, target, rng=philox)
     # run
     runPipeline([philox, target, sampler])
 
@@ -154,7 +67,7 @@ def test_diskTarget(shaderUtil):
     assert np.allclose(r["hitProb"][hit], 1.0 / area)
 
 
-def test_flatTarget(shaderUtil):
+def test_flatTarget():
     N = 32 * 256
 
     # params
@@ -175,7 +88,7 @@ def test_flatTarget(shaderUtil):
         up=up,
     )
     philox = PhiloxRNG(key=0xC0FFEE)
-    sampler = TargetSampler(target, N, rng=philox, shaderUtil=shaderUtil)
+    sampler = TargetSampler(N, target, rng=philox)
     # run
     runPipeline([philox, target, sampler])
 
@@ -209,7 +122,7 @@ def test_flatTarget(shaderUtil):
     assert np.allclose(r["hitProb"][hit], 1.0 / area)
 
 
-def test_innerSphereTarget(shaderUtil):
+def test_innerSphereTarget():
     N = 32 * 256
 
     # params
@@ -220,7 +133,7 @@ def test_innerSphereTarget(shaderUtil):
     # create target and sampler
     target = theia.target.InnerSphereTarget(position=pos, radius=radius)
     philox = theia.random.PhiloxRNG(key=0xC0FFEE)
-    sampler = TargetSampler(target, N, rng=philox, sampleBox=box, shaderUtil=shaderUtil)
+    sampler = TargetSampler(N, target, rng=philox, sampleBox=box)
     # run
     runPipeline([philox, target, sampler])
 
@@ -250,7 +163,7 @@ def test_innerSphereTarget(shaderUtil):
     assert np.allclose(-hn, r["hitNrm"][hitMask])
 
 
-def test_sphereTarget(shaderUtil):
+def test_sphereTarget():
     N = 32 * 256
 
     # params
@@ -260,7 +173,7 @@ def test_sphereTarget(shaderUtil):
     # create target and sampler
     target = theia.target.SphereTarget(position=pos, radius=radius)
     philox = PhiloxRNG(key=0xC0FFEE)
-    sampler = TargetSampler(target, N, rng=philox, shaderUtil=shaderUtil)
+    sampler = TargetSampler(N, target, rng=philox)
     # run
     runPipeline([philox, target, sampler])
 
@@ -383,7 +296,7 @@ def test_flatLightTarget():
     principal = SphericalLightSource(
         position=light_pos,
         timeRange=t_range,
-        budget=budget,    
+        budget=budget,
     )
     target = theia.target.FlatLightSourceTarget(
         width=width,
@@ -424,7 +337,7 @@ def test_targetLightSource(checkVisibility: bool):
     w2o = o2w.inverse()
 
     # create materials
-    water = WaterModel().createMedium()
+    water = WaterTestModel().createMedium()
     mat = Material("mat", None, water, flags="B")
     matStore = MaterialStore([mat])
     # create scene

@@ -36,7 +36,6 @@ CompressedTargetSample checkSample(vec3 observer, TargetSample ts) {
     );
 }
 
-
 CompressedTargetSample checkIntersect(vec3 observer, vec3 direction, TargetSample ts) {
     //common check
     CompressedTargetSample c = checkSample(observer, ts);
@@ -64,6 +63,7 @@ layout(scalar, push_constant) uniform Push {
 
 void main() {
     uint i = gl_GlobalInvocationID.x;
+    if (i >= BATCH_SIZE) return;
     uint dim = 0;
 
     //sample observer and direction

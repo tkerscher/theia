@@ -14,8 +14,8 @@ import theia.material
 import theia.random
 import theia.units as u
 
+from theia.testing import WaterTestModel
 from theia.util import createPreamble
-from common.models import WaterModel
 
 
 def reflectance(cos_i, n_i, n_t):
@@ -93,7 +93,7 @@ def test_surface(shaderUtil, forward: bool, polarized: bool):
         fetchList.append(hp.retrieveTensor(mueller_tensor, mueller_buffer))
 
     # create material
-    waterModel = WaterModel()
+    waterModel = WaterTestModel()
     glassModel = theia.material.BK7Model()
     water = waterModel.createMedium(lam_min, lam_max)
     glass = glassModel.createMedium(lam_min, lam_max)

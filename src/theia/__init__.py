@@ -28,6 +28,7 @@ submodules = [
     "response",
     "scene",
     "target",
+    "testing",
     "trace",
     "units",
 ]

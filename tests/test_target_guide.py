@@ -1,93 +1,13 @@
 import pytest
 
-import hephaistos as hp
 import numpy as np
-from hephaistos.pipeline import PipelineStage, runPipeline
+from hephaistos.pipeline import runPipeline
 
-import theia.random
 import theia.target
-from theia.random import RNG, PhiloxRNG
-from theia.scene import RectBBox, Transform
+from theia.random import PhiloxRNG
+from theia.scene import Transform
+from theia.testing import TargetGuideSampler
 import theia.units as u
-
-from ctypes import Structure, c_float
-from hephaistos.glsl import vec3
-from numpy.lib.recfunctions import structured_to_unstructured
-
-
-class TargetGuideSampler(PipelineStage):
-
-    class Item(Structure):
-        _fields_ = [
-            ("observer", vec3),
-            ("sampleDir", vec3),
-            ("sampleDist", c_float),
-            ("sampleProb", c_float),
-            ("evalDir", vec3),
-            ("evalDist", c_float),
-            ("evalProb", c_float),
-        ]
-
-    class Push(Structure):
-        _fields_ = [
-            ("dimMin", vec3),
-            ("dimMax", vec3),
-        ]
-
-    def __init__(
-        self,
-        guide: theia.target.TargetGuide,
-        capacity: int,
-        *,
-        rng: RNG,
-        sampleBox: RectBBox = RectBBox((-20.0,) * 3, (20.0,) * 3),
-        shaderUtil,
-    ) -> None:
-        super().__init__()
-
-        self._guide = guide
-        self._rng = rng
-        self._batch = capacity
-        self._groups = -(capacity // -32)
-
-        self._push = self.Push(
-            dimMin=sampleBox.lowerCorner,
-            dimMax=sampleBox.upperCorner,
-        )
-
-        self._tensor = hp.ArrayTensor(self.Item, capacity)
-        self._buffer = [hp.ArrayBuffer(self.Item, capacity) for _ in range(2)]
-
-        headers = {
-            "rng.glsl": rng.sourceCode,
-            "target_guide.glsl": guide.sourceCode,
-        }
-        self._program = shaderUtil.createTestProgram(
-            "target_guide.sample.glsl", headers=headers
-        )
-        self._program.bindParams(ResultBuffer=self._tensor)
-
-    def buffer(self, i):
-        return self._buffer[i]
-
-    def getResults(self, i):
-        results = {}
-        data = self.buffer(i).numpy()
-        for name, T in self.Item._fields_:
-            if T is c_float:
-                results[name] = data[name]
-            else:
-                results[name] = structured_to_unstructured(data[name])
-        return results
-
-    def run(self, i: int):
-        self._bindParams(self._program, i)
-        self._guide.bindParams(self._program, i)
-        self._rng.bindParams(self._program, i)
-        return [
-            self._program.dispatchPush(bytes(self._push), self._groups),
-            hp.retrieveTensor(self._tensor, self._buffer[i]),
-        ]
 
 
 def intersectSphere(center, rad, pos, dir):
@@ -114,7 +34,7 @@ def normalize(v):
     return v / np.sqrt(np.square(v).sum(-1))[:, None]
 
 
-def test_sphereTargetGuide(shaderUtil):
+def test_sphereTargetGuide():
     N = 32 * 256
 
     # params
@@ -123,8 +43,8 @@ def test_sphereTargetGuide(shaderUtil):
 
     # create guide and sampler
     guide = theia.target.SphereTargetGuide(position=pos, radius=radius)
-    philox = theia.random.PhiloxRNG(key=0xC0FFEE)
-    sampler = TargetGuideSampler(guide, N, rng=philox, shaderUtil=shaderUtil)
+    philox = PhiloxRNG(key=0xC0FFEE)
+    sampler = TargetGuideSampler(N, guide, rng=philox)
     # run
     runPipeline([philox, guide, sampler])
 
@@ -152,7 +72,7 @@ def test_sphereTargetGuide(shaderUtil):
     assert np.allclose(r["evalProb"][valid], prob[valid])
 
 
-def test_diskTargetGuide(shaderUtil):
+def test_diskTargetGuide():
     N = 32 * 256
 
     # params
@@ -169,7 +89,7 @@ def test_diskTargetGuide(shaderUtil):
         normal=normal,
     )
     philox = PhiloxRNG(key=0xC0FFEE)
-    sampler = TargetGuideSampler(guide, N, rng=philox, shaderUtil=shaderUtil)
+    sampler = TargetGuideSampler(N, guide, rng=philox)
     # run
     runPipeline([philox, guide, sampler])
 
@@ -206,7 +126,7 @@ def test_diskTargetGuide(shaderUtil):
     assert np.allclose(r["evalProb"][valid], prob[valid])
 
 
-def test_flatTargetGuide(shaderUtil):
+def test_flatTargetGuide():
     N = 32 * 256
 
     # params
@@ -227,7 +147,7 @@ def test_flatTargetGuide(shaderUtil):
         up=up,
     )
     philox = PhiloxRNG(key=0xC0FFEE)
-    sampler = TargetGuideSampler(guide, N, rng=philox, shaderUtil=shaderUtil)
+    sampler = TargetGuideSampler(N, guide, rng=philox)
     # run
     runPipeline([philox, guide, sampler])
 

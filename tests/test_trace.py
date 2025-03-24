@@ -15,7 +15,7 @@ import theia.units as u
 
 from theia.scene import Transform
 from theia.target import SphereTarget, SphereTargetGuide
-from common.models import WaterModel
+from theia.testing import WaterTestModel
 
 
 @pytest.mark.parametrize("disableDirect", [True, False])
@@ -39,7 +39,7 @@ def test_VolumeForwardTracer(
     target_pos, target_radius = (5.0, 2.0, -8.0) * u.m, 4.0 * u.m
 
     # create water medium
-    water = WaterModel().createMedium()
+    water = WaterTestModel().createMedium()
     store = theia.material.MaterialStore([], media=[water])
 
     # estimate max speed
@@ -165,7 +165,7 @@ def test_VolumeBackwardTracer(
     target = SphereTarget(position=target_pos, radius=target_radius)
 
     # create water medium
-    water = WaterModel().createMedium()
+    water = WaterTestModel().createMedium()
     store = theia.material.MaterialStore([], media=[water])
 
     # estimate max speed
@@ -288,7 +288,7 @@ def test_SceneForwardTracer(
     light_budget = 1000.0
 
     # create materials
-    water = WaterModel().createMedium()
+    water = WaterTestModel().createMedium()
     glass = theia.material.BK7Model().createMedium()
     mat = theia.material.Material("mat", glass, water, flags=("DR", "B"))
     matStore = theia.material.MaterialStore([mat])
@@ -405,7 +405,7 @@ def test_SceneBackwardTracer(
     light_budget = 1000.0
 
     # create materials
-    water = WaterModel().createMedium()
+    water = WaterTestModel().createMedium()
     glass = theia.material.BK7Model().createMedium()
     mat = theia.material.Material("mat", glass, water, flags=("DR", "B"))
     matAbs = theia.material.Material("abs", None, water, flags="B")
@@ -542,7 +542,7 @@ def test_SceneBackwardTargetTracer(
     cam_pos = (-1.0, -7.0, 0.0) * u.m
 
     # create materials
-    water = WaterModel().createMedium()
+    water = WaterTestModel().createMedium()
     glass = theia.material.BK7Model().createMedium()
     mat = theia.material.Material("mat", glass, water, flags=("RL", "B"))
     matStore = theia.material.MaterialStore([mat])
@@ -634,7 +634,7 @@ def test_BidirectionalPathTracer(
     bbox = ((-500.0 * u.m,) * 3, (500.0 * u.m,) * 3)
 
     # create materials
-    water = WaterModel().createMedium()
+    water = WaterTestModel().createMedium()
     glass = theia.material.BK7Model().createMedium()
     sphere_inner = theia.material.Material("sph_inner", None, glass, flags="T")
     sphere_outer = theia.material.Material("sph_outer", glass, water, flags="T")
@@ -739,7 +739,7 @@ def test_EventStatisticCallback():
     T0, T1 = 10.0 * u.ns, 20.0 * u.ns
 
     # create materials
-    water = WaterModel().createMedium()
+    water = WaterTestModel().createMedium()
     glass = theia.material.BK7Model().createMedium()
     mat = theia.material.Material("mat", glass, water, flags=("DR", "B"))
     vol = theia.material.Material("vol", glass, water, flags="V")
@@ -847,7 +847,7 @@ def test_TrackRecordCallback(polarizedTrack: bool, polarized: bool):
     polRef = (0.0, 1.0, 0.0)
 
     # create water medium
-    water = WaterModel().createMedium()
+    water = WaterTestModel().createMedium()
     store = theia.material.MaterialStore([], media=[water])
 
     # create pipeline
@@ -1076,7 +1076,7 @@ def test_DirectTracer_volume(polarized: bool):
     lightBudget = 1000.0
 
     # create water medium
-    water = WaterModel().createMedium()
+    water = WaterTestModel().createMedium()
     store = theia.material.MaterialStore([], media=[water])
 
     # estimate min time
@@ -1163,7 +1163,7 @@ def test_DirectTracer_scene(polarized: bool):
     lightBudget = 1000.0
 
     # create water medium
-    water = WaterModel().createMedium()
+    water = WaterTestModel().createMedium()
     absorber = theia.material.Material("absorber", None, water, flags="B")
     store = theia.material.MaterialStore([absorber], media=[water])
     # create scene

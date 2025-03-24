@@ -20,6 +20,7 @@ layout(scalar, push_constant) uniform Push {
 
 void main() {
     uint i = gl_GlobalInvocationID.x;
+    if (i >= BATCH_SIZE) return;
     uint dim = 0;
 
     //sample observer and direction

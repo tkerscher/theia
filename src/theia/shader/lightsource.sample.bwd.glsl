@@ -1,13 +1,11 @@
 layout(local_size_x = 32) in;
 
-#define LAM_MIN 400.0
-#define LAM_MAX 800.0
-#define DIM 100.0
-
 #include "lightsource.common.glsl"
+#include "wavelengthsource.common.glsl"
 
 #include "rng.glsl"
 #include "light.glsl"
+#include "photon.glsl"
 #include "util.sample.glsl"
 
 struct Result {
@@ -20,10 +18,12 @@ layout(scalar) writeonly buffer ResultBuffer { Result r[]; };
 
 void main() {
     uint i = gl_GlobalInvocationID.x;
+    if (i >= BATCH_SIZE) return;
     uint dim = 0;
 
     //sample wavelength
-    float lambda = mix(LAM_MIN, LAM_MAX, random(i, dim));
+    WavelengthSample photon = sampleWavelength(i, dim);
+    float lambda = photon.wavelength;
     //sample observer position
     vec3 observer = vec3(
         mix(-DIM, DIM, random(i, dim)),

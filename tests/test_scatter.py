@@ -6,8 +6,7 @@ from hephaistos.glsl import vec3, stackVector
 
 import theia.material
 import theia.random
-
-from common.models import WaterModel
+from theia.testing import WaterTestModel
 
 from numpy.lib.recfunctions import structured_to_unstructured
 from theia.util import packUint64
@@ -179,7 +178,7 @@ def test_volumeScatter(rng, shaderUtil):
     N_EMPTY = 32 * 64
 
     # create medium
-    model = WaterModel()
+    model = WaterTestModel()
     water = model.createMedium()
     empty = theia.material.MediumModel().createMedium(name="empty")
     store = theia.material.MaterialStore([], media=[water, empty])
@@ -271,7 +270,7 @@ def test_volumeScatterProb(rng, shaderUtil):
     N = 32 * 256
 
     # create medium
-    model = WaterModel()
+    model = WaterTestModel()
     water = model.createMedium()
     empty = theia.material.MediumModel().createMedium(name="empty")
     store = theia.material.MaterialStore([], media=[water, empty])
