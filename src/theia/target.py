@@ -3,6 +3,8 @@ from __future__ import annotations
 import numpy as np
 from hephaistos.pipeline import SourceCodeMixin
 
+from theia.camera import Camera
+from theia.light import LightSource
 from theia.scene import Transform
 from theia.util import ShaderLoader
 import theia.units as u
@@ -11,15 +13,20 @@ from ctypes import Structure, c_float
 from hephaistos.glsl import mat3, vec3
 
 __all__ = [
+    "DiskLightSourceTarget",
     "DiskTarget",
     "DiskTargetGuide",
+    "FlatLightSourceTarget",
     "FlatTarget",
     "FlatTargetGuide",
     "InnerSphereTarget",
+    "LightSourceTarget",
+    "PointLightSourceTarget",
     "SphereTarget",
     "SphereTargetGuide",
     "Target",
     "TargetGuide",
+    "TargetLightSource",
 ]
 
 
@@ -726,3 +733,379 @@ class DiskTargetGuide(TargetGuide):
         y = np.array([b, sign + vy**2 * a, -vy])
         mat = np.stack([x, y, z], -1)
         self.setParam("_objToWorld", mat)
+
+
+class LightSourceTarget(SourceCodeMixin):
+    """
+    Base class for all light target implementation. Light targets are used in
+    combination with `TargetLightSource` to subsample or focus an already
+    existing light source and consists of a single function:
+
+    ```
+    float sampleLightTarget(
+        float wavelength,
+        out vec3 samplePos,
+        out vec3 sampleNrm,
+        [rng state]);
+    ```
+    """
+
+    name = "Light Target"
+
+    def __init__(
+        self,
+        *,
+        nRNGSamples: int,
+        params: dict[str, type[Structure]] = {},
+        extra: set[str] = set(),
+    ) -> None:
+        super().__init__(params, extra)
+        self._nRNGSamples = nRNGSamples
+
+    @property
+    def nRNGSamples(self) -> int:
+        """Amount of random numbers drawn per sample"""
+        return self._nRNGSamples
+
+
+class DiskLightSourceTarget(LightSourceTarget):
+    """
+    Flat circular target orientated freely in space denoted by a normal vector
+    and a radius.
+
+    Parameters
+    ----------
+    position: (float, float, float), default=(0.0, 0.0, 0.0)
+        Center of the circle
+    radius: float, default=1.0m
+        Radius of the circle
+    normal: (float, float, float), default=(0.0, 0.0, 1.0)
+        Normal vector of the disk corresponding to the z axis in local
+        coordinates
+    up: (float, float, float) | None, default=None
+        Direction identifying where 'up' is for the target corresponding to the
+        y axis in local coordinates.
+
+    Stage Parameters
+    ----------------
+    position: (float, float, float), default=(0.0, 0.0, 0.0)
+        Center of the circle
+    radius: float, default=1.0m
+        Radius of the circle
+    normal: (float, float, float), default=(0.0, 0.0, 1.0)
+        Normal vector of the disk corresponding to the z axis in local
+        coordinates
+    up: (float, float, float) | None, default=None
+        Direction identifying where 'up' is for the target corresponding to the
+        y axis in local coordinates.
+    """
+
+    name = "Disk Light Source Target"
+
+    class LightTargetParams(Structure):
+        _fields_ = [
+            ("position", vec3),
+            ("radius", c_float),
+            ("_normal", vec3),
+            ("_contrib", c_float),
+            ("_objToWorld", mat3),
+        ]
+
+    def __init__(
+        self,
+        *,
+        position: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        radius: float = 1.0 * u.m,
+        normal: tuple[float, float, float] = (0.0, 0.0, 1.0),
+        up: tuple[float, float, float] | None = None,
+    ) -> None:
+        super().__init__(
+            nRNGSamples=2,
+            params={"LightTargetParams": self.LightTargetParams},
+            extra={"normal", "up"},
+        )
+        self.setParams(position=position, radius=radius, normal=normal, up=up)
+
+    # source code via descriptor
+    sourceCode = ShaderLoader("lightsource.target.disk.glsl")
+
+    @property
+    def normal(self) -> tuple[float, float, float]:
+        """Normal vector of the disk"""
+        return self._normal
+
+    @normal.setter
+    def normal(self, value: tuple[float, float, float]) -> None:
+        self._normal = value
+
+    @property
+    def up(self) -> tuple[float, float, float] | None:
+        """Direction of the local y-Axis identifying where 'up' us for the target"""
+        return self._up
+
+    @up.setter
+    def up(self, value: tuple[float, float, float] | None) -> None:
+        self._up = value
+
+    def _finishParams(self, i):
+        super()._finishParams(i)
+
+        t = Transform.View(
+            direction=self.getParam("normal"),
+            up=self.getParam("up"),
+        )
+        m = t.innerMatrix
+        self.setParam("_objToWorld", m.T)  # column major
+        self.setParam("_normal", m[:, 2])  # ensure normalized
+
+        r = self.getParam("radius")
+        area = np.pi * r**2
+        self.setParam("_contrib", area)
+
+
+class FlatLightSourceTarget(LightSourceTarget):
+    """
+    Rectangular target orientated freely in space denoted by a normal and up vector.
+
+    Parameters
+    ----------
+    width: float, default=1cm
+        Width of the detector. Corresponds in local space to the camera
+        surface's extension in x direction.
+    length: float, default=1cm
+        Length of the detector. Corresponds in local space to the camera
+        surface's extension in y direction.
+    position: (float, float, float), default=(0.0,0.0,0.0)
+        Position of the camera in world space.
+    direction: (float, float, float), default=(0.0,0.0,1.0)
+        Direction the camera faces. Corresponds in local space positive z
+        direction.
+    up: (float, float, float), default=(0.0,1.0,0.0)
+        Direction identifying where 'up' is for the camera. Corresponds in local
+        space to the positive y direction.
+
+    Stage Parameters
+    ----------------
+    width: float, default=1cm
+        Width of the detector. Corresponds in local space to the camera
+        surface's extension in x direction.
+    length: float, default=1cm
+        Length of the detector. Corresponds in local space to the camera
+        surface's extension in y direction.
+    position: (float, float, float), default=(0.0,0.0,0.0)
+        Position of the camera in world space.
+    direction: (float, float, float), default=(0.0,0.0,1.0)
+        Direction the camera faces. Corresponds in local space positive z
+        direction.
+    up: (float, float, float), default=(0.0,1.0,0.0)
+        Direction identifying where 'up' is for the camera. Corresponds in local
+        space to the positive y direction.
+
+    Note
+    ----
+    `direction` and `up` may not be parallel.
+    """
+
+    name = "Flat Light Source Target"
+
+    class LightTargetParams(Structure):
+        _fields_ = [
+            ("width", c_float),
+            ("height", c_float),
+            ("position", vec3),
+            ("_normal", vec3),
+            ("_contrib", c_float),
+            ("_objToWorld", mat3),
+        ]
+
+    def __init__(
+        self,
+        *,
+        width: float = 1.0 * u.m,
+        height: float = 1.0 * u.m,
+        position: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        normal: tuple[float, float, float] = (0.0, 0.0, 1.0),
+        up: tuple[float, float, float] = (0.0, 1.0, 0.0),
+    ) -> None:
+        super().__init__(
+            nRNGSamples=2,
+            params={"LightTargetParams": self.LightTargetParams},
+            extra={"normal", "up"},
+        )
+        # save params
+        self.normal = normal
+        self.up = up
+        self.setParams(width=width, height=height, position=position)
+
+    # source code via descriptor
+    sourceCode = ShaderLoader("lightsource.target.flat.glsl")
+
+    @property
+    def normal(self) -> tuple[float, float, float]:
+        """Normal of the target guide"""
+        return self._normal
+
+    @normal.setter
+    def normal(self, value: tuple[float, float, float]) -> None:
+        self._normal = value
+
+    @property
+    def up(self) -> tuple[float, float, float]:
+        """Up direction denoting the height dimension"""
+        return self._up
+
+    @up.setter
+    def up(self, value: tuple[float, float, float]) -> None:
+        self._up = value
+
+    def _finishParams(self, i: int) -> None:
+        super()._finishParams(i)
+
+        t = Transform.View(
+            direction=self.getParam("normal"),
+            up=self.getParam("up"),
+        )
+        m = t.innerMatrix
+        self.setParam("_objToWorld", m.T)  # column major
+        self.setParam("_normal", m[:, 2])
+
+        area = self.width * self.height
+        self.setParam("_contrib", area)
+
+
+class PointLightSourceTarget(LightSourceTarget):
+    """
+    Point-like target freely placed in space.
+
+    Parameters
+    ----------
+    position: (float, float, float), default=(0.0, 0.0, 0.0)
+        Position of the target point
+
+    Stage Parameters
+    ----------------
+    position: (float, float, float), default=(0.0, 0.0, 0.0)
+        Position of the target point
+    """
+
+    name = "Point Light Source Target"
+
+    class LightTargetParams(Structure):
+        _fields_ = [("position", vec3)]
+
+    def __init__(
+        self,
+        *,
+        position: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    ) -> None:
+        super().__init__(
+            nRNGSamples=0,
+            params={"LightTargetParams": self.LightTargetParams},
+        )
+        self.setParams(position=position)
+
+    # source code via descriptor
+    sourceCode = ShaderLoader("lightsource.target.point.glsl")
+
+
+class TargetLightSource(LightSource):
+    """
+    Samples the given light source in such a way, that the rays will pass through the
+    provided target, which can either be a `LightSourceTarget` or a `Camera`. In the
+    later case, the camera needs to support direct tracing mode.
+
+    Parameters
+    ----------
+    light: LightSource
+        Principal light source producing light rays. Must support backward mode.
+    target: LightSourceTarget | Camera
+        Target used to subsample the light source.
+    checkVisibility: bool, default=True
+        If True, checks for produced rays whether they can reach the guide.
+    updateLightSource: bool, default=True
+        If True, update requests to this light source are delegated to the
+        principal light source.
+    updateTarget: bool, default=True
+        If True, update requests to this light source are delegated to the target
+    """
+
+    name = "Target Light Source"
+
+    def __init__(
+        self,
+        light: LightSource,
+        target: LightSourceTarget | Camera,
+        *,
+        checkVisibility: bool = True,
+        updateLightSource: bool = True,
+        updateTarget: bool = True,
+    ) -> None:
+        # light source must be able to direct sample
+        if not light.supportBackward:
+            raise ValueError("Light source does not support backward mode!")
+        # camera (if provided) must support direct mode
+        if isinstance(target, Camera) and not target.supportDirect:
+            raise ValueError("Provided target camera does not support direct mode!")
+
+        nRNG = light.nRNGBackward
+        if isinstance(target, Camera):
+            nRNG += target.nRNGDirect
+        else:
+            nRNG += target.nRNGSamples
+        super().__init__(
+            supportForward=True,
+            supportBackward=False,
+            nRNGForward=nRNG,
+        )
+
+        self._light = light
+        self._target = target
+        self._checkVisibility = checkVisibility
+        self._updateLight = updateLightSource
+        self._updateTarget = updateTarget
+
+    _sourceCode = ShaderLoader("lightsource.guided.glsl")
+
+    @property
+    def checkVisibility(self) -> bool:
+        """Whether visibility checks are enabled"""
+        return self._checkVisibility
+
+    @property
+    def principalLight(self) -> LightSource:
+        """Principal light source producing light rays"""
+        return self._light
+
+    @property
+    def target(self) -> Camera | LightSourceTarget:
+        """Target used to subsample the light source"""
+        return self._target
+
+    @property
+    def sourceCode(self) -> str:
+        useCam = isinstance(self.target, Camera)
+        # encapsulate dependencies in renaming macros
+        # fmt: off
+        return "\n".join([
+            '#include "camera.common.glsl"',  # needed for camera target
+            "#define sampleLight principal_sampleLight",
+            self.principalLight.sourceCode,
+            "#undef sampleLight",
+            self.target.sourceCode,
+            "#define LIGHTSOURCE_GUIDED_CHECK_VIS" if self.checkVisibility else "",
+            "#define LIGHTSOURCE_GUIDED_USE_CAM" if useCam else "",
+            self._sourceCode,
+        ])
+        # fmt: on
+
+    def bindParams(self, program, i):
+        super().bindParams(program, i)
+        self.principalLight.bindParams(program, i)
+        self.target.bindParams(program, i)
+
+    def update(self, i):
+        super().update(i)
+        if self._updateLight:
+            self.principalLight.update(i)
+        if self._updateTarget:
+            self.target.update(i)

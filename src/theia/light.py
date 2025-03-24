@@ -15,6 +15,7 @@ from numpy.ctypeslib import as_array
 
 from theia.lookup import uploadTables
 from theia.random import RNG
+from theia.scene import Scene
 from theia.util import ShaderLoader, compileShader, createPreamble
 import theia.units as u
 
@@ -388,6 +389,8 @@ class LightSampler(PipelineStage):
         Whether to save polarization information.
     retrieve: bool, default=True
         Whether the queue gets retrieved from the device after sampling
+    scene: Scene | None, default=None
+        Optional scene a light may depend on
     batchSize: int, default=128
         Number of samples drawn per work group
     code: bytes | None, default=None
@@ -420,6 +423,7 @@ class LightSampler(PipelineStage):
         rng: RNG | None = None,
         polarized: bool = False,
         retrieve: bool = True,
+        scene: Scene | None = None,
         batchSize: int = 128,
         code: bytes | None = None,
     ) -> None:
@@ -433,6 +437,7 @@ class LightSampler(PipelineStage):
         # save params
         self._batchSize = batchSize
         self._capacity = capacity
+        self._scene = scene
         self._source = source
         self._retrieve = retrieve
         self._polarized = polarized
@@ -470,6 +475,8 @@ class LightSampler(PipelineStage):
             LightQueueOut=self._lightQueue.tensor,
             PhotonQueueOut=self._lamQueue.tensor,
         )
+        if self.scene is not None:
+            self.scene.bindParams(self._program)
 
     @property
     def batchSize(self) -> int:
@@ -507,6 +514,11 @@ class LightSampler(PipelineStage):
         return self._rng
 
     @property
+    def scene(self) -> Scene | None:
+        """Optional scene a light may depend on"""
+        return self._scene
+
+    @property
     def source(self) -> LightSource:
         """Light source that is sampled"""
         return self._source
@@ -520,6 +532,15 @@ class LightSampler(PipelineStage):
     def wavelengthQueue(self) -> IOQueue:
         """Queue holding the sampled wavelengths"""
         return self._lamQueue
+
+    def collectStages(self) -> list[PipelineStage]:
+        """
+        Returns a list of all stages involved with this sampler in the correct
+        order suitable for creating a pipeline.
+        """
+        stages = [] if self.rng is None else [self.rng]
+        stages.extend([self.wavelengthSource, self.source, self])
+        return stages
 
     def run(self, i: int) -> list[hp.Command]:
         self._bindParams(self._program, i)

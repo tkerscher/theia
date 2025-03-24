@@ -24,6 +24,17 @@ struct SourceRay {
     float contrib;
 };
 
+const SourceRay badSourceRay = SourceRay(
+    vec3(0.0 / 0.0),    //NaN
+    vec3(0.0 / 0.0),    //NaN
+    #ifdef POLARIZATION
+    vec4(0.0 / 0.0),    //NaN
+    vec3(0.0 / 0.0),    //NaN
+    #endif
+    0.0 / 0.0,          //NaN
+    0.0 / 0.0           //NaN
+);
+
 //jacobian transforming an integral over area (dA) to one over solid angles (dw)
 //normal is the surface normal at the target point or zero if a volume point:
 //       |cos|
