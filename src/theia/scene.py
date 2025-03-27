@@ -62,6 +62,10 @@ class Transform:
         Similar to `apply`, but translation are ignored.
         """
         return vector @ self._arr[:3, :3].T
+    
+    def copy(self) -> Transform:
+        """Creates a new independent copy of this transformation"""
+        return Transform(self._arr[:3, :].copy())
 
     def inverse(self) -> Transform:
         """Returns the inverse transformation"""
@@ -774,7 +778,7 @@ class SceneTemplate:
         self._store = MeshStore(meshes)
 
         # assemble instances
-        instances: dict[str, self.InstanceInfo] = {}
+        instances: dict[str, SceneTemplate.InstanceInfo] = {}
         nextId = 1
         base_frame = scene.graph.base_frame
         for instanceName in scene.graph.nodes_geometry:
