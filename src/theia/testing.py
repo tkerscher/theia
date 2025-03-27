@@ -11,7 +11,7 @@ from theia.material import (
 )
 from theia.random import RNG
 from theia.scene import RectBBox
-from theia.target import Target, TargetGuide
+from theia.target import LightSourceTarget, Target, TargetGuide
 from theia.util import createPreamble, compileShader
 
 import theia.units as u
@@ -316,6 +316,103 @@ class CameraDirectSampler(PipelineStage):
     def run(self, i: int):
         self._bindParams(self._program, i)
         self._camera.bindParams(self._program, i)
+        self._photons.bindParams(self._program, i)
+        self._rng.bindParams(self._program, i)
+        return [
+            self._program.dispatch(self._groups),
+            hp.retrieveTensor(self._tensor, self._buffer[i]),
+        ]
+
+
+class LightSourceTargetSampler(PipelineStage):
+    """
+    Test program for sampling light source targets.
+
+    Parameters
+    ----------
+    capacity: int
+        Number of samples to draw per run
+    target: LightSourceTarget
+        Target to sample
+    wavelengthSource: WavelengthSource
+        Source producing wavelengths
+    rng: RNG
+        Random number generator
+    """
+
+    class Item(Structure):
+        _fields_ = [
+            ("wavelength", c_float),
+            ("position", vec3),
+            ("normal", vec3),
+            ("contrib", c_float),
+        ]
+
+    def __init__(
+        self,
+        capacity: int,
+        target: LightSourceTarget,
+        wavelengthSource: WavelengthSource,
+        *,
+        rng: RNG,
+    ) -> None:
+        super().__init__()
+
+        self._target = target
+        self._photons = wavelengthSource
+        self._rng = rng
+        self._capacity = capacity
+        self._groups = -(capacity // -32)
+
+        self._tensor = hp.ArrayTensor(self.Item, capacity)
+        self._buffer = [hp.ArrayBuffer(self.Item, capacity) for _ in range(2)]
+
+        preamble = createPreamble(BATCH_SIZE=capacity)
+        headers = {
+            "target.glsl": target.sourceCode,
+            "photon.glsl": wavelengthSource.sourceCode,
+            "rng.glsl": rng.sourceCode,
+        }
+        code = compileShader("lightsource.target.sample.glsl", preamble, headers)
+        self._program = hp.Program(code)
+        self._program.bindParams(ResultBuffer=self._tensor)
+
+    @property
+    def batchSize(self) -> int:
+        """Number of samples to draw per batch"""
+        return self._capacity
+
+    @property
+    def rng(self) -> RNG:
+        """Generator for creating random numbers"""
+        return self._rng
+
+    @property
+    def target(self) -> LightSourceTarget:
+        """Target being sampled"""
+        return self._target
+
+    @property
+    def wavelengthSource(self) -> WavelengthSource:
+        """Source used to sample wavelengths"""
+        return self._photons
+
+    def collectStages(self) -> list[PipelineStage]:
+        """Returns a list of all used pipeline stages in correct order"""
+        return [self.rng, self.wavelengthSource, self.target, self]
+
+    def get(self, i, name) -> NDArray:
+        """Returns the specified field of the i-th buffer"""
+        return structured_to_unstructured(self._buffer[i].numpy()[name])
+
+    def getResults(self, i):
+        """Returns the result of the i-th buffer"""
+        data = self._buffer[i].numpy()
+        return _createResults(data, self.Item)
+
+    def run(self, i: int):
+        self._bindParams(self._program, i)
+        self._target.bindParams(self._program, i)
         self._photons.bindParams(self._program, i)
         self._rng.bindParams(self._program, i)
         return [
