@@ -1,7 +1,13 @@
+import pytest
+
 import numpy as np
+import hephaistos as hp
 import hephaistos.pipeline as pl
 import theia.random
 import theia.util
+
+from ctypes import Structure, c_float
+from scipy.stats import kstest
 
 
 shader = """\
@@ -59,6 +65,38 @@ def test_philox():
     philox.setParam("autoAdvance", advance)
     philox.update(0)
     assert philox.getParam("offset") - offset == advance
+
+
+@pytest.mark.parametrize("alpha,gamma", [(1.0, 1.0), (0.5, 2.2), (4.8, 0.6)])
+def test_gamma(alpha: float, gamma: float, shaderUtil):
+    R = 32 * 1024
+    N = 32 * R
+    tensor = hp.FloatTensor(N)
+    buffer = hp.FloatBuffer(N)
+
+    philox = theia.random.PhiloxRNG(key=0xABBAABBA)
+
+    class Push(Structure):
+        _fields_ = [("alpha", c_float), ("gamma", c_float)]
+
+    headers = {"random.glsl": philox.sourceCode}
+    program = shaderUtil.createTestProgram("random.gamma.test.glsl", headers=headers)
+    program.bindParams(Result=tensor)
+    philox.bindParams(program, 0)
+    philox.update(0)
+
+    push = Push(alpha, gamma)
+    (
+        hp.beginSequence()
+        .And(program.dispatchPush(bytes(push), R))
+        .Then(hp.retrieveTensor(tensor, buffer))
+        .Submit()
+        .wait()
+    )
+
+    # check result
+    test = kstest(buffer.numpy(), "gamma", args=(alpha, 0.0, 1.0 / gamma))
+    assert test.pvalue < 0.05
 
 
 # helper test to make debugging easier
