@@ -393,11 +393,10 @@ def test_cherenkov_fwd(usePhotons: bool, polarized: bool):
         trackEnd=endPos,
         startTime=startT,
         endTime=endT,
-        medium=store.media["water"],
         usePhotonCount=usePhotons,
     )
     sampler = theia.light.LightSampler(
-        light, photon, N, rng=philox, polarized=polarized
+        light, photon, N, rng=philox, medium=store.media["water"], polarized=polarized
     )
     # run
     runPipeline([philox, photon, light, sampler])
@@ -462,10 +461,16 @@ def test_cherenkov_bwd(usePhotons: bool, polarized: bool):
         trackEnd=endPos,
         startTime=startT,
         endTime=endT,
-        medium=store.media["water"],
         usePhotonCount=usePhotons,
     )
-    sampler = BackwardLightSampler(N, light, photons, rng=philox, polarized=polarized)
+    sampler = BackwardLightSampler(
+        N,
+        light,
+        photons,
+        rng=philox,
+        medium=store.media["water"],
+        polarized=polarized,
+    )
     # run
     runPipeline(sampler.collectStages())
     result = sampler.getResults(0)
@@ -545,13 +550,12 @@ def test_cherenkovTrack(usePhotons: bool, polarized: bool):
     photon = theia.light.UniformWavelengthSource(normalize=False)
     light = theia.light.CherenkovTrackLightSource(
         track,
-        medium=store.media["water"],
         usePhotonCount=usePhotons,
     )
     # build pipeline
     philox = PhiloxRNG(key=0xC0FFEE)
     sampler = theia.light.LightSampler(
-        light, photon, N, rng=philox, polarized=polarized
+        light, photon, N, rng=philox, medium=store.media["water"], polarized=polarized
     )
     # run pipeline
     runPipeline([philox, photon, light, sampler])

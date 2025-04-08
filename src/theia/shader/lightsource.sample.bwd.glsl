@@ -16,6 +16,8 @@ struct Result {
 };
 layout(scalar) writeonly buffer ResultBuffer { Result r[]; };
 
+layout(scalar) uniform SamplerParams { uvec2 medium; } samplerParams;
+
 void main() {
     uint i = gl_GlobalInvocationID.x;
     if (i >= BATCH_SIZE) return;
@@ -34,7 +36,9 @@ void main() {
     vec3 normal = sampleHemisphere(random2D(i, dim));
 
     //sample light
-    SourceRay ray = sampleLight(observer, normal, lambda, i, dim);
+    Medium medium = Medium(samplerParams.medium);
+    MediumConstants c = lookUpMedium(medium, lambda);
+    SourceRay ray = sampleLight(observer, normal, lambda, c, i, dim);
 
     //save result
     r[i] = Result(observer, normal, lambda, ray);

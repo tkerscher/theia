@@ -21,13 +21,18 @@ float sampleLightTarget(
 }
 #endif
 
-SourceRay sampleLight(float wavelength, uint idx, inout uint dim) {
+SourceRay sampleLight(
+    float wavelength,
+    const MediumConstants medium,
+    uint idx, inout uint dim
+) {
     //sample guide
     vec3 samplePos, sampleNrm;
     float contrib = sampleLightTarget(wavelength, samplePos, sampleNrm, idx, dim);
 
     //sample actual light source
-    SourceRay sourceRay = principal_sampleLight(samplePos, sampleNrm, wavelength, idx, dim);
+    SourceRay sourceRay = principal_sampleLight(
+        samplePos, sampleNrm, wavelength, medium, idx, dim);
     //apply contrib
     sourceRay.contrib *= contrib;
 

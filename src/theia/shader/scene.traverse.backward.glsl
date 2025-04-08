@@ -153,6 +153,7 @@ void traceShadowRay(
     SourceRay source = sampleLight(
         ray.state.position, vec3(0.0),
         ray.state.wavelength,
+        ray.state.constants,
         idx, dim);
     //check if light is visible
     if (!isVisible(source.position, ray.state.position))

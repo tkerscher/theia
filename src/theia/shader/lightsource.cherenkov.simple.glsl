@@ -14,28 +14,24 @@ layout(scalar) uniform LightParams {
 
     vec3 trackDir;
     float trackDist;
-
-    uvec2 medium;
 } lightParams;
 
-SourceRay sampleLight(float wavelength, uint idx, inout uint dim) {
+SourceRay sampleLight(
+    float wavelength,
+    const MediumConstants medium,
+    uint idx, inout uint dim
+) {
     //interpolate track
     float u = random(idx, dim);
     vec3 position = mix(lightParams.trackStart, lightParams.trackEnd, u);
     float startTime = mix(lightParams.startTime, lightParams.endTime, u);
 
-    //get refractive index
-    float n = 1.0;
-    if (lightParams.medium != uvec2(0)) {
-        Medium medium = Medium(lightParams.medium);
-        float l = normalize_lambda(medium, wavelength);
-        n = lookUp(medium.n, l, 1.0);
-    }
+
     //calculate contribution
-    float contrib = TWO_PI * frank_tamm(n, wavelength) * lightParams.trackDist;
+    float contrib = TWO_PI * frank_tamm(medium.n, wavelength) * lightParams.trackDist;
 
     //calculate cherenkov angle
-    float cos_theta = 1.0 / n;
+    float cos_theta = 1.0 / medium.n;
     float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
     //sample ray direction
     float phi = TWO_PI * random(idx, dim);
@@ -63,17 +59,11 @@ SourceRay sampleLight(float wavelength, uint idx, inout uint dim) {
 SourceRay sampleLight(
     vec3 observer, vec3 normal,
     float wavelength,
+    const MediumConstants medium,
     uint idx, uint dim
 ) {
-    //get refractive index
-    float n = 1.0;
-    if (lightParams.medium != uvec2(0)) {
-        Medium medium = Medium(lightParams.medium);
-        float l = normalize_lambda(medium, wavelength);
-        n = lookUp(medium.n, l, 1.0);
-    }
     //calculate cherenkov angle
-    float cos_theta = 1.0 / n;
+    float cos_theta = 1.0 / medium.n;
     float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
 
     //get point on track closest to observer
@@ -88,7 +78,7 @@ SourceRay sampleLight(
     float startTime = mix(lightParams.startTime, lightParams.endTime, u);
 
     //calculate contribution
-    float contrib = frank_tamm(n, wavelength);
+    float contrib = frank_tamm(medium.n, wavelength);
     float cos_nrm = (normal == vec3(0.0)) ? 1.0 : dot(rayDir, normal);
     //set cosine to zero if we are on the wrong side (cos_nrm < 0.0)
     cos_nrm = max(cos_nrm, 0.0);

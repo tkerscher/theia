@@ -61,10 +61,11 @@ void sampleDirect(
     WavelengthSample photon = sampleWavelength(idx, dim);
     CameraSample camSample = sampleCamera(
         photon.wavelength, idx, dim);
+    MediumConstants consts = lookUpMedium(medium, photon.wavelength);
     SourceRay light = sampleLight(
         camSample.position, camSample.normal,
-        photon.wavelength, idx, dim);
-    ForwardRay ray = createRay(light, medium, photon);
+        photon.wavelength, consts, idx, dim);
+    ForwardRay ray = createRay(light, medium, consts, photon);
     onEvent(ray, RESULT_CODE_RAY_CREATED, idx, 0);
     
     //check if we can combine both rays

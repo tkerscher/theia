@@ -17,7 +17,7 @@ from theia.util import createPreamble, compileShader
 import theia.units as u
 
 from ctypes import Structure, c_float, c_int32, c_uint32
-from hephaistos.glsl import mat4, vec3, vec4
+from hephaistos.glsl import buffer_reference, mat4, vec3, vec4
 from numpy.typing import NDArray
 from numpy.lib.recfunctions import structured_to_unstructured
 
@@ -59,6 +59,8 @@ class BackwardLightSampler(PipelineStage):
         Source producing wavelengths
     rng: RNG
         Random number generator
+    medium: int, default=0
+        Medium the light source is submerged in. Zero means a vacuum.
     box_size: float, default=100.0m
         Side length of the cube centered at the origin used to sample the target
         position delegated to the light source.
@@ -90,6 +92,9 @@ class BackwardLightSampler(PipelineStage):
             ("contrib", c_float),
         ]
 
+    class SamplerParams(Structure):
+        _fields_ = [("medium", buffer_reference)]
+
     def __init__(
         self,
         capacity: int,
@@ -97,13 +102,14 @@ class BackwardLightSampler(PipelineStage):
         wavelengthSource: WavelengthSource,
         *,
         rng: RNG,
+        medium: int = 0,
         box_size: float = 100.0 * u.m,
         polarized: bool = False,
     ) -> None:
         if not source.supportBackward:
             raise ValueError("Light source does not support backward mode!")
 
-        super().__init__()
+        super().__init__({"SamplerParams": self.SamplerParams})
 
         self._source = source
         self._rng = rng
@@ -111,6 +117,7 @@ class BackwardLightSampler(PipelineStage):
         self._polarized = polarized
         self._batch = capacity
         self._groups = -(capacity // -32)
+        self.setParams(medium=medium)
 
         self._item = self.PolarizedItem if polarized else self.UnpolarizedItem
         self._tensor = hp.ArrayTensor(self._item, capacity)

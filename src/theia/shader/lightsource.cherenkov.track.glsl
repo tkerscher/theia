@@ -17,11 +17,14 @@ layout(buffer_reference, scalar, buffer_reference_align=4) buffer ParticleTrack 
 };
 
 layout(scalar) uniform TrackParams {
-    uvec2 medium;
     uvec2 track;
 } trackParams;
 
-SourceRay sampleLight(float wavelength, uint idx, inout uint dim) {
+SourceRay sampleLight(
+    float wavelength,
+    const MediumConstants medium,
+    uint idx, inout uint dim
+) {
     //fetch track
     ParticleTrack track = ParticleTrack(trackParams.track);
 
@@ -38,16 +41,8 @@ SourceRay sampleLight(float wavelength, uint idx, inout uint dim) {
     vec3 pos = mix(start.pos, end.pos, u);
     float time = mix(start.time, end.time, u);
 
-    //get refractive index
-    float n = 1.0;
-    if (trackParams.medium != uvec2(0)) {
-        Medium medium = Medium(trackParams.medium);
-        float l = normalize_lambda(medium, wavelength);
-        n = lookUp(medium.n, l, 1.0);
-    }    
-
     //calculate cherenkov angle (assume beta = 1.0)
-    float cos_theta = 1.0 / n;
+    float cos_theta = 1.0 / medium.n;
     float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
     //sample ray direction
     float phi = TWO_PI * random(idx, dim);
@@ -65,7 +60,7 @@ SourceRay sampleLight(float wavelength, uint idx, inout uint dim) {
     //calculate contribution
     float contrib = TWO_PI * float(track.trackLength) * segmentLength;
     //use Frank-Tamm to calculate radiance
-    contrib *= frank_tamm(n, wavelength);
+    contrib *= frank_tamm(medium.n, wavelength);
 
 #ifdef POLARIZATION
     //reference direction is perpendicular to light and particle direction

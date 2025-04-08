@@ -385,6 +385,10 @@ class LightSampler(PipelineStage):
     rng: RNG | None, default=None
         The random number generator used for sampling. May be `None` if `source`
         does not require random numbers.
+    medium: int | None, default=None
+        Address of medium the light source is submerged in. If `None` and a
+        scene is provided, uses the scene's medium, otherwise a vacuum is
+        assumed.
     polarized: bool, default=False
         Whether to save polarization information.
     retrieve: bool, default=True
@@ -404,6 +408,10 @@ class LightSampler(PipelineStage):
         Number of samples to draw per run. Must be at most `capacity`.
     baseCount: int, default=0
         Offset into the sampling stream of the light source.
+    medium: int
+        Address of medium the light source is submerged in. If `None` and a
+        scene is provided, uses the scene's medium, otherwise a vacuum is
+        assumed.
     """
 
     name = "Light Sampler"
@@ -412,6 +420,7 @@ class LightSampler(PipelineStage):
         _fields_ = [
             ("count", c_uint32),
             ("baseCount", c_uint32),
+            ("medium", buffer_reference),
         ]
 
     def __init__(
@@ -421,6 +430,7 @@ class LightSampler(PipelineStage):
         capacity: int,
         *,
         rng: RNG | None = None,
+        medium: int | None = None,
         polarized: bool = False,
         retrieve: bool = True,
         scene: Scene | None = None,
@@ -434,6 +444,10 @@ class LightSampler(PipelineStage):
         # init stage
         super().__init__({"SampleParams": self.SampleParams})
 
+        # fetch medium
+        if medium is None:
+            medium = 0 if scene is None else scene.medium
+
         # save params
         self._batchSize = batchSize
         self._capacity = capacity
@@ -443,7 +457,7 @@ class LightSampler(PipelineStage):
         self._polarized = polarized
         self._rng = rng
         self._wavelengthSource = wavelengthSource
-        self.setParams(count=capacity, baseCount=0)
+        self.setParams(count=capacity, baseCount=0, medium=medium)
 
         # create code if needed
         if code is None:
@@ -950,8 +964,6 @@ class CherenkovLightSource(LightSource):
         Start time of track
     endTime: float, default=100.0 m/c
         End time of track
-    medium: int, default=0
-        Device address of the medium the particle traverses
     usePhotonCount: bool, default=False
         If `True` sampled radiance has units of number photons, otherwise eV.
 
@@ -965,8 +977,6 @@ class CherenkovLightSource(LightSource):
         Start time of track
     endTime: float, default=100.0 m/c
         End time of track
-    medium: int, default=0
-        Device address of the medium the particle traverses
     """
 
     name = "Cherenkov Light Source"
@@ -979,7 +989,6 @@ class CherenkovLightSource(LightSource):
             ("endTime", c_float),
             ("_trackDir", vec3),
             ("_trackDist", c_float),
-            ("medium", buffer_reference),
         ]
 
     _sourceCode = ShaderLoader("lightsource.cherenkov.simple.glsl")
@@ -991,7 +1000,6 @@ class CherenkovLightSource(LightSource):
         trackEnd: tuple[float, float, float] = (100.0, 0.0, 0.0) * u.m,
         startTime: float = 0.0 * u.ns,
         endTime: float = 100.0 * u.m / u.c,
-        medium: int = 0,
         usePhotonCount: bool = False,
     ) -> None:
         super().__init__(
@@ -1008,7 +1016,6 @@ class CherenkovLightSource(LightSource):
             trackEnd=trackEnd,
             startTime=startTime,
             endTime=endTime,
-            medium=medium,
         )
 
     @property
@@ -1124,8 +1131,6 @@ class CherenkovTrackLightSource(LightSource):
     track: ParticleTrack | None
         Track from which Cherenkov light is sampled. Can be set to `None`
         temporarily, but must be set to a valid particle track before sampling
-    medium: int, default=0
-        Device address of the medium the particle traverses.
     usePhotonCount: bool = False
         Wether to use number of photons as unit of the samples. If `True`
         sampled radiance has energy unit #photons, otherwise `eV`.
@@ -1139,7 +1144,7 @@ class CherenkovTrackLightSource(LightSource):
     name = "Cherenkov Track Light Source"
 
     class TrackParams(Structure):
-        _fields_ = [("medium", buffer_reference), ("track", buffer_reference)]
+        _fields_ = [("track", buffer_reference)]
 
     _sourceCode = ShaderLoader("lightsource.cherenkov.track.glsl")
 
@@ -1147,7 +1152,6 @@ class CherenkovTrackLightSource(LightSource):
         self,
         track: ParticleTrack | None = None,
         *,
-        medium: int = 0,
         usePhotonCount: bool = False,
     ) -> None:
         super().__init__(
@@ -1158,7 +1162,7 @@ class CherenkovTrackLightSource(LightSource):
         )
         # save params
         self._usePhotonCount = usePhotonCount
-        self.setParams(medium=medium, track=track if track is not None else 0)
+        self.setParams(track=track if track is not None else 0)
 
     @property
     def usePhotonCount(self) -> bool:

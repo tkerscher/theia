@@ -69,11 +69,14 @@ Ray sampleRay(uint idx) {
     float u = random(idx, dim);
     float lam = push.lam_min + (push.lam_max - push.lam_min) * u;
 
-    SourceRay source = sampleLight(lam, idx, dim);
+    //use wrong medium for light sampling as it does not depend on it
+    MediumConstants consts = lookUpMedium(Medium(uvec2(0)), lam);
+    SourceRay source = sampleLight(lam, consts, idx, dim);
     bool inward = dot(source.direction, push.normal) < 0.0;
     Medium med = inward ? push.mat.outside : push.mat.inside; //medium of ray
+    consts = lookUpMedium(med, lam);
     
-    return createRay(source, med, lam);
+    return createRay(source, med, consts, lam);
 }
 
 #else //#ifdef FORWARD

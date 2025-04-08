@@ -62,7 +62,7 @@ class Transform:
         Similar to `apply`, but translation are ignored.
         """
         return vector @ self._arr[:3, :3].T
-    
+
     def copy(self) -> Transform:
         """Creates a new independent copy of this transformation"""
         return Transform(self._arr[:3, :].copy())

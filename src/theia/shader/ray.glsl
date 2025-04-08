@@ -38,6 +38,7 @@ struct RayState {
 RayState createRayState(
     const SourceRay source,
     const Medium medium,
+    const MediumConstants constants,
     float wavelength
 ) {
     return RayState(
@@ -52,12 +53,13 @@ RayState createRayState(
         source.startTime,
         source.contrib,     //lin_contrib
         0.0,                //log_contrib
-        lookUpMedium(medium, wavelength)
+        constants
     );
 }
 RayState createRayState(
     const SourceRay source,
     const Medium medium,
+    const MediumConstants constants,
     const WavelengthSample photon
 ) {
     return RayState(
@@ -72,7 +74,7 @@ RayState createRayState(
         source.startTime,
         photon.contrib * source.contrib,
         0.0,
-        lookUpMedium(medium, photon.wavelength)
+        constants
     );
 }
 
@@ -186,10 +188,11 @@ struct PolarizedBackwardRay {
 PolarizedForwardRay createRay(
     const SourceRay source,
     const Medium medium,
+    const MediumConstants constants,
     float wavelength
 ) {
     return PolarizedForwardRay(
-        createRayState(source, medium, wavelength),
+        createRayState(source, medium, constants, wavelength),
         source.stokes,
         source.polRef
     );
@@ -197,10 +200,11 @@ PolarizedForwardRay createRay(
 PolarizedForwardRay createRay(
     const SourceRay source,
     const Medium medium,
+    const MediumConstants constants,
     const WavelengthSample photon
 ) {
     return PolarizedForwardRay(
-        createRayState(source, medium, photon),
+        createRayState(source, medium, constants, photon),
         source.stokes,
         source.polRef
     );
@@ -250,19 +254,21 @@ struct UnpolarizedBackwardRay {
 UnpolarizedForwardRay createRay(
     const SourceRay source,
     const Medium medium,
+    const MediumConstants constants,
     float wavelength
 ) {
     return UnpolarizedForwardRay(
-        createRayState(source, medium, wavelength)
+        createRayState(source, medium, constants, wavelength)
     );
 }
 UnpolarizedForwardRay createRay(
     const SourceRay source,
     const Medium medium,
+    const MediumConstants constants,
     const WavelengthSample photon
 ) {
     return UnpolarizedForwardRay(
-        createRayState(source, medium, photon)
+        createRayState(source, medium, constants, photon)
     );
 }
 

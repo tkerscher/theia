@@ -86,15 +86,21 @@ void storeVertex(const ForwardRay ray, const SurfaceHit hit, uint i) {
     nLight = i;
 }
 
+ForwardRay sampleRay(uint idx, inout uint dim) {
+    WavelengthSample photon = sampleWavelength(idx, dim);
+    Medium medium = Medium(params.sceneMedium);
+    MediumConstants constants = lookUpMedium(medium, photon.wavelength);
+    SourceRay lightRay = sampleLight(photon.wavelength, constants, idx, dim);
+    return createRay(lightRay, medium, constants, photon);
+}
+
 void createLightSubPath(
     WavelengthSample photon,
     inout uint pathIdx,
     uint idx, inout uint dim
 ) {
     //sample ray
-    ForwardRay ray = createRay(
-        sampleLight(photon.wavelength, idx, dim),
-        Medium(params.sceneMedium), photon);
+    ForwardRay ray = sampleRay(idx, dim);
     #ifndef DISABLE_LIGHT_CALLBACK
     onEvent(ray, RESULT_CODE_RAY_CREATED, idx, pathIdx++);
     #endif

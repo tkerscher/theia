@@ -19,7 +19,11 @@ layout(scalar) uniform LightParams {
     vec4 stokes;
 } lightParams;
 
-SourceRay sampleLight(float wavelength, uint idx, inout uint dim) {
+SourceRay sampleLight(
+    float wavelength,
+    const MediumConstants medium,
+    uint idx, inout uint dim
+) {
     //sample cone
     vec2 u = random2D(idx, dim);
     float phi = TWO_PI * u.x;
@@ -70,6 +74,7 @@ SourceRay sampleLight(float wavelength, uint idx, inout uint dim) {
 SourceRay sampleLight(
     vec3 observer, vec3 normal,
     float wavelength,
+    const MediumConstants medium,
     uint idx, inout uint dim
 ) {
     //get direction

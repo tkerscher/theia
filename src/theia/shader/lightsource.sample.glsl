@@ -40,6 +40,8 @@ layout(scalar) writeonly buffer PhotonQueueOut {
 layout(scalar) uniform SampleParams {
     uint count;
     uint baseCount;
+
+    uvec2 medium;
 } sampleParams;
 
 void main() {
@@ -52,8 +54,11 @@ void main() {
     //sample light
     WavelengthSample photon = sampleWavelength(
         idx + sampleParams.baseCount, dim);
+    Medium medium = Medium(sampleParams.medium);
     SourceRay ray = sampleLight(
-        photon.wavelength, idx + sampleParams.baseCount, dim);
+        photon.wavelength,
+        lookUpMedium(medium, photon.wavelength),
+        idx + sampleParams.baseCount, dim);
     //save sample
     SAVE_SAMPLE(ray, lightQueue.data, idx)
     SAVE_PHOTON(photon, photonQueue.data, idx)

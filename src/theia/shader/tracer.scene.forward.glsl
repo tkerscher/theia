@@ -46,6 +46,14 @@ layout(scalar) uniform TraceParams {
 #define ALLOW_RESPONSE_INIT false
 #endif
 
+ForwardRay sampleRay(uint idx, inout uint dim) {
+    WavelengthSample photon = sampleWavelength(idx, dim);
+    Medium medium = Medium(params.sceneMedium);
+    MediumConstants constants = lookUpMedium(medium, photon.wavelength);
+    SourceRay lightRay = sampleLight(photon.wavelength, constants, idx, dim);
+    return createRay(lightRay, medium, constants, photon);
+}
+
 void traceMain() {
     uint dim = 0;
     uint idx = gl_GlobalInvocationID.x;
@@ -53,11 +61,7 @@ void traceMain() {
         return;
     
     //sample ray
-    Medium medium = Medium(params.sceneMedium);
-    WavelengthSample photon = sampleWavelength(idx, dim);
-    ForwardRay ray = createRay(
-        sampleLight(photon.wavelength, idx, dim),
-        medium, photon);
+    ForwardRay ray = sampleRay(idx, dim);
     onEvent(ray, RESULT_CODE_RAY_CREATED, idx, 0);
 
     //trace loop

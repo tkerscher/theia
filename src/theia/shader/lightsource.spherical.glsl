@@ -13,7 +13,11 @@ layout(scalar) uniform LightParams {
     float t_max;
 } lightParams;
 
-SourceRay sampleLight(float wavelength, uint idx, inout uint dim) {
+SourceRay sampleLight(
+    float wavelength,
+    const MediumConstants medium,
+    uint idx, inout uint dim
+) {
     //sample direction
     vec3 rayDir = sampleUnitSphere(random2D(idx, dim));
     //sample startTime
@@ -32,6 +36,7 @@ SourceRay sampleLight(float wavelength, uint idx, inout uint dim) {
 SourceRay sampleLight(
     vec3 observer, vec3 normal,
     float wavelength,
+    const MediumConstants medium,
     uint idx, inout uint dim
 ) {
     //get direction
