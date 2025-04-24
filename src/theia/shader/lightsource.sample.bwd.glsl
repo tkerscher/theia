@@ -16,7 +16,10 @@ struct Result {
 };
 layout(scalar) writeonly buffer ResultBuffer { Result r[]; };
 
-layout(scalar) uniform SamplerParams { uvec2 medium; } samplerParams;
+layout(scalar) uniform SamplerParams {
+    vec3 observer;
+    uvec2 medium;    
+} samplerParams;
 
 void main() {
     uint i = gl_GlobalInvocationID.x;
@@ -26,12 +29,15 @@ void main() {
     //sample wavelength
     WavelengthSample photon = sampleWavelength(i, dim);
     float lambda = photon.wavelength;
-    //sample observer position
-    vec3 observer = vec3(
-        mix(-DIM, DIM, random(i, dim)),
-        mix(-DIM, DIM, random(i, dim)),
-        mix(-DIM, DIM, random(i, dim))
-    );
+    //sample observer position if not specified
+    vec3 observer = samplerParams.observer;
+    if (any(isnan(observer))) {
+        observer = vec3(
+            mix(-DIM, DIM, random(i, dim)),
+            mix(-DIM, DIM, random(i, dim)),
+            mix(-DIM, DIM, random(i, dim))
+        );
+    }
     //sample observer normal
     vec3 normal = sampleHemisphere(random2D(i, dim));
 

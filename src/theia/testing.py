@@ -59,6 +59,9 @@ class BackwardLightSampler(PipelineStage):
         Source producing wavelengths
     rng: RNG
         Random number generator
+    observer: (float, float, float), default=(NaN, NaN, NaN)
+        Optional fixed observer position. If NaN, a random observer position for
+        each sample will be drawn.
     medium: int, default=0
         Medium the light source is submerged in. Zero means a vacuum.
     box_size: float, default=100.0m
@@ -93,7 +96,7 @@ class BackwardLightSampler(PipelineStage):
         ]
 
     class SamplerParams(Structure):
-        _fields_ = [("medium", buffer_reference)]
+        _fields_ = [("observer", vec3), ("medium", buffer_reference)]
 
     def __init__(
         self,
@@ -102,6 +105,7 @@ class BackwardLightSampler(PipelineStage):
         wavelengthSource: WavelengthSource,
         *,
         rng: RNG,
+        observer: tuple[float, float, float] = (float("Nan"),) * 3,
         medium: int = 0,
         box_size: float = 100.0 * u.m,
         polarized: bool = False,
@@ -117,7 +121,7 @@ class BackwardLightSampler(PipelineStage):
         self._polarized = polarized
         self._batch = capacity
         self._groups = -(capacity // -32)
-        self.setParams(medium=medium)
+        self.setParams(observer=observer, medium=medium)
 
         self._item = self.PolarizedItem if polarized else self.UnpolarizedItem
         self._tensor = hp.ArrayTensor(self._item, capacity)

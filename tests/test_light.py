@@ -1,10 +1,17 @@
 import pytest
 
+from dataclasses import asdict
 import numpy as np
 import scipy.constants as c
+import scipy.integrate as integrate
+import scipy.stats as stats
+from scipy.stats.sampling import NumericalInversePolynomial
 
+import hephaistos as hp
 from hephaistos.pipeline import runPipeline
+from ctypes import Structure, c_float
 
+import theia.cascades
 import theia.light
 from theia.material import MaterialStore
 from theia.random import PhiloxRNG
@@ -592,3 +599,486 @@ def test_cherenkovTrack(usePhotons: bool, polarized: bool):
         assert np.abs(np.abs((polRef * polRef_exp).sum(-1)) - 1.0).max() < 1e-6
         assert np.abs(np.square(polRef).sum(-1) - 1.0).max() < 1e-6
         assert np.abs((polRef * samples["direction"]).sum(-1)).max() < 1e-6
+
+
+def trackAngularEmission_pdf(x, n, cos_min=-1, cos_max=1, a=0.39, b=2.61, beta=1.0):
+    """PDF of p(x) ~ exp(-bx^a)x^(a-1); x = |cos(theta) - cos(chev)|"""
+    # shift x by cherenkov angle
+    cos_chev = 1.0 / (beta * n)
+    x = np.abs(x - cos_chev)
+
+    # normalization constant
+    int_lower = 1.0 - np.exp(-b * np.abs(cos_chev - cos_min) ** a)
+    int_upper = 1.0 - np.exp(-b * np.abs(cos_chev - cos_max) ** a)
+    # flip sign if cos_chev > cos_min/max
+    int_lower *= np.sign(cos_min - cos_chev)
+    int_upper *= np.sign(cos_max - cos_chev)
+    norm = a * b / np.abs(int_upper - int_lower)
+
+    # calculate pdf
+    return np.exp(-b * x**a) * x ** (a - 1) * norm
+
+
+@pytest.mark.parametrize(
+    "n,cos_min,cos_max,a,b,beta",
+    [
+        [1.33, -1.0, 1.0, 0.39, 2.61, 1.0],
+        [1.40, -1.0, -0.5, 0.41, 2.39, 0.9],
+        [1.20, 0.8, 0.9, 0.44, 2.78, 1.0],
+        [1.35, 0.1, 0.9, 0.41, 2.78, 0.7],
+        [1.35, -0.1, 0.9, 0.41, 2.78, 1.0],
+    ],
+)
+def test_trackAngularEmission_pdf(
+    n: float,
+    cos_min: float,
+    cos_max: float,
+    a: float,
+    b: float,
+    beta: float,
+) -> None:
+    # check wether the pdf integrates to 1
+    est, err, *_ = integrate.quad(
+        trackAngularEmission_pdf, cos_min, cos_max, (n, cos_min, cos_max, a, b, beta)
+    )
+    assert np.abs(est - 1.0) < 5e-4
+    # check pdf(x) >= 0.0 for all x
+    x = np.linspace(cos_min, cos_max, 500)
+    assert np.all(trackAngularEmission_pdf(x, n, cos_min, cos_max, a, b, beta) >= 0.0)
+
+
+@pytest.mark.parametrize(
+    "n,a,b",
+    [[1.33, 0.53, 3.3], [1.2, 0.86, 2.5], [1.45, 1.03, 3.1], [1.35, 1.13, 3.42]],
+)
+def test_particle_sampleEmissionAngle_full(n: float, a: float, b: float, shaderUtil):
+    G = 1024 * 1024
+    N = 32 * G
+    N_BINS = 100
+
+    tensor = hp.FloatTensor(N)
+    buffer = hp.FloatBuffer(N)
+
+    class Push(Structure):
+        _fields_ = [("n", c_float), ("a", c_float), ("b", c_float)]
+
+    philox = PhiloxRNG(key=0x01ABBA10)
+
+    program = shaderUtil.createTestProgram(
+        "lightsource.particle_sampleEmissionAngle.full.test.glsl",
+        headers={"rng.glsl": philox.sourceCode},
+    )
+    program.bindParams(Samples=tensor)
+    philox.bindParams(program, 0)
+    philox.update(0)
+
+    push = Push(n, a, b)
+    (
+        hp.beginSequence()
+        .And(program.dispatchPush(bytes(push), G))
+        .Then(hp.retrieveTensor(tensor, buffer))
+        .Submit()
+        .wait()
+    )
+
+    # check result
+    samples = buffer.numpy()
+    hist, edges = np.histogram(samples, N_BINS, (-1.0, 1.0), density=True)
+    pdf = trackAngularEmission_pdf(edges, n, a=a, b=b)
+    exp_hist = 0.5 * (pdf[1:] + pdf[:-1])
+    # testing the hist is a bit tricky as the pdf diverges at 1/n
+    # -> ignore bin with this value and the ones left and right of it
+    peak_bin = int((1.0 / n + 1) / (2.0 / N_BINS))
+    err = np.abs(hist - exp_hist) / exp_hist
+    assert err[: peak_bin - 1].max() < 0.05
+    assert err[peak_bin + 2 :].max() < 0.05
+
+
+@pytest.mark.parametrize(
+    "n,a,b,cos_min,cos_max",
+    [
+        [1.33, 0.53, 3.3, -1.0, 1.0],
+        [1.45, 0.86, 2.8, -0.5, 0.8],
+        [1.35, 0.72, 3.1, -0.9, -0.2],
+        [1.35, 1.03, 3.1, 0.8, 0.95],
+    ],
+)
+def test_particle_sampleEmissionAngle_range(
+    n: float, a: float, b: float, cos_min: float, cos_max: float, shaderUtil
+) -> None:
+    G = 1024 * 1024
+    N = 32 * G
+    N_BINS = 100
+
+    sample_tensor = hp.FloatTensor(N)
+    contrib_tensor = hp.FloatTensor(N)
+    sample_buffer = hp.FloatBuffer(N)
+    contrib_buffer = hp.FloatBuffer(N)
+
+    class Push(Structure):
+        _fields_ = [
+            ("n", c_float),
+            ("a", c_float),
+            ("b", c_float),
+            ("cos_min", c_float),
+            ("cos_max", c_float),
+        ]
+
+    philox = PhiloxRNG(key=0x10500501)
+
+    program = shaderUtil.createTestProgram(
+        "lightsource.particle_sampleEmissionAngle.range.test.glsl",
+        headers={"rng.glsl": philox.sourceCode},
+    )
+    program.bindParams(Values=sample_tensor, Contribs=contrib_tensor)
+    philox.bindParams(program, 0)
+    philox.update(0)
+
+    push = Push(n, a, b, cos_min, cos_max)
+    (
+        hp.beginSequence()
+        .And(program.dispatchPush(bytes(push), G))
+        .Then(hp.retrieveTensor(sample_tensor, sample_buffer))
+        .And(hp.retrieveTensor(contrib_tensor, contrib_buffer))
+        .Submit()
+        .wait()
+    )
+
+    # check result
+    samples = sample_buffer.numpy()
+    hist, edges = np.histogram(samples, N_BINS, (cos_min, cos_max), density=True)
+    pdf = trackAngularEmission_pdf(edges, n, cos_min, cos_max, a, b)
+    exp_hist = 0.5 * (pdf[1:] + pdf[:-1])  # trapezoidal rule
+    err = np.abs(hist - exp_hist) / exp_hist
+    if cos_min <= 1.0 / n <= cos_max:
+        # testing the hist is a bit tricky as the pdf diverges at 1/n
+        # -> ignore bin with this value and the ones left and right of it
+        cos_range = abs(cos_max - cos_min)
+        peak_bin = int((1.0 / n - cos_min) / (cos_range / N_BINS))
+        assert err[: peak_bin - 1].max() < 0.03
+        assert err[peak_bin + 2 :].max() < 0.03
+    else:
+        assert err.max() < 0.01
+
+    # we do not check contrib here, as we either have to specially deal with the
+    # divergence at cos_chev or copy the code from the shader
+    # Instead we check it implicitly in the light sources
+
+
+@pytest.mark.parametrize("applyFrankTamm", [False, True])
+def test_muonTrackLightSource_fwd(applyFrankTamm: bool) -> None:
+    N = 256 * 1024
+    lam_range = (300.0, 500.0) * u.nm
+    E_muon = 10.0 * u.TeV
+    startPos, startTime = np.array([1.0, 5.0, -2.0]) * u.m, 0.5 * u.us
+    direction, dist = np.array([0.36, 0.48, 0.8]), 100.0 * u.m
+    endPos, endTime = startPos + direction * dist, startTime + dist / u.c
+    up = np.array([0.8, -0.6, 0.0])  # unit, orthogonal to direction
+
+    # load water material
+    water = WaterTestModel()
+    store = MaterialStore([], media=[water.createMedium(*lam_range)])
+
+    # create pipeline
+    philox = PhiloxRNG(key=0xC0FFEE)
+    photons = theia.light.UniformWavelengthSource(
+        lambdaRange=lam_range, normalize=False
+    )
+    light = theia.light.MuonTrackLightSource(
+        startPos, startTime, endPos, endTime, E_muon, applyFrankTamm=applyFrankTamm
+    )
+    sampler = theia.light.LightSampler(
+        light, photons, N, rng=philox, medium=store.media["water"]
+    )
+    # run
+    runPipeline(sampler.collectStages())
+    result = sampler.lightQueue.view(0)
+    photons = sampler.wavelengthQueue.view(0)
+
+    # check all sampled postions are on the track
+    distStart = np.sqrt(np.square(startPos - result["position"]).sum(-1))
+    distEnd = np.sqrt(np.square(endPos - result["position"]).sum(-1))
+    assert np.allclose(distStart + distEnd, dist)
+    expTime = startTime + distStart / u.c
+    assert np.allclose(result["startTime"], expTime)
+    # check we use the whole track
+    assert distStart.min() < 0.05
+    assert distEnd.min() < 0.05
+    # check direction
+    assert np.allclose(np.square(result["direction"]).sum(-1), 1.0)
+    cos_theta = np.multiply(result["direction"], direction).sum(-1)
+    # since the angular emission pdf is conditional on the refractive index
+    # a direct test is a bit complicated (we cannot just create a histogram or
+    # use a KS test). For now we just check the range and trust the check of
+    # the MC estimate to be enough
+    assert cos_theta.max() > 0.999
+    assert cos_theta.min() < -0.999
+    # check phi is uniform
+    cos_phi = np.multiply(result["direction"], up).sum(-1)
+    sin_phi = np.multiply(np.cross(result["direction"], up), direction).sum(-1)
+    phi = np.arctan2(sin_phi, cos_phi)
+    phi = (phi + np.pi) / (2.0 * np.pi)
+    ks = stats.kstest(phi[::100], "uniform")
+    assert ks.pvalue > 0.05
+    # check MC estimate converges to correct result, which is the total amount
+    # of cherenkov photons produced
+    energyScale = light.getParam("_energyScale")
+    if applyFrankTamm:
+        lam = np.linspace(*lam_range, 1025)
+        dlam = (lam_range[1] - lam_range[0]) / (len(lam) - 1)
+        n = water.refractive_index(lam)
+        ft = theia.light.frankTamm(lam, n)
+        dN_dx = integrate.romb(ft, dlam)
+        nPhotons = dN_dx * dist * energyScale
+        contrib = result["contrib"] * photons["contrib"]
+        assert np.abs(1.0 - contrib.mean() / nPhotons) < 5e-4
+    else:
+        # if we do not apply the frank tamm formula this reduces to simply
+        # sampling a point along the track, scaled by the energy scale
+        assert np.allclose(result["contrib"], dist * energyScale)
+
+
+@pytest.mark.parametrize(
+    "observer,applyFrankTamm",
+    [
+        [(15.0, 30.0, 60.0) * u.m, True],
+        [(-10.0, -30.0, 0.0) * u.m, False],
+        [(80.0, 80.0, 80.0) * u.m, True],
+    ],
+)
+def test_muonTrackLightSource_bwd(
+    observer: tuple[float, float, float], applyFrankTamm: bool
+) -> None:
+    N = 256 * 1024
+    lam_range = (300.0, 500.0) * u.nm
+    E_muon = 10.0 * u.TeV
+    startPos, startTime = np.array([1.0, 5.0, -2.0]) * u.m, 0.5 * u.us
+    direction, dist = np.array([0.36, 0.48, 0.8]), 100.0 * u.m
+    endPos, endTime = startPos + direction * dist, startTime + dist / u.c
+
+    # load water material
+    water = WaterTestModel()
+    store = MaterialStore([], media=[water.createMedium(*lam_range)])
+
+    # create pipeline
+    philox = PhiloxRNG(key=0xC0FFEE)
+    photons = theia.light.UniformWavelengthSource(lambdaRange=lam_range)
+    light = theia.light.MuonTrackLightSource(
+        startPos, startTime, endPos, endTime, E_muon, applyFrankTamm=applyFrankTamm
+    )
+    sampler = BackwardLightSampler(
+        N, light, photons, rng=philox, observer=observer, medium=store.media["water"]
+    )
+    # run
+    runPipeline(sampler.collectStages())
+    result = sampler.getResults(0)
+
+    # check all sampled postions are on the track
+    distStart = np.sqrt(np.square(startPos - result["position"]).sum(-1))
+    distEnd = np.sqrt(np.square(endPos - result["position"]).sum(-1))
+    assert np.allclose(distStart + distEnd, dist)
+    expTime = startTime + distStart / u.c
+    assert np.allclose(result["startTime"], expTime)
+    # check we use the whole track
+    assert distStart.min() < 0.05
+    assert distEnd.min() < 0.05
+    # check we aim at observer
+    assert np.allclose(result["observer"], observer)
+    expDir = observer - result["position"]
+    expDir /= np.sqrt(np.square(expDir).sum(-1))[:, None]
+    assert np.allclose(result["direction"], expDir)
+
+    # instead of checking the individual sample contributions, we check the
+    # corresponding MC estimate, which is the expected number of photons
+    # arriving at the observer.
+    energyScale = light.getParam("_energyScale")
+    a_angular = light.getParam("_a_angular")
+    b_angular = light.getParam("_b_angular")
+
+    # integrand
+    def f(lam, x):
+        # evaluate frank tamm formula
+        n = water.refractive_index(lam)
+        dN_dx = theia.light.frankTamm(lam, n) if applyFrankTamm else 1.0
+        # calculate emission angle
+        p = startPos + x * direction
+        dir_p = observer - p
+        r = np.sqrt(np.square(dir_p).sum(-1))
+        dir_p /= r
+        cos_theta = np.multiply(dir_p, direction).sum()
+        # evaluate emission profile
+        ang = trackAngularEmission_pdf(cos_theta, n, a=a_angular, b=b_angular)
+        area = 4.0 * np.pi * r**2
+
+        return dN_dx * energyScale * ang / area
+
+    est, err = integrate.dblquad(f, 0, dist, *lam_range, epsrel=1e-4)
+    est /= lam_range[1] - lam_range[0]
+    assert np.abs(1.0 - result["contrib"].mean() / est) < 5e-3
+
+
+@pytest.mark.parametrize("applyFrankTamm", [False, True])
+@pytest.mark.parametrize("particle", ["e-", "pi+"])
+def test_particleCascadeLightSource_fwd(applyFrankTamm: bool, particle: str) -> None:
+    N = 256 * 1024
+    lam_range = (300.0, 500.0) * u.nm
+    startPos, startTime = np.array([1.0, 5.0, -2.0]) * u.m, 0.5 * u.us
+    direction = np.array([0.36, 0.48, 0.8])
+    up = np.array([0.8, -0.6, 0.0])  # unit, orthogonal to direction
+    E_primary = 1.0 * u.TeV
+    particle = theia.cascades.EMinus if particle == "e-" else theia.cascades.PiPlus
+    params = theia.cascades.createCascadeParameters(particle, E_primary, uRandom=0.6847)
+
+    # load water material
+    water = WaterTestModel()
+    store = MaterialStore([], media=[water.createMedium(*lam_range)])
+
+    # create pipeline
+    philox = PhiloxRNG(key=0xC0FFEE)
+    photons = theia.light.UniformWavelengthSource(lambdaRange=lam_range)
+    light = theia.light.ParticleCascadeLightSource(
+        startPos,
+        startTime,
+        direction,
+        applyFrankTamm=applyFrankTamm,
+        **asdict(params),
+    )
+    sampler = theia.light.LightSampler(
+        light, photons, N, rng=philox, medium=store.media["water"]
+    )
+    # run
+    runPipeline(sampler.collectStages())
+    result = sampler.lightQueue.view(0)
+    photons = sampler.wavelengthQueue.view(0)
+
+    # check all sampled positions are on the track
+    dirPos = result["position"] - startPos
+    distPos = np.sqrt(np.square(dirPos).sum(-1))
+    dirPos = dirPos / distPos[:, None]
+    assert np.allclose(dirPos[distPos > 0.0], direction)
+    expTime = startTime + distPos / u.c
+    assert np.allclose(expTime, result["startTime"])
+    # check we sample along the whole track
+    z_max = (params.a_long - 1) * params.b_long  # mode of gamma dist
+    assert distPos.min() < 0.1 * z_max
+    assert distPos.max() > 4.0 * z_max  # in theory infinite, but really unlikely
+    # check direction
+    assert np.allclose(np.square(result["direction"]).sum(-1), 1.0)
+    cos_theta = np.multiply(result["direction"], direction).sum(-1)
+    # since the angular emission pdf is conditional on the refractive index
+    # a direct test is a bit complicated (we cannot just create a histogram or
+    # use a KS test). For now we just check the range and trust the check of
+    # the MC estimate to be enough
+    assert cos_theta.min() < -0.999
+    assert cos_theta.max() > 0.999
+    # check phi is uniform
+    cos_phi = np.multiply(result["direction"], up).sum(-1)
+    sin_phi = np.multiply(np.cross(result["direction"], up), direction).sum(-1)
+    phi = np.arctan2(sin_phi, cos_phi)
+    phi = (phi + np.pi) / (2.0 * np.pi)
+    ks = stats.kstest(phi[::100], "uniform")
+    assert ks.pvalue > 0.05
+
+    # instead of checking the individual sample contributions we check the MC
+    # estimate which is the total number of photons produced
+    est = result["contrib"].mean()
+    expEst = params.energyScale
+    if applyFrankTamm:
+        lam = np.linspace(*lam_range, 1025)
+        dlam = (lam_range[1] - lam_range[0]) / (len(lam) - 1)
+        n = water.refractive_index(lam)
+        dN_dx = integrate.romb(theia.light.frankTamm(lam, n), dlam)
+        expEst = dN_dx * params.energyScale
+        # we miss the contrib from the wavelength source in the sample
+        expEst /= lam_range[1] - lam_range[0]
+    assert np.abs(1.0 - est / expEst) < 5e-4
+
+
+@pytest.mark.parametrize(
+    "observer,applyFrankTamm",
+    [
+        [(5.0, 3.0, 6.0) * u.m, True],
+        [(-1.0, -3.0, 0.0) * u.m, False],
+        [(20.0, 20.0, 20.0) * u.m, True],
+    ],
+)
+@pytest.mark.parametrize("particle", ["e-", "pi+"])
+def test_particleCascadeLightSource_bwd(
+    observer: tuple[float, float, float], particle: str, applyFrankTamm: bool
+) -> None:
+    N = 1024 * 1024
+    lam_range = (300.0, 500.0) * u.nm
+    startPos, startTime = np.array([1.0, 5.0, -2.0]) * u.m, 0.5 * u.us
+    direction = np.array([0.36, 0.48, 0.8])
+    E_primary = 1.0 * u.TeV
+    particle = theia.cascades.EMinus if particle == "e-" else theia.cascades.PiPlus
+    params = theia.cascades.createCascadeParameters(particle, E_primary, uRandom=0.6847)
+
+    # load water material
+    water = WaterTestModel()
+    store = MaterialStore([], media=[water.createMedium(*lam_range)])
+
+    # create pipeline
+    philox = PhiloxRNG(key=0xC0FFEE)
+    photons = theia.light.UniformWavelengthSource(lambdaRange=lam_range)
+    light = theia.light.ParticleCascadeLightSource(
+        startPos,
+        startTime,
+        direction,
+        applyFrankTamm=applyFrankTamm,
+        **asdict(params),
+    )
+    sampler = BackwardLightSampler(
+        N, light, photons, rng=philox, observer=observer, medium=store.media["water"]
+    )
+    # run
+    runPipeline(sampler.collectStages())
+    result = sampler.getResults(0)
+
+    # check all sampled positions are on the track
+    dirPos = result["position"] - startPos
+    distPos = np.sqrt(np.square(dirPos).sum(-1))
+    dirPos /= distPos[:, None]
+    assert np.allclose(dirPos[distPos > 0.0], direction)
+    expTime = startTime + distPos / u.c
+    assert np.allclose(expTime, result["startTime"])
+    # check we sample along the whole track
+    z_max = (params.a_long - 1) * params.b_long  # mode of gamma dist
+    assert distPos.min() < 0.1 * z_max
+    assert distPos.max() > 4.0 * z_max  # in theory infinite, but really unlikely
+    # check we aim at the observer
+    assert np.allclose(result["observer"], observer)
+    expDir = observer - result["position"]
+    expDir /= np.sqrt(np.square(expDir).sum(-1))[:, None]
+    assert np.allclose(result["direction"], expDir)
+
+    # instead of checking the individual sample contributions, we check the
+    # corresponding MC estimate, which is the expected number of photons
+    # arriving at the observer.
+    gamma = stats.gamma(params.a_long)
+
+    # integrand
+    def f(lam, x):
+        # evaluate frank tamm formula
+        n = water.refractive_index(lam)
+        result = theia.light.frankTamm(lam, n) if applyFrankTamm else 1.0
+        # calculate emission position
+        result *= gamma.pdf(x / params.b_long) / params.b_long
+        # calculate emission angle
+        p = startPos + x * direction
+        dir_p = observer - p
+        r = np.sqrt(np.square(dir_p).sum(-1))
+        dir_p /= r
+        cos_theta = np.multiply(dir_p, direction).sum()
+        # evaluate emission profile
+        a, b = params.a_angular, params.b_angular
+        result *= trackAngularEmission_pdf(cos_theta, n, a=a, b=b)
+        result *= params.energyScale
+        result /= 4.0 * np.pi * (r**2)
+        # done
+        return result
+
+    est, err = integrate.dblquad(f, 0, 10.0 * z_max, *lam_range, epsrel=1e-3)
+    # we are missing the lambda contrib in our sampler -> get rid of it
+    est /= lam_range[1] - lam_range[0]
+    assert np.abs(1.0 - result["contrib"].mean() / est) < 0.07

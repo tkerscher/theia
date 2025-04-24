@@ -4,6 +4,7 @@
 #include "lookup.glsl"
 
 #define SPEED_OF_LIGHT 0.299792458 // m/ns
+#define INV_SPEED_OF_LIGHT 3.335640951981521 // ns / m
 
 //////////////////////////////////// MEDIUM ////////////////////////////////////
 

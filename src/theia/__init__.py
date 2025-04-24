@@ -21,6 +21,7 @@ if not hp.suitableDeviceAvailable():
 # import modules
 submodules = [
     "camera",
+    "cascades",
     "light",
     "lookup",
     "material",

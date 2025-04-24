@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import scipy.constants as consts
 from scipy.integrate import quad
 from scipy.stats.sampling import NumericalInversePolynomial
 
@@ -20,18 +21,21 @@ from theia.util import ShaderLoader, compileShader, createPreamble
 import theia.units as u
 
 from collections.abc import Callable
-from numpy.typing import NDArray
+from numpy.typing import ArrayLike, NDArray
 
 __all__ = [
     "CherenkovLightSource",
     "CherenkovTrackLightSource",
     "ConeLightSource",
     "ConstWavelengthSource",
+    "FunctionWavelengthSource",
     "HostLightSource",
     "HostWavelengthSource",
     "LightSampleItem",
     "LightSampler",
     "LightSource",
+    "MuonTrackLightSource",
+    "ParticleCascadeLightSource",
     "ParticleTrack",
     "PencilLightSource",
     "PolarizedLightSampleItem",
@@ -39,6 +43,7 @@ __all__ = [
     "UniformWavelengthSource",
     "WavelengthSampleItem",
     "WavelengthSource",
+    "frankTamm",
 ]
 
 
@@ -1177,3 +1182,294 @@ class CherenkovTrackLightSource(LightSource):
         )
         # assemble full code
         return preamble + self._sourceCode
+
+
+class MuonTrackLightSource(LightSource):
+    """
+    Light source describing the Cherenkov light produced from a high energy
+    muon track and its secondaries particles up to 500 MeV in ice or water as
+    described in [1]_.
+
+    Parameters
+    ----------
+    startPosition: (float, float, float)
+        Start position of the track
+    startTime: float
+        Time at which the muon is at `startPosition`
+    endPosition: (float, float, float)
+        End position of the track
+    endTime: float
+        Time at which the muon is at `endPosition`
+    muonEnergy: float
+        Energy of the muon producing secondary particles
+    a_angular: float
+        The a parameter of the angular light emission distribution (eq. 4.5 in
+        [1]_).
+    b_angular: float
+        The b parameter of the angular light emission distribution (eq. 4.5 in
+        [1]_)
+    applyFrankTamm: bool, default=True
+        Whether to apply the Frank-Tamm equation describing the light yield as a
+        function of wavelength.
+
+    Stage Parameters
+    ----------------
+    startPosition: (float, float, float)
+        Start position of the track
+    startTime: float
+        Time at which the muon is at `startPosition`
+    endPosition: (float, float, float)
+        End position of the track
+    endTime: float
+        Time at which the muon is at `endPosition`
+    muonEnergy: float
+        Energy of the muon producing secondary particles
+    a_angular: float, default=0.39
+        The a parameter of the angular light emission distribution (eq. 4.5 in
+        [1]_).
+    b_angular: float, default=2.61
+        The b parameter of the angular light emission distribution (eq. 4.5 in
+        [1]_)
+
+    .. [1] L. Raedel "Simulation Studies of the Cherenkov Light Yield from
+           Relativistic Particles in High-Energy Neutrino Telescopes with
+           Geant 4" (2012)
+    """
+
+    name = "Muon Track Light Source"
+
+    class TrackParameters(Structure):
+        _fields_ = [
+            ("startPosition", vec3),
+            ("startTime", c_float),
+            ("endPosition", vec3),
+            ("endTime", c_float),
+            ("_energyScale", c_float),
+            ("_a_angular", c_float),
+            ("_b_angular", c_float),
+        ]
+
+    def __init__(
+        self,
+        startPosition: tuple[float, float, float],
+        startTime: float,
+        endPosition: tuple[float, float, float],
+        endTime: float,
+        muonEnergy: float,
+        applyFrankTamm: bool = True,
+    ) -> None:
+        super().__init__(
+            supportForward=True,
+            nRNGForward=3,
+            supportBackward=True,
+            nRNGBackward=1,
+            params={"MuonTrackParams": self.TrackParameters},
+            extra={"muonEnergy"},
+        )
+
+        # set params
+        self.setParams(
+            startPosition=startPosition,
+            startTime=startTime,
+            endPosition=endPosition,
+            endTime=endTime,
+        )
+        self.muonEnergy = muonEnergy
+        self._applyFrankTamm = applyFrankTamm
+
+    _sourceCode = ShaderLoader("lightsource.particles.muon.glsl")
+
+    @property
+    def isFrankTammApplied(self) -> bool:
+        """Whether the Frank Tamm equation is applied"""
+        return self._applyFrankTamm
+
+    @property
+    def muonEnergy(self) -> float:
+        """Energy of the muon producing secondary particles"""
+        return self._muonEnergy
+
+    @muonEnergy.setter
+    def muonEnergy(self, value: float) -> None:
+        self._muonEnergy = value
+        # calculate energy scale
+        self.setParam("_energyScale", 1.1880 + 0.0206 * np.log(value))
+        # calculate angular emission profile
+        # see notebooks/track_angular_dist_fit.ipynb
+        self.setParam("_a_angular", 0.86634 - 7.5624e-3 * np.log10(value))
+        self.setParam("_b_angular", 2.5030 + 3.0533e-2 * np.log10(value))
+
+    @property
+    def sourceCode(self) -> str:
+        preamble = createPreamble(FRANK_TAMM_IS=not self.isFrankTammApplied)
+        return preamble + self._sourceCode
+
+
+class ParticleCascadeLightSource(LightSource):
+    """
+    Light source describing the Cherenkov light emitted by secondary particles
+    in electro-magnetic or hadronic showers in water or ice caused by a primary
+    particle above 500 MeV as described in [1]_.
+
+    Parameters
+    ----------
+    startPosition: (float, float, float)
+        Start position of the cascade
+    startTime: float
+        Time point at which the cascade started
+    direction: (float, float, float)
+        Direction in which the cascade evolves, i.e. away from the start point.
+    energyScale: float
+        Also called Frank-Tamm factor in [1]_. Ratio of this tracks length to
+        one of an Cherenkov track without secondary particles emitting the same
+        amount of light. This value is typically larger than one.
+    a_angular: float
+        The a parameter of the angular light emission distribution (eq. 4.5 in
+        [1]_).
+    b_angular: float
+        The b parameter of the angular light emission distribution (eq. 4.5 in
+        [1]_)
+    a_long: float
+        The a parameter of the longitudinal light emission distribution (eq.
+        4.10 in [1]_).
+    b_long: float
+        The b parameter of the longitudinal light emission distribution. Note
+        that this differs from eq. 4.10 in [1]_ in order to match the definition
+        used by ice tray. Here (and in ice tray), this is the radiation length
+        X_0 divided by the b parameter of the underlying gamma distribution.
+    applyFrankTamm: bool, default=True
+        Whether to apply the Frank-Tamm equation describing the light yield as a
+        function of wavelength.
+
+    Stage Parameters
+    ----------------
+    startPosition: (float, float, float)
+        Start position of the track
+    startTime: float
+        Time at which the muon is at `startPosition`
+    endPosition: (float, float, float)
+        End position of the track
+    endTime: float
+        Time at which the muon is at `endPosition`
+    energyScale: float
+        Also called Frank-Tamm factor in [1]_. Ratio of this tracks length to
+        one of an Cherenkov track without secondary particles emitting the same
+        amount of light. This value is typically larger than one.
+    a_angular: float
+        The a parameter of the angular light emission distribution (eq. 4.5 in
+        [1]_).
+    b_angular: float
+        The b parameter of the angular light emission distribution (eq. 4.5 in
+        [1]_)
+    a_long: float
+        The a parameter of the longitudinal light emission distribution (eq.
+        4.10 in [1]_).
+    b_long: float
+        The b parameter of the longitudinal light emission distribution.
+
+    Note
+    ----
+    Raedel calculates the radiation length using the following formula:
+
+             1      716.4 [g cm^-2] A
+     X_0 = ----- ------------------------
+            rho   Z(Z+1) ln(287/sqrt(Z))
+
+    which turns out to be 39.75 cm in ice and 36.08 cm in water [2]_.
+
+    .. [1] L. Raedel "Simulation Studies of the Cherenkov Light Yield from
+           Relativistic Particles in High-Energy Neutrino Telescopes with
+           Geant 4" (2012)
+       [2] L. Raedel, C. Wiebusch: "Calculation of the Cherenkov light yield
+           from electromagnetic cascades in ice with Geant4" (2013)
+           arXiv:1210.5140v2
+    """
+
+    name = "Particle Cascade Light Source"
+
+    class CascadeParameters(Structure):
+        _fields_ = [
+            ("startPosition", vec3),
+            ("startTime", c_float),
+            ("direction", vec3),
+            ("energyScale", c_float),
+            ("a_angular", c_float),
+            ("b_angular", c_float),
+            ("a_long", c_float),
+            ("b_long", c_float),
+        ]
+
+    def __init__(
+        self,
+        startPosition: tuple[float, float, float],
+        startTime: float,
+        direction: tuple[float, float, float],
+        energyScale: float,
+        a_angular: float,
+        b_angular: float,
+        a_long: float,
+        b_long: float,
+        applyFrankTamm: bool = True,
+    ) -> None:
+        super().__init__(
+            supportForward=True,
+            supportBackward=True,
+            # unfortunately, the amount of samples drawn is not deterministic
+            # because of the rejection algorithm used for the gamma distribution
+            # for now we just report a large amount, but this is not nice
+            # (with Philox RNG it is not really a problem if we do not shift
+            # enough)
+            # TODO: fix this
+            nRNGForward=12,
+            nRNGBackward=10,
+            params={"CascadeParams": self.CascadeParameters},
+        )
+
+        # save params
+        self.setParams(
+            startPosition=startPosition,
+            startTime=startTime,
+            direction=direction,
+            energyScale=energyScale,
+            a_angular=a_angular,
+            b_angular=b_angular,
+            a_long=a_long,
+            b_long=b_long,
+        )
+        self._applyFrankTamm = applyFrankTamm
+
+    # source code via descriptor
+    _sourceCode = ShaderLoader("lightsource.particles.cascade.glsl")
+
+    @property
+    def isFrankTammApplied(self) -> bool:
+        """Whether the Frank Tamm equation is applied"""
+        return self._applyFrankTamm
+
+    @property
+    def sourceCode(self) -> str:
+        preamble = createPreamble(FRANK_TAMM_IS=not self.isFrankTammApplied)
+        return preamble + self._sourceCode
+
+
+def frankTamm(
+    wavelength: ArrayLike,
+    refractiveIndex: ArrayLike,
+    beta: float = 1.0,
+) -> NDArray[np.float64]:
+    """Frank Tamm equation
+    
+    Evaluates the Frank-Tamm equation in units of [m^-1 nm^-1] for the given
+    wavelengths and refractive indices:
+
+        d^2           alpha  /            1       \\
+     --------- = 2pi ------- | 1 - -------------- |
+      dx dlam         lam^2 \\      (beta * n)^2  /
+
+    where alpha is the finestructure constant and beta = v / c the particle's
+    speed relative to the speed of light.
+    """
+    lam = np.asarray(wavelength) / u.nm
+    n = beta * np.asarray(refractiveIndex)
+    # The 10^9 converts one of the [nm^-1] to [m^-1]
+    return 2.0 * np.pi * consts.alpha / lam**2 * (1.0 - (1.0 / n**2)) * 1e9

@@ -25,6 +25,13 @@ __all__ = [
     "ps",
     "um",
     "nm",
+    "rad",
+    "deg",
+    "eV",
+    "keV",
+    "GeV",
+    "TeV",
+    "PeV",
 ]
 
 
@@ -41,7 +48,7 @@ def __dir__():
     )
 
 
-Dimension = Literal["length", "time", "wavelength", "compound"]
+Dimension = Literal["length", "time", "wavelength", "compound", "energy"]
 """
 Fundamental dimensions the simulation knows about.
 `compound` indicates a compound unit.
@@ -199,6 +206,12 @@ nm: Final[Unit] = Unit("wavelength", 1.0)
 # angle
 rad: Final[Unit] = Unit("angle", 1.0)
 deg: Final[Unit] = Unit("angle", pi / 180.0)
+# energy
+eV: Final[Unit] = Unit("energy", 1e-6)
+keV: Final[Unit] = Unit("energy", 1e-3)
+GeV: Final[Unit] = Unit("energy", 1.0)
+TeV: Final[Unit] = Unit("energy", 1e3)
+PeV: Final[Unit] = Unit("energy", 1e6)
 
 
 def convert(data: T, unit: Unit) -> T:
