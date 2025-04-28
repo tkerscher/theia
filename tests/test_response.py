@@ -1,6 +1,7 @@
 import pytest
 
 import numpy as np
+import scipy.stats as stats
 import theia.response
 import theia.units as u
 
@@ -31,7 +32,7 @@ def test_record(rng, polarized: bool):
         samples["stokes"] = rng.random((N, 4))
         samples["polarizationRef"] = rng.random((N, 3))
 
-    runPipeline([replay, record])
+    runPipeline(replay.collectStages())
 
     results = record.queue.view(0)
     assert results.count == N
@@ -79,7 +80,7 @@ def test_histogramResponse(rng):
     samples["time"] = rng.random((N,)) * T1
     samples["contrib"] = rng.random((N,)) * 10.0
 
-    runPipeline([replay, response])
+    runPipeline(replay.collectStages())
 
     result = response.result(0)
     # calculate expected results
@@ -120,6 +121,54 @@ def test_histogramEstimator(rng):
     result = estimator.result(0)
     expected = np.histogram(data["time"], N_BINS, (T0, T1), weights=data["value"])[0]
     assert np.allclose(result, expected * NORM)
+
+
+def test_kernelHistogramEstimator(rng):
+    N = 64 * 1024
+    N_BINS = 200
+    BIN_SIZE = 1.2 * u.ns
+    T0 = 20.0 * u.ns
+    T1 = T0 + N_BINS * BIN_SIZE
+    T_PEAK = T0 + 0.3 * (T1 - T0)
+    BANDWIDTH = 10.0 * u.ns
+    SUPPORT = 50.0 * u.ns
+    NORM = 5e-4
+
+    value = theia.response.UniformValueResponse()
+    response = theia.response.KernelHistogramHitResponse(
+        value,
+        nBins=N_BINS,
+        t0=T0,
+        binSize=BIN_SIZE,
+        kernelBandwidth=BANDWIDTH,
+        kernelSupport=SUPPORT,
+        normalization=NORM,
+    )
+    replay = theia.response.HitReplay(N, response)
+
+    samples = replay.queue.view(0)
+    samples["position"] = (10.0 * rng.random((N, 3)) - 5.0) * u.m
+    samples["direction"] = rng.random((N, 3))
+    samples["normal"] = rng.random((N, 3))
+    samples["wavelength"] = (rng.random((N,)) * 100.0 + 400.0) * u.nm
+    # samples["time"] = rng.random((N,)) * T1
+    samples["time"] = rng.normal(T_PEAK, 10.0 * BIN_SIZE, (N,))
+    # samples["contrib"] = rng.random((N,)) * 5.0 + 5.0
+    samples["contrib"] = rng.random((N,)) + np.sqrt(samples["time"])
+
+    runPipeline(replay.collectStages())
+
+    # calculate expected result
+    x = np.arange(N_BINS + 1) * BIN_SIZE + T0
+    exp_result = np.zeros_like(x)
+    for i in range(N):
+        t = samples["time"][i]
+        v = samples["contrib"][i]
+        exp_result += v * stats.norm.cdf(x, loc=t, scale=BANDWIDTH)
+    exp_result = np.diff(exp_result) * NORM
+    # check result
+    result = response.result(0)
+    assert np.abs(result - exp_result).max() < 6e-4
 
 
 def test_uniformResponse(rng):

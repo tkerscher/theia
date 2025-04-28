@@ -29,6 +29,7 @@ __all__ = [
     "HitRecorder",
     "HitReplay",
     "HitResponse",
+    "KernelHistogramHitResponse",
     "PolarizedCameraHitResponseItem",
     "PolarizedHitItem",
     "SampleValueResponse",
@@ -304,6 +305,13 @@ class HitReplay(PipelineStage):
     def response(self) -> HitResponse:
         """Response function called for each hit"""
         return self._response
+
+    def collectStages(self) -> list[PipelineStage]:
+        """
+        Returns a list of all stages involved with this stage in the correct
+        order suitable for creating a pipeline-
+        """
+        return [self, self.response]
 
     def run(self, i: int) -> list[hp.Command]:
         self._bindParams(self._program, i)
@@ -858,7 +866,10 @@ class HistogramReducer(PipelineStage):
 
     def run(self, i: int) -> list[hp.Command]:
         self._bindParams(self._program, i)
-        cmds = [self._program.dispatch(self._groups)]
+        cmds = [
+            hp.flushMemory(),
+            self._program.dispatch(self._groups),
+        ]
         if self.retrieve:
             cmds.append(hp.retrieveTensor(self.histOut, self._buffer[i]))
         return cmds
@@ -940,6 +951,208 @@ class HistogramHitResponse(HitResponse):
         self._retrieve = retrieve
         self._reduceBlockSize = reduceBlockSize
         self._updateResponse = updateResponse
+        self._reducer = None
+
+    @property
+    def nBins(self) -> int:
+        """Number of bins in the histogram"""
+        return self._nBins
+
+    @property
+    def normalization(self) -> float | None:
+        """Common factor each bin gets multiplied with"""
+        return self._normalization
+
+    @normalization.setter
+    def normalization(self, value: float) -> None:
+        self._normalization = value
+        if self._reducer is not None:
+            self._reducer.normalization = value
+
+    @property
+    def reduceBlockSize(self) -> int:
+        """Workgroup size of the reduction stage."""
+        return self._reduceBlockSize
+
+    @property
+    def reduceCode(self) -> bytes:
+        """
+        Compiled source code of the reduction stage. Only available after
+        response has been prepared.
+        """
+        if self._reducer is None:
+            raise RuntimeError("Response has not been prepared")
+        return self._reducer.code
+
+    @property
+    def response(self) -> ValueResponse:
+        """Value response function processing hits."""
+        return self._response
+
+    @property
+    def retrieve(self) -> bool:
+        """Wether to retrieve the final histogram"""
+        return self._retrieve
+
+    @property
+    def sourceCode(self) -> str:
+        # we need to define histogram size via macro -> enclose in include guards
+        preamble = createPreamble(N_BINS=self.nBins)
+        # Include value response
+        return "\n".join(
+            [
+                self.response.sourceCode,
+                "#ifndef _INCLUDE_RESPONSE_HISTOGRAM_PREAMBLE",
+                "#define _INCLUDE_RESPONSE_HISTOGRAM_PREAMBLE",
+                preamble,
+                "#endif",
+                self._sourceCode,
+            ]
+        )
+
+    def result(self, i: int) -> NDArray | None:
+        """
+        The retrieved i-th histogram. `None` if `retrieve` was set to `False` or
+        response has not yet been prepared.
+        """
+        if self._reducer is None:
+            return None
+        else:
+            return self._reducer.result(i)
+
+    def prepare(self, config: TraceConfig) -> None:
+        self.response.prepare(config)
+        if self.normalization is None:
+            self.normalization = config.normalization
+        self._reducer = HistogramReducer(
+            nBins=self.nBins,
+            nHist=-(config.batchSize // -config.blockSize),
+            retrieve=self._retrieve,
+            normalization=self.normalization,
+            blockSize=self._reduceBlockSize,
+        )
+
+    def _bindParams(self, program: hp.Program, i: int) -> None:
+        super()._bindParams(program, i)
+        # connect response and reducer
+        program.bindParams(HistogramOut=self._reducer.histIn)
+
+    def update(self, i: int) -> None:
+        if self._reducer is None:
+            raise RuntimeError("Response has not been prepared")
+        super().update(i)
+        self._reducer.update(i)
+        if self._updateResponse:
+            self.response.update(i)
+
+    def run(self, i: int) -> list[hp.Command]:
+        return self._reducer.run(i)
+
+
+class KernelHistogramHitResponse(HitResponse):
+    """
+    Response function producing a histogram using the values produced by the
+    given `ValueResponse`. Unlike `HistogramHitResponse`, however, each hit
+    value gets smeared by a kernel function and thus may affect multiple bins.
+    This is equivalent to binning a kernel density estimation.
+
+    Currently only Gaussian kernel is supported.
+
+    Parameters
+    ----------
+    response: ValueResponse
+        Value response function processing hits.
+    nBins: int, default=100
+        Number of bins in the histogram.
+    t0: float, default=0ns
+        First bin edge, i.e. the minimum time value a sample has to have to get
+        included.
+    binSize: float, default=1.0ns
+        Size of a single bin in units of time
+    kernelBandwidth: float, default=1.0ns
+        Bandwidth of the kernel. Corresponds to the standard deviation for
+        gaussian kernel.
+    kernelSupport: float, default=3.0ns
+        Limits the range the kernel affects to +/- the support.
+    normalization: float | None, default=None
+        Common factor each bin gets multiplied with. If `None`, uses the value
+        reported from the tracer during the preparation step.
+    retrieve: bool, default=True
+        Whether to retrieve the final histogram, i.e. copying it back to CPU.
+    reduceBlockSize: int, default=128
+        Workgroup size of the reduction stage.
+    updateResponse: bool, default=True
+        If True and this stage is requested to update e.g. by a pipeline, it
+        will cause the response function to also update.
+
+    Stage Parameters
+    ----------------
+    t0: float
+        First bin edge, i.e. the minimum time value a sample has to have to get
+        included
+    binSize: float
+        Size of a single bin in unit of time
+        kernelBandwidth: float
+        Bandwidth of the kernel. Corresponds to the standard deviation for
+        gaussian kernel.
+    kernelSupport: float
+        Limits the range the kernel affects to +/- the support.
+    normalization
+        Common factor each bin gets multiplied with
+
+    Note
+    ----
+    During the update step in a pipeline, the response gets also updated making
+    it unnecessary to include as a separate step in most cases. This stage,
+    however, ignores any commands produced by run() as it is not clear where to
+    put them chronologically.
+
+    See Also
+    --------
+    theia.response.HistogramHitResponse
+    """
+
+    name = "Kernel Histogram Hit Response"
+
+    # lazily load source code
+    _sourceCode = ShaderLoader("response.histogram.kernel.glsl")
+
+    class Params(Structure):
+        _fields_ = [
+            ("t0", c_float),
+            ("binSize", c_float),
+            ("kernelBandwidth", c_float),
+            ("kernelSupport", c_float),
+        ]
+
+    def __init__(
+        self,
+        response: ValueResponse,
+        *,
+        nBins: int = 100,
+        t0: float = 0.0 * u.ns,
+        binSize: float = 1.0 * u.ns,
+        kernelBandwidth: float = 1.0 * u.ns,
+        kernelSupport: float = 3.0 * u.ns,
+        normalization: float | None = None,
+        retrieve: bool = True,
+        reduceBlockSize: int = 128,
+        updateResponse: bool = True,
+    ) -> None:
+        super().__init__({"ResponseParams": self.Params}, {"normalization"})
+        # save params
+        self._response = response
+        self._nBins = nBins
+        self._normalization = normalization
+        self._retrieve = retrieve
+        self._reduceBlockSize = reduceBlockSize
+        self._updateResponse = updateResponse
+        self.setParams(
+            t0=t0,
+            binSize=binSize,
+            kernelBandwidth=kernelBandwidth,
+            kernelSupport=kernelSupport,
+        )
         self._reducer = None
 
     @property
