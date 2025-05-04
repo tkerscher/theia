@@ -89,25 +89,28 @@ class TraceConfig:
     Description of the tracing.
 
     Parameters
-        ----------
-        batchSize: int
-            Total number of threads per run.
-        blockSize: int
-            Number of threads per work group.
-        maxHits: int
-            Maximum number of hits the response will be called per batch.
-        normalization: float
-            Normalization factor that must be applied to each sample to get a
-            correct estimate.
-        polarized: bool
-            True, if hits contain polarization information.
+    ----------
+    batchSize: int
+        Total number of threads per run.
+    blockSize: int
+        Number of threads per work group.
+    capacity: int
+        Maximum batch size
+    maxHitsPerThread: int
+        Maximum number of hits produced per thread.
+    normalization: float
+        Normalization factor that must be applied to each sample to get a
+        correct estimate.
+    polarized: bool
+        True, if hits contain polarization information.
     """
 
     batchSize: int
     blockSize: int
-    maxHits: int
-    normalization: float
-    polarized: bool
+    capacity: int
+    maxHitsPerThread: int = 1
+    normalization: float = 1.0
+    polarized: bool = False
 
 
 class HitResponse(SourceCodeMixin):
@@ -133,6 +136,13 @@ class HitResponse(SourceCodeMixin):
         Called by e.g. a `Tracer` when binding the response into its program
         notifying it about its configuration to allow it to make adequate
         adjustments to itself beforehand.
+        """
+        pass
+
+    def updateConfig(self, config: TraceConfig) -> None:
+        """
+        Called by e.g. a `Tracer` to notify the response about changes in its
+        configuration.
         """
         pass
 
@@ -174,8 +184,9 @@ class HitRecorder(HitResponse):
         self._queue = IOQueue(item, mode="retrieve")
 
     def prepare(self, config: TraceConfig) -> None:
-        self._capacity = config.maxHits
-        self.queue.initialize(config.maxHits)
+        maxHits = config.maxHitsPerThread * config.capacity
+        self._capacity = maxHits
+        self.queue.initialize(maxHits)
 
     @property
     def capacity(self) -> int:
@@ -252,7 +263,7 @@ class HitReplay(PipelineStage):
         self._response = response
 
         # prepare response
-        c = TraceConfig(capacity, blockSize, capacity, normalization, polarized)
+        c = TraceConfig(capacity, blockSize, capacity, 1, normalization, polarized)
         response.prepare(c)
 
         # create code if needed
@@ -480,12 +491,13 @@ class StoreValueHitResponse(HitResponse):
 
     def prepare(self, config: TraceConfig) -> None:
         self.response.prepare(config)
+        maxHits = config.maxHitsPerThread * config.capacity
         if self._queue is None:
-            self._queue = createValueQueue(config.maxHits)
-        elif self.queue.capacity < config.maxHits:
+            self._queue = createValueQueue(maxHits)
+        elif self.queue.capacity < maxHits:
             raise RuntimeError(
                 f"Queue not big enough to store hits: Queue has capacity of"
-                f"{self.queue.capacity} but {config.maxHits} needed"
+                f"{self.queue.capacity} but {maxHits} needed"
             )
 
     def update(self, i):
@@ -555,8 +567,8 @@ class SampleValueResponse(HitResponse):
         self.response.bindParams(program, i)
 
     def prepare(self, config):
-        if config.batchSize != config.maxHits:
-            raise ValueError("batch size must match ")
+        if config.maxHitsPerThread != 1:
+            raise ValueError("This sampler only supports a single hit per thread!")
         self.response.prepare(config)
         self._tensor = hp.FloatTensor(config.batchSize)
         self._buffer = [hp.FloatBuffer(config.batchSize) for _ in range(2)]
@@ -662,7 +674,8 @@ class CameraHitResponseSampler(PipelineStage):
         self._queue = IOQueue(item, batchSize, mode="retrieve", skipCounter=True)
 
         # prepare response
-        response.prepare(TraceConfig(batchSize, blockSize, batchSize, 1.0, polarized))
+        c = TraceConfig(batchSize, blockSize, batchSize, 1, 1.0, polarized)
+        response.prepare(c)
 
         # create code if needed
         if code is None:
@@ -895,7 +908,7 @@ class HistogramHitResponse(HitResponse):
         Size of a single bin in unit of time
     normalization: float | None, default=None
         Common factor each bin gets multiplied with. If `None`, uses the value
-        from the corresponding tracer during preparation.
+        from the corresponding tracer during preparation and config updates.
     retrieve: bool, default=True
         Wether to retrieve the final histogram, i.e. copying it back to the CPU.
     reduceBlockSize: int, default=128
@@ -964,9 +977,9 @@ class HistogramHitResponse(HitResponse):
         return self._normalization
 
     @normalization.setter
-    def normalization(self, value: float) -> None:
+    def normalization(self, value: float | None) -> None:
         self._normalization = value
-        if self._reducer is not None:
+        if self._reducer is not None and value is not None:
             self._reducer.normalization = value
 
     @property
@@ -1022,15 +1035,20 @@ class HistogramHitResponse(HitResponse):
 
     def prepare(self, config: TraceConfig) -> None:
         self.response.prepare(config)
-        if self.normalization is None:
-            self.normalization = config.normalization
+        norm = self.normalization
+        if norm is None:
+            norm = config.normalization
         self._reducer = HistogramReducer(
             nBins=self.nBins,
             nHist=-(config.batchSize // -config.blockSize),
             retrieve=self._retrieve,
-            normalization=self.normalization,
+            normalization=norm,
             blockSize=self._reduceBlockSize,
         )
+
+    def updateConfig(self, config: TraceConfig) -> None:
+        if self.normalization is None and self._reducer is not None:
+            self._reducer.normalization = config.normalization
 
     def _bindParams(self, program: hp.Program, i: int) -> None:
         super()._bindParams(program, i)
@@ -1076,7 +1094,7 @@ class KernelHistogramHitResponse(HitResponse):
         Limits the range the kernel affects to +/- the support.
     normalization: float | None, default=None
         Common factor each bin gets multiplied with. If `None`, uses the value
-        reported from the tracer during the preparation step.
+        reported from the tracer during the preparation step and config updates.
     retrieve: bool, default=True
         Whether to retrieve the final histogram, i.e. copying it back to CPU.
     reduceBlockSize: int, default=128
@@ -1166,9 +1184,9 @@ class KernelHistogramHitResponse(HitResponse):
         return self._normalization
 
     @normalization.setter
-    def normalization(self, value: float) -> None:
+    def normalization(self, value: float | None) -> None:
         self._normalization = value
-        if self._reducer is not None:
+        if self._reducer is not None and value is not None:
             self._reducer.normalization = value
 
     @property
@@ -1224,15 +1242,20 @@ class KernelHistogramHitResponse(HitResponse):
 
     def prepare(self, config: TraceConfig) -> None:
         self.response.prepare(config)
-        if self.normalization is None:
-            self.normalization = config.normalization
+        norm = self.normalization
+        if norm is None:
+            norm = config.normalization
         self._reducer = HistogramReducer(
             nBins=self.nBins,
             nHist=-(config.batchSize // -config.blockSize),
             retrieve=self._retrieve,
-            normalization=self.normalization,
+            normalization=norm,
             blockSize=self._reduceBlockSize,
         )
+
+    def updateConfig(self, config: TraceConfig) -> None:
+        if self.normalization is None and self._reducer is not None:
+            self._reducer.normalization = config.normalization
 
     def _bindParams(self, program: hp.Program, i: int) -> None:
         super()._bindParams(program, i)

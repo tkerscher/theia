@@ -1,7 +1,4 @@
 //check expected macros
-#ifndef BATCH_SIZE
-#error "BATCH_SIZE not defined"
-#endif
 #ifndef BLOCK_SIZE
 #error "BLOCK_SIZE not defined"
 #endif
@@ -32,6 +29,10 @@ layout(local_size_x = BLOCK_SIZE) in;
 
 #include "callback.util.glsl"
 
+layout(scalar) uniform DispatchParams {
+    uint batchSize;
+};
+
 layout(scalar) uniform TraceParams {
     uint targetIdx;
     uvec2 sceneMedium;
@@ -57,7 +58,7 @@ ForwardRay sampleRay(uint idx, inout uint dim) {
 void traceMain() {
     uint dim = 0;
     uint idx = gl_GlobalInvocationID.x;
-    if (idx >= BATCH_SIZE)
+    if (idx >= batchSize)
         return;
     
     //sample ray

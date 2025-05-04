@@ -348,6 +348,14 @@ class Tracer(PipelineStage):
 
     name = "Tracer"
 
+    class DispatchParams(Structure):
+        _fields_ = [
+            ("_batchSize", c_uint32),
+            ("_groupCountX", c_uint32),
+            ("_groupCountY", c_uint32),
+            ("_groupCountZ", c_uint32),
+        ]
+
     def __init__(
         self,
         response: HitResponse,
@@ -356,28 +364,48 @@ class Tracer(PipelineStage):
         *,
         batchSize: int,
         blockSize: int,
-        maxHits: int,
-        normalization: float,
+        capacity: int,
         nRNGSamples: int,
-        polarized: bool,
+        maxHitsPerThread: int,
+        polarized: bool = False,
     ) -> None:
+        # add dispatch params to params
+        params = {**params, "DispatchParams": self.DispatchParams}
+        extra = {*extra, "batchSize"}
         super().__init__(params, extra)
         # save props
-        self._batchSize = batchSize
         self._blockSize = blockSize
+        self._capacity = batchSize if capacity is None else capacity
         self._response = response
-        self._maxHits = maxHits
-        self._normalization = normalization
+        self._maxHitsPerThread = maxHitsPerThread
         self._nRNGSamples = nRNGSamples
         self._polarized = polarized
+        self.setParams(
+            batchSize=batchSize,
+            _groupCountY=1,
+            _groupCountZ=1,
+        )
         # prepare response
-        c = TraceConfig(batchSize, blockSize, maxHits, normalization, polarized)
-        response.prepare(c)
+        response.prepare(self._getTraceConfig())
 
     @property
     def batchSize(self) -> int:
         """Number of rays to simulate per run"""
-        return self._batchSize
+        return self.getParam("_batchSize")
+
+    @batchSize.setter
+    def batchSize(self, value: int) -> None:
+        if value < 0:
+            raise ValueError("batchSize must be at least zero!")
+        if value > self.capacity:
+            raise ValueError("batchSize cannot be larger than capacity!")
+
+        groupCount = -(value // -self.blockSize)
+        groupCount = max(groupCount, 1)
+        self.setParams(_batchSize=value, _groupCountX=groupCount)
+
+        # notify response
+        self.response.updateConfig(self._getTraceConfig())
 
     @property
     def blockSize(self) -> int:
@@ -385,9 +413,19 @@ class Tracer(PipelineStage):
         return self._blockSize
 
     @property
+    def capacity(self) -> int:
+        """Maximal batch size"""
+        return self._capacity
+
+    @property
     def maxHits(self) -> int:
-        """Maximum amount of hits the tracer can produce per run"""
-        return self._maxHits
+        """Maximum number of hits per batch"""
+        return self.maxHitsPerThread * self.batchSize
+
+    @property
+    def maxHitsPerThread(self) -> int:
+        """Maximum amount of hits the tracer can produce per thread"""
+        return self._maxHitsPerThread
 
     @property
     def normalization(self) -> float:
@@ -395,7 +433,7 @@ class Tracer(PipelineStage):
         Normalization factor that must be applied to each sample to get a
         correct estimate.
         """
-        return self._normalization
+        return 1.0 / self.batchSize
 
     @property
     def nRNGSamples(self) -> int:
@@ -419,6 +457,21 @@ class Tracer(PipelineStage):
         correct order suitable for creating a pipeline.
         """
         pass
+
+    def _dispatch(self, program: hp.Program, i: int) -> list[hp.Command]:
+        tensor = self._getParamsTensor("DispatchParams", i)
+        offset = Tracer.DispatchParams._groupCountX.offset
+        return [program.dispatchIndirect(tensor, offset)]
+
+    def _getTraceConfig(self) -> TraceConfig:
+        return TraceConfig(
+            self.batchSize,
+            self.blockSize,
+            self.capacity,
+            self.maxHitsPerThread,
+            self.normalization,
+            self.polarized,
+        )
 
 
 class VolumeForwardTracer(Tracer):
@@ -446,6 +499,8 @@ class VolumeForwardTracer(Tracer):
     medium: int
         Device address of the medium the scene is emerged in, e.g. the address
         of a water medium for an underwater simulation.
+    capacity: int | None, default=None
+        Maximum batch size. If None, same as `batchSize`.
     callback: TraceEventCallback, default=EmptyEventCallback()
         Callback called for each tracing event. See `TraceEventCallback`
     nScattering: int, default=6
@@ -525,6 +580,7 @@ class VolumeForwardTracer(Tracer):
         rng: RNG,
         *,
         medium: int,
+        capacity: int | None = None,
         callback: TraceEventCallback = EmptyEventCallback(),
         nScattering: int = 6,
         scatterCoefficient: float = float("NaN"),
@@ -536,13 +592,12 @@ class VolumeForwardTracer(Tracer):
         blockSize: int = 128,
         code: bytes | None = None,
     ) -> None:
-        # calculate max hits
-        maxHits = nScattering
+        # calculate max hits per thread
+        maxHitsPerThread = nScattering
         if not disableTargetSampling:
-            maxHits *= 2
+            maxHitsPerThread *= 2
         if not disableDirectLighting:
-            maxHits += 1
-        maxHits *= batchSize
+            maxHitsPerThread += 1
         # MIS also scatters -> one less trace command
         pathLength = nScattering if disableTargetSampling else nScattering - 1
         rngStride = 3 if disableTargetSampling else 7
@@ -554,9 +609,9 @@ class VolumeForwardTracer(Tracer):
             {"TraceParams": self.TraceParams},
             batchSize=batchSize,
             blockSize=blockSize,
-            maxHits=maxHits,
-            normalization=1.0 / batchSize,
+            capacity=capacity,
             nRNGSamples=nRNG,
+            maxHitsPerThread=maxHitsPerThread,
             polarized=polarized,
         )
         # save params
@@ -576,13 +631,10 @@ class VolumeForwardTracer(Tracer):
             maxTime=maxTime,
             _maxDist=traceBBox.diagonal,
         )
-        # calculate group size
-        self._groups = -(batchSize // -blockSize)
 
         # compile code if needed
         if code is None:
             preamble = createPreamble(
-                BATCH_SIZE=batchSize,
                 BLOCK_SIZE=blockSize,
                 DISABLE_DIRECT_LIGHTING=disableDirectLighting,
                 DISABLE_MIS=disableTargetSampling,
@@ -685,7 +737,7 @@ class VolumeForwardTracer(Tracer):
         self.response.bindParams(self._program, i)
         self.rng.bindParams(self._program, i)
         self.target.bindParams(self._program, i)
-        return [self._program.dispatch(self._groups)]
+        return self._dispatch(self._program, i)
 
 
 class VolumeBackwardTracer(Tracer):
@@ -715,6 +767,8 @@ class VolumeBackwardTracer(Tracer):
     medium: int
         dDevice address of the medium the scene is emerged in, e.g. the address
         of a water medium for an underwater simulation.
+    capacity: int | None, default=None
+        Maximum batch size. If None, same as `batchSize`.
     callback: TraceEventCallback, default=EmptyEventCallback()
         Callback called for each tracing event. See `TraceEventCallback`
     nScattering: int, default=6
@@ -793,6 +847,7 @@ class VolumeBackwardTracer(Tracer):
         rng: RNG,
         *,
         medium: int,
+        capacity: int | None = None,
         callback: TraceEventCallback = EmptyEventCallback(),
         nScattering: int = 6,
         target: Target | None = None,
@@ -811,10 +866,9 @@ class VolumeBackwardTracer(Tracer):
             raise ValueError("Camera does not support direct mode!")
 
         # Calculate max hits
-        maxHits = nScattering
+        maxHitsPerThread = nScattering
         if not disableDirectLighting:
-            maxHits += 1
-        maxHits *= batchSize
+            maxHitsPerThread += 1
         # calculate number of rng samples
         rngStride = 3 + source.nRNGBackward
         rngPre = wavelengthSource.nRNGSamples + camera.nRNGSamples
@@ -829,9 +883,9 @@ class VolumeBackwardTracer(Tracer):
             {"TraceParams": self.TraceParams},
             batchSize=batchSize,
             blockSize=blockSize,
-            maxHits=maxHits,
-            normalization=1.0 / batchSize,
+            capacity=capacity,
             nRNGSamples=nRNG,
+            maxHitsPerThread=maxHitsPerThread,
             polarized=polarized,
         )
         # save params
@@ -851,13 +905,10 @@ class VolumeBackwardTracer(Tracer):
             maxTime=maxTime,
             _maxDist=traceBBox.diagonal,
         )
-        # calculate group size
-        self._groups = -(batchSize // -blockSize)
 
         # compile code if needed
         if code is None:
             preamble = createPreamble(
-                BATCH_SIZE=batchSize,
                 BLOCK_SIZE=blockSize,
                 DISABLE_DIRECT_LIGHTING=disableDirectLighting,
                 DISABLE_SELF_SHADOWING=target is None,
@@ -951,7 +1002,7 @@ class VolumeBackwardTracer(Tracer):
         self.rng.bindParams(self._program, i)
         if self.target is not None:
             self.target.bindParams(self._program, i)
-        return [self._program.dispatch(self._groups)]
+        return self._dispatch(self._program, i)
 
 
 class SceneForwardTracer(Tracer):
@@ -977,6 +1028,8 @@ class SceneForwardTracer(Tracer):
         Generator for creating random numbers
     scene: Scene
         Scene in which the rays are traced
+    capacity: int | None, default=None
+        Maximum batch size. If None, same as `batchSize`.
     callback: TraceEventCallback, default=EmptyEventCallback()
         Callback called for each tracing event. See `TraceEventCallback`
     maxPathLength: int, default=6
@@ -1058,6 +1111,7 @@ class SceneForwardTracer(Tracer):
         rng: RNG,
         scene: Scene,
         *,
+        capacity: int | None = None,
         callback: TraceEventCallback = EmptyEventCallback(),
         maxPathLength: int = 6,
         targetIdx: int = 0,
@@ -1078,13 +1132,13 @@ class SceneForwardTracer(Tracer):
             raise RuntimeError("Ray tracing is not supported on this system!")
 
         # calculate max hits
-        maxHits = batchSize * (maxPathLength - 1)
+        maxHits = maxPathLength - 1
         rngStride = 4
         if targetGuide is not None:
             maxHits *= 2
             rngStride += targetGuide.nRNGSamples
         if not disableDirectLighting:
-            maxHits += batchSize
+            maxHits += 1
         # init tracer
         nRNG = source.nRNGForward + wavelengthSource.nRNGSamples
         nRNG += rngStride * maxPathLength
@@ -1093,8 +1147,8 @@ class SceneForwardTracer(Tracer):
             {"TraceParams": self.TraceParams},
             batchSize=batchSize,
             blockSize=blockSize,
-            maxHits=maxHits,
-            normalization=1.0 / batchSize,
+            capacity=capacity,
+            maxHitsPerThread=maxHits,
             nRNGSamples=nRNG,
             polarized=polarized,
         )
@@ -1123,13 +1177,10 @@ class SceneForwardTracer(Tracer):
             _upperBBoxCorner=scene.bbox.upperCorner,
             _maxDist=scene.bbox.diagonal,
         )
-        # calculate group size
-        self._groups = -(batchSize // -blockSize)
 
         # compile code if needed
         if code is None:
             preamble = createPreamble(
-                BATCH_SIZE=batchSize,
                 BLOCK_SIZE=blockSize,
                 DISABLE_DIRECT_LIGHTING=disableDirectLighting,
                 DISABLE_MIS=targetGuide is None,
@@ -1231,7 +1282,7 @@ class SceneForwardTracer(Tracer):
         self.rng.bindParams(self._program, i)
         if self._targetGuide is not None:
             self._targetGuide.bindParams(self._program, i)
-        return [self._program.dispatch(self._groups)]
+        return self._dispatch(self._program, i)
 
 
 class SceneBackwardTracer(Tracer):
@@ -1260,6 +1311,8 @@ class SceneBackwardTracer(Tracer):
         Generator for creating random numbers
     scene: Scene
         Scene in which the rays are traced
+    capacity: int | None, default=None
+        Maximum batch size. If None, same as `batchSize`.
     callback: TraceEventCallback, default=EmptyEventCallback()
         Callback called for each tracing event. See `TraceEventCallback`.
     medium: Optional[int], default=None
@@ -1333,6 +1386,7 @@ class SceneBackwardTracer(Tracer):
         rng: RNG,
         scene: Scene,
         *,
+        capacity: int | None = None,
         callback: TraceEventCallback = EmptyEventCallback(),
         medium: int | None = None,
         maxPathLength: int = 6,
@@ -1355,7 +1409,6 @@ class SceneBackwardTracer(Tracer):
         maxHits = maxPathLength
         if not disableDirectLighting:
             maxHits += 1
-        maxHits *= batchSize
         # calculate number of rng samples
         rngStride = 3 + source.nRNGBackward
         rngPre = wavelengthSource.nRNGSamples + camera.nRNGSamples
@@ -1370,8 +1423,8 @@ class SceneBackwardTracer(Tracer):
             {"TraceParams": self.TraceParams},
             batchSize=batchSize,
             blockSize=blockSize,
-            maxHits=maxHits,
-            normalization=1.0 / batchSize,
+            capacity=capacity,
+            maxHitsPerThread=maxHits,
             nRNGSamples=nRNG,
             polarized=polarized,
         )
@@ -1394,13 +1447,10 @@ class SceneBackwardTracer(Tracer):
             _upperBBoxCorner=scene.bbox.upperCorner,
             _maxDist=scene.bbox.diagonal,
         )
-        # calculate group size
-        self._groups = -(batchSize // -blockSize)
 
         # compile code if needed
         if code is None:
             preamble = createPreamble(
-                BATCH_SIZE=batchSize,
                 BLOCK_SIZE=blockSize,
                 DISABLE_DIRECT_LIGHTING=disableDirectLighting,
                 DISABLE_TRANSMISSION=disableTransmission,
@@ -1497,7 +1547,7 @@ class SceneBackwardTracer(Tracer):
         self.wavelengthSource.bindParams(self._program, i)
         self.response.bindParams(self._program, i)
         self.rng.bindParams(self._program, i)
-        return [self._program.dispatch(self._groups)]
+        return self._dispatch(self._program, i)
 
 
 class SceneBackwardTargetTracer(Tracer):
@@ -1523,6 +1573,8 @@ class SceneBackwardTargetTracer(Tracer):
         Generator for creating random numbers
     scene: Scene
         Scene in which the rays are traced
+    capacity: int | None, default=None
+        Maximum batch size. If None, same as `batchSize`.
     callback: TraceEventCallback, default=EmptyEventCallback()
         Callback called for each tracing event. See `TraceEventCallback`.
     medium: Optional[int], default=None
@@ -1603,6 +1655,7 @@ class SceneBackwardTargetTracer(Tracer):
         rng: RNG,
         scene: Scene,
         *,
+        capacity: int | None = None,
         callback: TraceEventCallback = EmptyEventCallback(),
         medium: int | None = None,
         maxPathLength: int = 6,
@@ -1621,7 +1674,7 @@ class SceneBackwardTargetTracer(Tracer):
             raise RuntimeError("Ray tracing is not supported on this system!")
 
         # Calculate max hits
-        maxHits = batchSize * maxPathLength
+        maxHits = maxPathLength
         rngStride = 3
         if targetGuide is not None:
             maxHits *= 2
@@ -1634,8 +1687,8 @@ class SceneBackwardTargetTracer(Tracer):
             {"TraceParams": self.TraceParams},
             batchSize=batchSize,
             blockSize=blockSize,
-            maxHits=maxHits,
-            normalization=1.0 / batchSize,
+            capacity=capacity,
+            maxHitsPerThread=maxHits,
             nRNGSamples=nRNG,
             polarized=False,  # Not yet supported
         )
@@ -1663,13 +1716,10 @@ class SceneBackwardTargetTracer(Tracer):
             _upperBBoxCorner=scene.bbox.upperCorner,
             _maxDist=scene.bbox.diagonal,
         )
-        # calculate group size
-        self._groups = -(batchSize // -blockSize)
 
         # compile code if needed
         if code is None:
             preamble = createPreamble(
-                BATCH_SIZE=batchSize,
                 BLOCK_SIZE=blockSize,
                 DISABLE_MIS=targetGuide is None,
                 DISABLE_TRANSMISSION=disableTransmission,
@@ -1764,7 +1814,7 @@ class SceneBackwardTargetTracer(Tracer):
         self.rng.bindParams(self._program, i)
         if self.targetGuide is not None:
             self.targetGuide.bindParams(self._program, i)
-        return [self._program.dispatch(self._groups)]
+        return self._dispatch(self._program, i)
 
 
 class DirectLightTracer(Tracer):
@@ -1789,6 +1839,8 @@ class DirectLightTracer(Tracer):
         Generator for creating random numbers
     scene: Optional[Scene], default=None
         Scene in which rays are trace to simulate shading effects.
+    capacity: int | None, default=None
+        Maximum batch size. If None, same as `batchSize`.
     callback: TraceEventCallback, default=EmptyEventCallback()
         Callback called for each tracing event. See `TraceEventCallback`
     medium: Optional[int], default=None
@@ -1842,6 +1894,7 @@ class DirectLightTracer(Tracer):
         rng: RNG,
         scene: Scene | None = None,
         *,
+        capacity: int | None = None,
         callback: TraceEventCallback = EmptyEventCallback(),
         medium: int | None = None,
         maxTime: float = 1000.0 * u.ns,
@@ -1866,8 +1919,8 @@ class DirectLightTracer(Tracer):
             {"TraceParams": self.TraceParams},
             batchSize=batchSize,
             blockSize=blockSize,
-            maxHits=batchSize,
-            normalization=1.0 / batchSize,
+            capacity=capacity,
+            maxHitsPerThread=1,
             nRNGSamples=source.nRNGBackward + camera.nRNGDirect,
             polarized=polarized,
         )
@@ -1896,13 +1949,10 @@ class DirectLightTracer(Tracer):
             maxTime=maxTime,
             _maxDist=maxDist,
         )
-        # calculate group size
-        self._groups = -(batchSize // -blockSize)
 
         # compile code if needed
         if code is None:
             preamble = createPreamble(
-                BATCH_SIZE=batchSize,
                 BLOCK_SIZE=blockSize,
                 DIM_PHOTON_OFFSET=wavelengthSource.nRNGSamples,
                 DIM_CAM_OFFSET=wavelengthSource.nRNGSamples + camera.nRNGDirect,
@@ -1979,7 +2029,7 @@ class DirectLightTracer(Tracer):
         self.response.bindParams(self._program, i)
         self.rng.bindParams(self._program, i)
         self.wavelengthSource.bindParams(self._program, i)
-        return [self._program.dispatch(self._groups)]
+        return self._dispatch(self._program, i)
 
 
 class BidirectionalPathTracer(Tracer):
@@ -2007,6 +2057,8 @@ class BidirectionalPathTracer(Tracer):
         Generator for creating random numbers
     scene: Scene
         Scene in which the rays are traced
+    capacity: int | None, default=None
+        Maximum batch size. If None, same as `batchSize`.
     callback: TraceEventCallback, default=EmptyEventCallback()
         Callback called for each tracing event. See `TraceEventCallback`.
         Starts with the light sub path followed by the camera sub path.
@@ -2089,6 +2141,7 @@ class BidirectionalPathTracer(Tracer):
         rng: RNG,
         scene: Scene,
         *,
+        capacity: int | None = None,
         callback: TraceEventCallback = EmptyEventCallback(),
         callbackScope: Literal["light", "camera", "both"] = "both",
         lightPathLength: int = 6,
@@ -2107,7 +2160,6 @@ class BidirectionalPathTracer(Tracer):
             raise RuntimeError("Ray tracing is not supported on this system")
         # calculate max hits
         maxHits = lightPathLength * cameraPathLength
-        maxHits *= batchSize
         # calculate rng samples
         nRNG = source.nRNGForward + camera.nRNGSamples + wavelengthSource.nRNGSamples
         nRNG += (lightPathLength + cameraPathLength) * 4
@@ -2117,8 +2169,8 @@ class BidirectionalPathTracer(Tracer):
             {"TraceParams": self.TraceParams},
             batchSize=batchSize,
             blockSize=blockSize,
-            maxHits=maxHits,
-            normalization=(1.0 / batchSize),
+            capacity=capacity,
+            maxHitsPerThread=maxHits,
             nRNGSamples=nRNG,
             polarized=polarized,
         )
@@ -2144,13 +2196,10 @@ class BidirectionalPathTracer(Tracer):
             _upperBBoxCorner=scene.bbox.upperCorner,
             _maxDist=scene.bbox.diagonal,
         )
-        # calculate group size
-        self._groups = -(batchSize // -blockSize)
 
         # compile code if needed
         if code is None:
             preamble = createPreamble(
-                BATCH_SIZE=batchSize,
                 BLOCK_SIZE=blockSize,
                 CAMERA_PATH_LENGTH=cameraPathLength,
                 DISABLE_CAMERA_CALLBACK=callbackScope == "light",
@@ -2254,4 +2303,4 @@ class BidirectionalPathTracer(Tracer):
         self.response.bindParams(self._program, i)
         self.rng.bindParams(self._program, i)
         self.wavelengthSource.bindParams(self._program, i)
-        return [self._program.dispatch(self._groups)]
+        return self._dispatch(self._program, i)

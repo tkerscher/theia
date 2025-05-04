@@ -2,6 +2,10 @@ layout(local_size_x = BLOCK_SIZE) in;
 
 #include "ray.propagate.glsl"
 
+layout(scalar) uniform DispatchParams {
+    uint batchSize;
+};
+
 layout(scalar) uniform TraceParams {
     uvec2 medium;
 
@@ -114,7 +118,7 @@ ResultCode trace(
 void traceMain() {
     uint dim = 0;
     uint idx = gl_GlobalInvocationID.x;
-    if (idx >= BATCH_SIZE)
+    if (idx >= batchSize)
         return;
     
     //Direct light sampling

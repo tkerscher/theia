@@ -10,12 +10,75 @@ import theia.light
 import theia.material
 import theia.random
 import theia.scene
+import theia.target
 import theia.trace
 import theia.units as u
 
 from theia.scene import Transform
 from theia.target import SphereTarget, SphereTargetGuide
 from theia.testing import WaterTestModel
+
+
+def test_tracerReportsConfig():
+    # Simple check whether tracer calls `prepare()` and `updateConfig` on the
+    # given response
+
+    batchSize = 64 * 1024
+    batchSize2 = 96 * 1024
+    capacity = 128 * 1024
+    polarized = True
+
+    class MockResponse(theia.response.EmptyResponse):
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.prepareConfig = None
+            self.updatedConfig = None
+
+        def prepare(self, config):
+            self.prepareConfig = config
+
+        def updateConfig(self, config):
+            self.updatedConfig = config
+
+    philox = theia.random.PhiloxRNG(key=0xABBA)
+    target = theia.target.SphereTarget()
+    source = theia.light.SphericalLightSource()
+    photons = theia.light.ConstWavelengthSource()
+    response = MockResponse()
+    tracer = theia.trace.VolumeForwardTracer(
+        batchSize,
+        source,
+        target,
+        photons,
+        response,
+        rng=philox,
+        medium=0,
+        capacity=capacity,
+        polarized=polarized,
+    )
+
+    # check prepare was called with the correct config
+    assert response.prepareConfig is not None
+    assert response.prepareConfig.batchSize == batchSize
+    assert response.prepareConfig.blockSize == tracer.blockSize
+    assert response.prepareConfig.capacity == capacity
+    assert response.prepareConfig.maxHitsPerThread == tracer.maxHitsPerThread
+    assert response.prepareConfig.normalization == tracer.normalization
+    assert response.prepareConfig.normalization == 1.0 / batchSize
+    assert response.prepareConfig.polarized == polarized
+
+    # update batch size
+    tracer.batchSize = batchSize2
+    # check updateConfig was called with the correct config
+    assert response.updatedConfig is not None
+    assert response.updatedConfig.batchSize == batchSize2
+    assert response.updatedConfig.blockSize == tracer.blockSize
+    assert response.updatedConfig.capacity == capacity
+    assert response.updatedConfig.maxHitsPerThread == tracer.maxHitsPerThread
+    assert response.updatedConfig.normalization == tracer.normalization
+    assert response.updatedConfig.normalization == 1.0 / batchSize2
+    assert response.updatedConfig.polarized == polarized
 
 
 @pytest.mark.parametrize("disableDirect", [True, False])
@@ -34,6 +97,7 @@ def test_VolumeForwardTracer(
     N_SCATTER = 6
     T0, T1 = 10.0 * u.ns, 20.0 * u.ns
     T_MAX = 1.0 * u.us if limitTime else 100.0 * u.us
+    capacity = 48 * 256
     light_pos = (-1.0, -7.0, 0.0) * u.m
     light_budget = 1000.0
     target_pos, target_radius = (5.0, 2.0, -8.0) * u.m, 4.0 * u.m
@@ -66,6 +130,7 @@ def test_VolumeForwardTracer(
         recorder,
         rng,
         medium=store.media["water"],
+        capacity=capacity,
         nScattering=N_SCATTER,
         scatterCoefficient=0.0 if disableScattering else float("NaN"),
         callback=stats,
@@ -159,6 +224,7 @@ def test_VolumeBackwardTracer(
     N_SCATTER = 6
     T0, T1 = 10.0 * u.ns, 20.0 * u.ns
     T_MAX = 1.0 * u.us
+    capacity = 48 * 256
     light_pos = (-1.0, -7.0, 0.0) * u.m
     light_budget = 1000.0
     target_pos, target_radius = (5.0, 2.0, -8.0) * u.m, 4.0 * u.m
@@ -195,6 +261,7 @@ def test_VolumeBackwardTracer(
         rng,
         callback=stats,
         medium=store.media["water"],
+        capacity=capacity,
         nScattering=N_SCATTER,
         scatterCoefficient=0.0 if disableScattering else float("NaN"),
         target=None if disableTarget else target,
@@ -284,6 +351,7 @@ def test_SceneForwardTracer(
     MAX_PATH = 10
     T0, T1 = 10.0 * u.ns, 20.0 * u.ns
     T_MAX = 1.0 * u.us
+    capacity = 48 * 256
     light_pos = (-1.0, -7.0, 0.0) * u.m
     light_budget = 1000.0
 
@@ -332,6 +400,7 @@ def test_SceneForwardTracer(
         recorder,
         rng,
         scene,
+        capacity=capacity,
         maxPathLength=MAX_PATH,
         targetIdx=1,
         targetGuide=None if disableTarget else guide,
@@ -352,6 +421,7 @@ def test_SceneForwardTracer(
     assert hits.count > 0
     assert hits.count <= tracer.maxHits
     hits = hits[: hits.count]
+    assert stats.created == N
     if disableScattering:
         assert stats.scattered == 0
 
@@ -401,6 +471,7 @@ def test_SceneBackwardTracer(
     N_SCATTER = 6
     T0, T1 = 10.0 * u.ns, 20.0 * u.ns
     T_MAX = 100000.0 * u.us
+    capacity = 48 * 256
     light_pos = (-1.0, -7.0, 0.0) * u.m
     light_budget = 1000.0
 
@@ -462,6 +533,7 @@ def test_SceneBackwardTracer(
         recorder,
         rng,
         scene,
+        capacity=capacity,
         callback=stats,
         maxPathLength=N_SCATTER,
         maxTime=T_MAX,
@@ -539,6 +611,7 @@ def test_SceneBackwardTargetTracer(
     MAX_PATH = 10
     T0, T1 = 10.0 * u.ns, 20.0 * u.ns
     T_MAX = 1.0 * u.us
+    capacity = 48 * 256
     cam_pos = (-1.0, -7.0, 0.0) * u.m
 
     # create materials
@@ -584,6 +657,7 @@ def test_SceneBackwardTargetTracer(
         recorder,
         rng,
         scene,
+        capacity=capacity,
         maxPathLength=MAX_PATH,
         targetId=2,
         targetGuide=None if disableTarget else guide,
@@ -601,6 +675,7 @@ def test_SceneBackwardTargetTracer(
     assert hits.count > 0
     assert hits.count <= tracer.maxHits
     hits = hits[: hits.count]
+    assert stats.created == N
 
     r_hits = np.sqrt(np.square(hits["position"]).sum(-1))
     assert np.all((r_hits <= 1.0) & (r_hits >= r_scale))
@@ -624,6 +699,7 @@ def test_BidirectionalPathTracer(
     T_MAX = 100.0 * u.us
     L_LIGHT = 8
     L_CAMERA = 8
+    capacity = 48 * 256
 
     det_pos = (-5.0, 0.0, 0.0) * u.m
     src_pos = (5.0, 0.0, 0.0) * u.m
@@ -672,8 +748,7 @@ def test_BidirectionalPathTracer(
     ph = theia.light.UniformWavelengthSource()
     src = theia.light.PencilLightSource(position=det_pos, timeRange=(T0, T1))
     rec = theia.response.HitRecorder(polarized=polarized)
-    # stats = theia.trace.EventStatisticCallback()
-    track = theia.trace.TrackRecordCallback(N, L_CAMERA + 2, polarized=polarized)
+    stats = theia.trace.EventStatisticCallback()
     trace = theia.trace.BidirectionalPathTracer(
         N,
         src,
@@ -682,8 +757,8 @@ def test_BidirectionalPathTracer(
         rec,
         rng,
         scene,
-        # callback=stats,
-        callback=track,
+        capacity=capacity,
+        callback=stats,
         callbackScope="camera",
         lightPathLength=L_LIGHT,
         cameraPathLength=L_CAMERA,
@@ -693,7 +768,6 @@ def test_BidirectionalPathTracer(
     )
     # run pipeline
     pl.runPipeline(trace.collectStages())
-    paths, length, codes = track.result(0)
 
     # check hits
     hits = rec.queue.view(0)
@@ -706,6 +780,7 @@ def test_BidirectionalPathTracer(
     assert hits.count > 0
     assert hits.count <= trace.maxHits
     hits = hits[: hits.count]
+    assert stats.created == N
 
     assert np.min(hits["time"]) >= t_min
     assert np.max(hits["time"]) <= T_MAX
@@ -1068,6 +1143,7 @@ def test_DirectTracer_volume(polarized: bool):
     # params
     T0, T1 = 10.0 * u.ns, 20.0 * u.ns
     T_MAX = 45.0 * u.ns
+    capacity = 48 * 256
     camDir = (1.0, 0.0, 0.0)
     camPos = (5.0, 2.0, -1.0)
     camUp = (0.0, 0.0, 1.0)
@@ -1107,6 +1183,7 @@ def test_DirectTracer_volume(polarized: bool):
         photons,
         recorder,
         rng,
+        capacity=capacity,
         callback=stats,
         medium=store.media["water"],
         maxTime=T_MAX,
@@ -1155,6 +1232,7 @@ def test_DirectTracer_scene(polarized: bool):
     # same as volume version, but now put something before camera to test shadow rays
     T0, T1 = 10.0 * u.ns, 20.0 * u.ns
     T_MAX = 45.0 * u.ns
+    capacity = 48 * 256
     camDir = (1.0, 0.0, 0.0)
     camPos = (5.0, 2.0, -1.0)
     camUp = (0.0, 0.0, 1.0)
@@ -1204,6 +1282,7 @@ def test_DirectTracer_scene(polarized: bool):
         recorder,
         rng,
         scene,
+        capacity=capacity,
         callback=stats,
         maxTime=T_MAX,
         polarized=polarized,
