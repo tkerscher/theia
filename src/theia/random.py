@@ -5,6 +5,7 @@ import numpy as np
 
 from ctypes import Structure, c_uint32
 from os import urandom
+import warnings
 
 from hephaistos.pipeline import PipelineStage, SourceCodeMixin
 from theia.util import ShaderLoader, compileShader, createPreamble
@@ -244,7 +245,8 @@ class PhiloxRNG(RNG):
         super().__init__({"PhiloxParams": self.PhiloxParams}, {"autoAdvance"})
         # save params
         if key is None:
-            key = urandom(8)
+            key = int.from_bytes(urandom(8))
+            warnings.warn(f"Random RNG key generated: 0x{key:08X}")
         self.setParams(key=key, offset=offset, autoAdvance=autoAdvance)
 
     # sourceCode via descriptor
@@ -310,7 +312,8 @@ class SobolQRNG(RNG):
         super().__init__({"SobolParams": self.SobolParams}, {"advanceSeed"})
         # save params
         if seed is None and advanceSeed is None:
-            seed = urandom(4)
+            seed = int.from_bytes(urandom(4))
+            warnings.warn(f"Random RNG seed generated: 0x{seed:04X}")
         self.setParams(seed=seed, offset=offset, advanceSeed=advanceSeed)
 
     sourceCode = ShaderLoader("random.sobol.glsl")
