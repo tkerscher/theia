@@ -868,7 +868,7 @@ class SceneTemplate:
             Device address of the medium the scene is emerged in, e.g. the
             address of a water medium for an underwater simulation. Defaults to
             zero specifying vacuum.
-        sceneTransform: Transform | None, default=None
+        sceneTransformation: Transform | None, default=None
             Optional transformation applied to the loaded scene
         sceneBBox : RectBBox | None, default=None
             Bounding box containing the scene, limiting traced rays inside.

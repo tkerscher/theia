@@ -201,7 +201,7 @@ def sampleTable2D(
         number of regular placed sample points in x direction
     ny: int, default = 1024
         number of regular placed sample points in y direction
-    boundary: None or (min, max) for both or each dimension (tuple of tuple), default = None
+    boundaries: None or (min, max) for both or each dimension (tuple of tuple), default = None
         boundaries of the interpolated data. Inferred from data if None.
         Can be specified for both dimensions or each individually
     mode: "linear" | "cubic"

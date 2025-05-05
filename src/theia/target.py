@@ -870,28 +870,23 @@ class FlatLightSourceTarget(LightSourceTarget):
     Parameters
     ----------
     width: float, default=1cm
-        Width of the detector. Corresponds in local space to the camera
-        surface's extension in x direction.
-    length: float, default=1cm
-        Length of the detector. Corresponds in local space to the camera
-        surface's extension in y direction.
+        Width of the target along the local x dimension.
+    height: float, default=1cm
+        Height of the target along the local y dimension.
     position: (float, float, float), default=(0.0,0.0,0.0)
-        Position of the camera in world space.
-    direction: (float, float, float), default=(0.0,0.0,1.0)
-        Direction the camera faces. Corresponds in local space positive z
-        direction.
+        Position of the target in world space.
+    normal: (float, float, float), default=(0.0,0.0,1.0)
+        Surface normal of the target defining the local z coordinate.
     up: (float, float, float), default=(0.0,1.0,0.0)
         Direction identifying where 'up' is for the camera. Corresponds in local
         space to the positive y direction.
 
     Stage Parameters
     ----------------
-    width: float, default=1cm
-        Width of the detector. Corresponds in local space to the camera
-        surface's extension in x direction.
-    length: float, default=1cm
-        Length of the detector. Corresponds in local space to the camera
-        surface's extension in y direction.
+    width: float
+        Width of the target along the local x dimension.
+    height: float
+        Height of the target along the local y dimension.
     position: (float, float, float), default=(0.0,0.0,0.0)
         Position of the camera in world space.
     direction: (float, float, float), default=(0.0,0.0,1.0)

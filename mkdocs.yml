@@ -69,6 +69,7 @@ nav:
   - API:
     - Module Overview: api/index.md
     - Camera Module: api/camera.md
+    - Cascades Module: api/cascades.md
     - Light Module: api/light.md
     - Look Up Module: api/lookup.md
     - Material Module: api/material.md

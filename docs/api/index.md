@@ -5,6 +5,7 @@ Theia is organized in several modules as described in the following table:
 | Module | Description |
 |--------|-------------|
 | [`camera`](camera.md) | Contains definition and implementation of [cameras](../pipeline/components.md#camera). |
+| [`cascades`](cascades.md) | Contains parameterization of Cherenkov cascades used by `ParticleCascadeLightSource`. |
 | [`estimator`](estimator.md) | Contains definition and implementation of [hit responses](../pipeline/components.md#hit-response) as well as estimator that further process the responses. |
 | [`light`](light.md) | Contains definition and implementations of [light sources](../pipeline/components.md#light-source) and [wavelength sources](../pipeline/components.md#wavelength-source). |
 | [`lookup`](lookup.md) | Contains logic for creating look up tables as used to store optical properties of media. |

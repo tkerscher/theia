@@ -52,8 +52,10 @@ The former case is implemented by `SceneForwardTracer` and the latter by
 `VolumeForwardTracer`. For volumes the target is defined by a
 [Target](components.md#target) component, whereas for scenes it is defined by a
 geometry with material that has the `DETECTOR` bit set. If a scene defines
-multiple targets, the active one can be selected by specifying the `targetIdx`
-which must match the corresponding `detectorId` to generate hits.
+multiple targets, the active one can be selected by specifying the `targetId`
+which must match the corresponding `detectorId` to generate hits. Alternatively,
+a negative value disables this filtering causing all hits with any detector
+material to create a hit.
 
 To increase performance of the simulation both tracers are capable of creating
 alternative light paths by deliberately connecting scattering events with the
@@ -85,6 +87,13 @@ self-shadowing.
     bias. It depends on the simulated case basis whether this is acceptable.
     Optionally, the tracer can include direct lighting contributions if
     supported by both the light source and camera.
+
+An odd entry in this category is the `SceneBackwardTargetTracer`: It does not
+complete light paths by connecting them to a lightsource, but by intersecting
+an object whose material has the `LIGHT_SOURCE` flag set. These intersection are
+also used for creating hits instead of the ones sampled by the camera. This
+tracer can be used for simulating detector or geometries independent of a light
+source.
 
 ### Direct Light Tracer
 

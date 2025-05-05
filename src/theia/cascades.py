@@ -46,11 +46,15 @@ def __dir__():
 
 # Radiation lengths
 X0_ice: Final[float] = 39.75 * u.cm
+"""Radiation length in ice"""
 X0_water: Final[float] = 36.08 * u.cm
+"""Radiation length in water"""
 
 # medium densities [g/cm3]
 rho_ice: Final[float] = 0.91
+"""Density of ice"""
 rho_water: Final[float] = 1.039  # deep sea water
+"""Density of sea water"""
 
 
 @dataclass
@@ -159,6 +163,7 @@ EMinus: Final[CascadePrimaryParticle] = CascadePrimaryParticle(
     b_angular_shift=3.30382993,
     b_angular_slope=0.0,
 )
+"""Parameterization of an electro magnetic cascade initiated by a electron"""
 EPlus: Final[CascadePrimaryParticle] = CascadePrimaryParticle(
     alpha_long=2.00035,
     beta_long=1.45501,
@@ -168,6 +173,7 @@ EPlus: Final[CascadePrimaryParticle] = CascadePrimaryParticle(
     b_angular_shift=3.30484209,
     b_angular_slope=0.0,
 )
+"""Parameterization of an electro magnetic cascade initiated by a positron"""
 Gamma: Final[CascadePrimaryParticle] = CascadePrimaryParticle(
     alpha_long=2.83923,
     beta_long=1.34031,
@@ -177,6 +183,7 @@ Gamma: Final[CascadePrimaryParticle] = CascadePrimaryParticle(
     b_angular_shift=3.29619817,
     b_angular_slope=0.0,
 )
+"""Parameterization of an electro magnetic cascade initiated by a gamma photon"""
 
 # Hadronic Cascades
 PiPlus: Final[CascadePrimaryParticle] = CascadePrimaryParticle(
@@ -193,6 +200,7 @@ PiPlus: Final[CascadePrimaryParticle] = CascadePrimaryParticle(
     b_angular_shift=3.102713004779744,
     b_angular_slope=-0.12229465620485062,
 )
+"""Parameterization of a hadronic cascade initiated by a positive charged pion"""
 PiMinus: Final[CascadePrimaryParticle] = CascadePrimaryParticle(
     alpha_long=1.69176636,
     beta_long=0.93953506,
@@ -207,6 +215,7 @@ PiMinus: Final[CascadePrimaryParticle] = CascadePrimaryParticle(
     b_angular_shift=3.086039699134421,
     b_angular_slope=-0.11874011144663844,
 )
+"""Parameterization of a hadronic cascade initiated by a negative charged pion"""
 K0_Long: Final[CascadePrimaryParticle] = CascadePrimaryParticle(
     alpha_long=1.95948974,
     beta_long=0.80440041,
@@ -221,6 +230,7 @@ K0_Long: Final[CascadePrimaryParticle] = CascadePrimaryParticle(
     b_angular_shift=3.2258115113151793,
     b_angular_slope=-0.15816716921465757,
 )
+"""Parameterization of a hadronic cascade initiated by a long lived neutral Kaon"""
 PPlus: Final[CascadePrimaryParticle] = CascadePrimaryParticle(
     alpha_long=1.47495778,
     beta_long=0.93140483,
@@ -235,6 +245,7 @@ PPlus: Final[CascadePrimaryParticle] = CascadePrimaryParticle(
     b_angular_shift=3.284514006559762,
     b_angular_slope=-0.16972413208423504,
 )
+"""Parameterization of a hadronic cascade initiated by a proton"""
 PMinus: Final[CascadePrimaryParticle] = CascadePrimaryParticle(
     alpha_long=1.92249171,
     beta_long=0.77601150,
@@ -249,6 +260,7 @@ PMinus: Final[CascadePrimaryParticle] = CascadePrimaryParticle(
     b_angular_shift=3.5079727644060794,
     b_angular_slope=-0.22892116764330248,
 )
+"""Parameterization of a hadronic cascade initiated by a neutron"""
 Neutron: Final[CascadePrimaryParticle] = CascadePrimaryParticle(
     alpha_long=1.57739060,
     beta_long=0.93556570,

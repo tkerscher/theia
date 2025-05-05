@@ -23,6 +23,8 @@ on the GPU side.
 
         float contrib;
 
+        int objectId;
+
         vec3 hitPosition;
         vec3 hitNormal;
     };
@@ -128,6 +130,8 @@ Creates a camera ray from the given `CameraSample` previously returned from
         float wavelength;
         float time;
         float contrib;
+
+        int objectId;
     };
     ```
 

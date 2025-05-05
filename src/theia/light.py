@@ -1202,12 +1202,6 @@ class MuonTrackLightSource(LightSource):
         Time at which the muon is at `endPosition`
     muonEnergy: float
         Energy of the muon producing secondary particles
-    a_angular: float
-        The a parameter of the angular light emission distribution (eq. 4.5 in
-        [1]_).
-    b_angular: float
-        The b parameter of the angular light emission distribution (eq. 4.5 in
-        [1]_)
     applyFrankTamm: bool, default=True
         Whether to apply the Frank-Tamm equation describing the light yield as a
         function of wavelength.
@@ -1224,12 +1218,6 @@ class MuonTrackLightSource(LightSource):
         Time at which the muon is at `endPosition`
     muonEnergy: float
         Energy of the muon producing secondary particles
-    a_angular: float, default=0.39
-        The a parameter of the angular light emission distribution (eq. 4.5 in
-        [1]_).
-    b_angular: float, default=2.61
-        The b parameter of the angular light emission distribution (eq. 4.5 in
-        [1]_)
 
     .. [1] L. Raedel "Simulation Studies of the Cherenkov Light Yield from
            Relativistic Particles in High-Energy Neutrino Telescopes with
