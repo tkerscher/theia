@@ -98,6 +98,7 @@ def test_VolumeForwardTracer(
     T0, T1 = 10.0 * u.ns, 20.0 * u.ns
     T_MAX = 1.0 * u.us if limitTime else 100.0 * u.us
     capacity = 48 * 256
+    objectId = 42
     light_pos = (-1.0, -7.0, 0.0) * u.m
     light_budget = 1000.0
     target_pos, target_radius = (5.0, 2.0, -8.0) * u.m, 4.0 * u.m
@@ -130,6 +131,7 @@ def test_VolumeForwardTracer(
         recorder,
         rng,
         medium=store.media["water"],
+        objectId=objectId,
         capacity=capacity,
         nScattering=N_SCATTER,
         scatterCoefficient=0.0 if disableScattering else float("NaN"),
@@ -158,6 +160,7 @@ def test_VolumeForwardTracer(
     assert np.allclose(np.square(hits["normal"]).sum(-1), 1.0)
     assert np.min(hits["time"]) >= t_min
     assert np.max(hits["time"]) <= T_MAX
+    assert np.allclose(hits["objectId"], objectId)
 
     # sanity check polarization
     if polarized:
@@ -402,7 +405,7 @@ def test_SceneForwardTracer(
         scene,
         capacity=capacity,
         maxPathLength=MAX_PATH,
-        targetIdx=1,
+        targetId=1,
         targetGuide=None if disableTarget else guide,
         maxTime=T_MAX,
         polarized=polarized,
@@ -430,6 +433,7 @@ def test_SceneForwardTracer(
     assert np.allclose(np.square(hits["normal"]).sum(-1), 1.0)
     assert np.min(hits["time"]) >= t_min
     assert np.max(hits["time"]) <= T_MAX
+    assert np.all(hits["objectId"] == 1)
 
     # sanity check polarization
     if polarized:
@@ -450,6 +454,74 @@ def test_SceneForwardTracer(
         assert np.abs(np.abs((polRef_exp * polRef).sum(-1))[mask] - 1.0).max() < 1e-6
 
     # TODO: more sophisticated tests
+
+
+def test_SceneForwardTracer_multiTarget():
+    if not hp.isRaytracingEnabled():
+        pytest.skip("ray tracing is not supported")
+
+    N = 32 * 256
+    MAX_PATH = 10
+    T0, T1 = 10.0 * u.ns, 20.0 * u.ns
+    T_MAX = 1.0 * u.us
+    capacity = 48 * 256
+    light_pos = (-1.0, -7.0, 0.0) * u.m
+    light_budget = 1000.0
+
+    # create materials
+    water = WaterTestModel().createMedium()
+    glass = theia.material.BK7Model().createMedium()
+    mat = theia.material.Material("mat", glass, water, flags=("DR", "B"))
+    matStore = theia.material.MaterialStore([mat])
+    # create scene
+    store = theia.scene.MeshStore(
+        {"cube": "assets/cone.stl", "sphere": "assets/sphere.stl"}
+    )
+    r, d = 40.0 * u.m, 5.0 * u.m
+    r_scale = 0.99547149974733 * u.m  # radius of inscribed sphere (icosphere)
+    r_insc = r * r_scale
+    x, y, z = 10.0, 5.0, -5.0
+    t1 = Transform.TRS(scale=r, translate=(x, y, z + r + d))
+    c1 = store.createInstance("sphere", "mat", t1, detectorId=0)
+    t2 = Transform.TRS(
+        scale=r, translate=(x, y, z - r - d), rotate=(0.0, 0.0, 1.0, 110.0)
+    )
+    c2 = store.createInstance("sphere", "mat", t2, detectorId=1)
+    scene = theia.scene.Scene(
+        [c1, c2], matStore.material, medium=matStore.media["water"]
+    )
+
+    # create pipeline stages
+    rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
+    photons = theia.light.UniformWavelengthSource()
+    source = theia.light.SphericalLightSource(
+        position=light_pos, timeRange=(T0, T1), budget=light_budget
+    )
+    recorder = theia.response.HitRecorder()
+    stats = theia.trace.EventStatisticCallback()
+    tracer = theia.trace.SceneForwardTracer(
+        N,
+        source,
+        photons,
+        recorder,
+        rng,
+        scene,
+        capacity=capacity,
+        targetId=-1,
+        maxPathLength=MAX_PATH,
+        maxTime=T_MAX,
+        callback=stats,
+    )
+    # run pipeline
+    pl.runPipeline(tracer.collectStages())
+    hits = recorder.queue.view(0)
+
+    # check hits
+    r_hits = np.sqrt(np.square(hits["position"]).sum(-1))
+    assert np.all((r_hits <= 1.0) & (r_hits >= r_scale))
+    assert np.allclose(np.square(hits["normal"]).sum(-1), 1.0)
+    assert (hits["objectId"] == 0).sum() > 0
+    assert (hits["objectId"] == 1).sum() > 0
 
 
 @pytest.mark.parametrize("disableDirect", [True, False])
@@ -683,6 +755,71 @@ def test_SceneBackwardTargetTracer(
     assert np.min(hits["time"]) >= t_min
     assert np.max(hits["time"]) <= T_MAX
     assert np.all(hits["contrib"] >= 0.0)
+    assert np.all(hits["objectId"] == 2)
+
+
+def test_SceneBackwardTargetTracer_multiTarget():
+    if not hp.isRaytracingEnabled():
+        pytest.skip("ray tracing not supported")
+
+    N = 32 * 256
+    MAX_PATH = 10
+    T0, T1 = 10.0 * u.ns, 20.0 * u.ns
+    T_MAX = 1.0 * u.us
+    capacity = 48 * 256
+    cam_pos = (-1.0, -7.0, 0.0) * u.m
+
+    # create materials
+    water = WaterTestModel().createMedium()
+    glass = theia.material.BK7Model().createMedium()
+    mat = theia.material.Material("mat", glass, water, flags=("RL", "B"))
+    matStore = theia.material.MaterialStore([mat])
+    # create scene
+    store = theia.scene.MeshStore(
+        {"cube": "assets/cube.ply", "sphere": "assets/sphere.stl"}
+    )
+    r, d = 40.0 * u.m, 5.0 * u.m
+    r_scale = 0.99547149974733 * u.m  # radius of inscribed sphere (icosphere)
+    r_insc = r * r_scale
+    x, y, z = 10.0, 5.0, -5.0
+    t1 = Transform.TRS(scale=r, translate=(x, y, z + r + d))
+    c1 = store.createInstance("sphere", "mat", t1, detectorId=1)
+    t2 = Transform.TRS(
+        scale=r, translate=(x, y, z - r - d), rotate=(0.0, 0.0, 1.0, 110.0)
+    )
+    c2 = store.createInstance("sphere", "mat", t2, detectorId=2)
+    scene = theia.scene.Scene(
+        [c1, c2], matStore.material, medium=matStore.media["water"]
+    )
+
+    # create pipeline stages
+    rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
+    photons = theia.light.UniformWavelengthSource()
+    camera = theia.camera.PointCamera(position=cam_pos, timeDelta=T0)
+    recorder = theia.response.HitRecorder()
+    stats = theia.trace.EventStatisticCallback()
+    tracer = theia.trace.SceneBackwardTargetTracer(
+        N,
+        camera,
+        photons,
+        recorder,
+        rng,
+        scene,
+        capacity=capacity,
+        maxPathLength=MAX_PATH,
+        targetId=-1,
+        maxTime=T_MAX,
+        callback=stats,
+    )
+    # run pipeline
+    pl.runPipeline(tracer.collectStages())
+    hits = recorder.queue.view(0)
+
+    r_hits = np.sqrt(np.square(hits["position"]).sum(-1))
+    assert np.all((r_hits <= 1.0) & (r_hits >= r_scale))
+    assert np.allclose(np.square(hits["normal"]).sum(-1), 1.0)
+    assert (hits["objectId"] == 1).sum() > 0
+    assert (hits["objectId"] == 2).sum() > 0
 
 
 @pytest.mark.parametrize("polarized", [True, False])
@@ -850,7 +987,7 @@ def test_EventStatisticCallback():
         rng,
         callback=stats,
         scene=scene,
-        targetIdx=1,
+        targetId=1,
         maxPathLength=1,
         scatterCoefficient=0.005 / u.m,
         maxTime=100.0 * u.ns,
@@ -1029,7 +1166,7 @@ def test_volumeBorder():
         rng,
         callback=tracker,
         scene=scene,
-        targetIdx=1,
+        targetId=1,
         maxPathLength=2,
     )
     # run pipeline
@@ -1119,7 +1256,7 @@ def test_tracer_reflection(flag, reflectance, err):
         recorder,
         rng,
         scene=scene,
-        targetIdx=1,
+        targetId=1,
         maxPathLength=4,
     )
     pipeline = pl.Pipeline(tracer.collectStages())
@@ -1127,7 +1264,7 @@ def test_tracer_reflection(flag, reflectance, err):
     pipeline.run(0)
     hits_ref = recorder.queue.view(0)
     # run for second detector
-    tracer.setParam("targetIdx", 2)
+    tracer.setParam("targetId", 2)
     pipeline.run(1)
     hits_trans = recorder.queue.view(1)
 

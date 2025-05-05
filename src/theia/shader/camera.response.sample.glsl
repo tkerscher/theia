@@ -91,7 +91,8 @@ void sampleMain() {
         #endif
         photon.wavelength,
         ray.timeDelta,
-        ray.contrib
+        ray.contrib,
+        0
     );
     response(hit);
 }

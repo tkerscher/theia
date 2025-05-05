@@ -25,6 +25,7 @@ def test_cameraRaySource(rng, polarized: bool):
     raysIn = camera.queue.view(0)
     for field in raysIn.fields:
         raysIn[field] = rng.random(raysIn[field].shape)
+    raysIn["objectId"] = rng.integers(-1, 10, N)
     phIn = photons.queue.view(0)
     for field in phIn.fields:
         phIn[field] = rng.random(phIn[field].shape)
@@ -227,6 +228,8 @@ def test_flatCamera_direct(polarized: bool):
     cos_theta = np.multiply(r["rayDir"], r["sampleNrm"]).sum(-1)
     contrib = cos_theta * width * length * (cos_theta > 0.0).astype(np.float32)
     assert np.allclose(r["rayContrib"], contrib, atol=1e-7)
+    assert np.all(r["sampleObjectId"] == -1)
+    assert np.all(r["objectId"] == -1)
     if polarized:
         # polarization ref was automatically generated, so just test its properties
         assert (r["rayDir"] * r["rayPolRef"]).sum(-1).max() < 1e-6
@@ -312,6 +315,8 @@ def test_coneCamera_direct(polarized: bool):
     assert np.allclose(np.square(r["hitDir"]).sum(-1), 1.0)
     assert np.all(r["hitDir"][:, 2][m] <= -theta)
     assert np.allclose(r["hitNrm"], (0.0, 0.0, 1.0))
+    assert np.all(r["sampleObjectId"] == -1)
+    assert np.all(r["objectId"] == -1)
     if polarized:
         # polarization ref was automatically generated, so just test its properties
         assert (r["rayDir"] * r["rayPolRef"]).sum(-1).max() < 1e-6
@@ -412,6 +417,8 @@ def test_sphericalCamera_direct(polarized: bool):
     mask = cos_normal > 0.0
     contrib = 4 * np.pi * radius**2 * cos_normal * mask.astype(np.float32)
     assert np.abs(r["rayContrib"] - contrib).max() < 5e-5
+    assert np.all(r["sampleObjectId"] == -1)
+    assert np.all(r["objectId"] == -1)
     if polarized:
         # polarization ref was automatically generated, so just test its properties
         assert (r["rayDir"] * r["rayPolRef"]).sum(-1).max() < 1e-6

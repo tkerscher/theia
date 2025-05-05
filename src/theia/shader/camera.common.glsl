@@ -10,6 +10,8 @@ struct CameraSample {
     vec3 normal;
 
     float contrib;
+    
+    int objectId;
 
     //Can be used as cache in camera sampling
     //May not be used outside camera
@@ -25,6 +27,8 @@ struct CameraHit {
     vec3 position;
     vec3 direction;
     vec3 normal;
+
+    int objectId;
 };
 
 struct CameraRay {
@@ -46,6 +50,7 @@ CameraSample createCameraSample(
     vec3 position,
     vec3 normal,
     float contrib,
+    int objectId,
     vec3 hitPosition,
     vec3 hitNormal
 ) {
@@ -53,6 +58,7 @@ CameraSample createCameraSample(
         position,
         normal,
         contrib,
+        objectId,
         hitPosition,
         hitNormal
     );
@@ -61,15 +67,35 @@ CameraSample createCameraSample(
 CameraSample createCameraSample(
     vec3 position,
     vec3 normal,
-    float contrib
+    float contrib,
+    vec3 hitPosition,
+    vec3 hitNormal
+) {
+    return createCameraSample(position, normal, contrib, -1, hitPosition, hitNormal);
+}
+
+CameraSample createCameraSample(
+    vec3 position,
+    vec3 normal,
+    float contrib,
+    int objectId
 ) {
     return CameraSample(
         position,
         normal,
         contrib,
+        objectId,
         vec3(0.0),
         vec3(0.0)
     );
+}
+
+CameraSample createCameraSample(
+    vec3 position,
+    vec3 normal,
+    float contrib
+) {
+    return createCameraSample(position, normal, contrib, -1);
 }
 
 CameraRay createCameraRay(
@@ -79,6 +105,7 @@ CameraRay createCameraRay(
     mat4 mueller,
     float contrib,
     float timeDelta,
+    int objectId,
     vec3 hitPosition,
     vec3 hitDirection,
     vec3 hitNormal,
@@ -99,8 +126,36 @@ CameraRay createCameraRay(
             #endif
             hitPosition,
             hitDirection,
-            hitNormal
+            hitNormal,
+            objectId
         )
+    );
+}
+
+CameraRay createCameraRay(
+    vec3 rayPosition,
+    vec3 rayDirection,
+    vec3 rayPolRef,
+    mat4 mueller,
+    float contrib,
+    float timeDelta,
+    vec3 hitPosition,
+    vec3 hitDirection,
+    vec3 hitNormal,
+    vec3 hitPolRef
+) {
+    return createCameraRay(
+        rayPosition,
+        rayDirection,
+        rayPolRef,
+        mueller,
+        contrib,
+        timeDelta,
+        -1,
+        hitPosition,
+        hitDirection,
+        hitNormal,
+        hitPolRef
     );
 }
 
@@ -109,6 +164,7 @@ CameraRay createCameraRay(
     vec3 rayDirection,
     float contrib,
     float timeDelta,
+    int objectId,
     vec3 hitPosition,
     vec3 hitDirection,
     vec3 hitNormal
@@ -134,8 +190,30 @@ CameraRay createCameraRay(
             #endif
             hitPosition,
             hitDirection,
-            hitNormal
+            hitNormal,
+            objectId
         )
+    );
+}
+
+CameraRay createCameraRay(
+    vec3 rayPosition,
+    vec3 rayDirection,
+    float contrib,
+    float timeDelta,
+    vec3 hitPosition,
+    vec3 hitDirection,
+    vec3 hitNormal
+) {
+    return createCameraRay(
+        rayPosition,
+        rayDirection,
+        contrib,
+        timeDelta,
+        -1,
+        hitPosition,
+        hitDirection,
+        hitNormal
     );
 }
 

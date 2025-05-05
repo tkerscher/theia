@@ -17,6 +17,7 @@ layout(scalar) uniform DispatchParams {
 
 layout(scalar) uniform TraceParams {
     uvec2 medium;
+    int objectId;
 
     PropagateParams propagation;
 } params;
@@ -64,7 +65,13 @@ void createResponse(
 
     //create weighted response
     ray.state.lin_contrib *= weight;
-    HitItem item = createHit(ray, hit.objPosition, hit.objNormal, hit.worldToObj);
+    HitItem item = createHit(
+        ray,
+        hit.objPosition,
+        hit.objNormal,
+        params.objectId,
+        hit.worldToObj
+    );
     if (item.contrib > 0.0)
         response(item);
 }
@@ -169,7 +176,13 @@ ResultCode trace(
     if (hitValid && allowResponse) {
         //Align hit, i.e. rotate polRef to plane of incidence
         alignRayToHit(ray, hit.normal);
-        HitItem item = createHit(ray, hit.objPosition, hit.objNormal, hit.worldToObj);
+        HitItem item = createHit(
+            ray,
+            hit.objPosition,
+            hit.objNormal,
+            params.objectId,
+            hit.worldToObj
+        );
         if (item.contrib > 0.0)
             response(item);
 

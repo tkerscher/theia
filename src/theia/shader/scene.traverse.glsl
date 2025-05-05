@@ -55,7 +55,13 @@ void createResponse(
     }
 
     //create response
-    HitItem item = createHit(ray, hit.objPos, hit.objNrm, hit.worldToObj);
+    HitItem item = createHit(
+        ray,
+        hit.objPos,
+        hit.objNrm,
+        hit.customId,
+        hit.worldToObj
+    );
     if (item.contrib > 0.0)
         response(item);
 }
@@ -67,7 +73,7 @@ ResultCode processHit(
     inout RAY ray,                  ///< Ray that generated the hit
     const SurfaceHit hit,           ///< Surface hit
     const PropagateParams params,   ///< Propagation parameters
-    uint targetId,                  ///< Id of target
+    int targetId,                   ///< Id of target
     float u,                        ///< Random number
     bool allowResponse              ///< Whether a detector hit should create a response
 ) {
@@ -93,7 +99,7 @@ ResultCode processHit(
     Reflectance surface = fresnelReflect(ray.state, hit);
 
     //create response if allowed
-    if (allowResponse && isTarget && hit.customId == targetId) {
+    if (allowResponse && isTarget && (targetId < 0 || hit.customId == targetId)) {
         createResponse(ray, hit, surface, isAbs);
         //do not return early as the ray is allowed to carry on
         //(e.g. partially reflect)
@@ -153,12 +159,13 @@ ResultCode processHit(
 void processShadowRay(
     RAY ray,                        ///< Shadow ray
     const SurfaceHit hit,           ///< Surface hit of shadow ray
-    uint targetId,                  ///< Id of target
+    int targetId,                   ///< Id of target
     const PropagateParams params    ///< Propagation parameters
 ) {
     //check if we hit target
     bool isTarget = (hit.flags & MATERIAL_TARGET_BIT) != 0;
-    if (!hit.valid || hit.customId != targetId || !isTarget) return; //hit something else
+    bool correctId = targetId < 0 || targetId == hit.customId;
+    if (!hit.valid || !correctId || !isTarget) return; //hit something else
     //propagate ray to hit
     if (propagateRayToHit(ray, hit.worldPos, hit.rayNrm, params) < 0) return;
 
@@ -177,7 +184,7 @@ void traceShadowRay(
     RAY ray,                        ///< Ray the shadow one is based on
     vec3 dir,                       ///< Direction of shadow ray
     float dist,                     ///< Max distance of shadow ray
-    uint targetId,                  ///< Id of target
+    int targetId,                   ///< Id of target
     const PropagateParams params,   ///< Propagation parameters
     float weight                    ///< Weight of shadow ray applied to its hits
 ) {
@@ -223,7 +230,7 @@ void traceShadowRay(
 
 void sampleTargetMIS(
     RAY ray,
-    uint targetId,
+    int targetId,
     uint idx, inout uint dim,
     const PropagateParams params
 ) {
@@ -270,7 +277,7 @@ void sampleTargetMIS(
 ResultCode trace(
     inout RAY ray,                  ///< Ray to trace using its current state
     out SurfaceHit hit,             ///< Resulting hit (includes misses)
-    uint targetId,                  ///< Id of target
+    int targetId,                   ///< Id of target
     uint idx, inout uint dim,       ///< RNG state
     const PropagateParams params,   ///< Propagation parameters
     bool allowResponse              ///< Whether detector hits can create a response
@@ -351,7 +358,7 @@ ResultCode trace(
 ResultCode processInteraction(
     inout RAY ray,                  ///< Ray to process
     const SurfaceHit hit,           ///< Hit to process (maybe invalid, i.e. no hit)
-    uint targetId,                  ///< Id of target
+    int targetId,                   ///< Id of target
     uint idx, inout uint dim,       ///< RNG state
     const PropagateParams params,   ///< Propagation parameters
     bool allowResponse,             ///< Whether detector hit by chance are allowed to create a response

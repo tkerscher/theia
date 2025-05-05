@@ -51,7 +51,8 @@ ResultCode combineRaysAligned(
         hit.polRef,
         ray.state.wavelength,
         time,
-        contrib
+        contrib,
+        hit.objectId
     );
     //successful if we have any contribution
     return contrib > 0.0 ? RESULT_CODE_SUCCESS : RESULT_CODE_RAY_ABSORBED;
@@ -92,7 +93,8 @@ ResultCode combineRaysAligned(
         camera.hit.polRef,
         ray.state.wavelength,
         time,
-        contrib
+        contrib,
+        camera.hit.objectId
     );
     //successful if we have any contribution
     return contrib > 0.0 ? RESULT_CODE_SUCCESS : RESULT_CODE_RAY_ABSORBED;
@@ -128,7 +130,8 @@ ResultCode combineRaysAligned(
         hit.normal,
         ray.state.wavelength,
         time,
-        contrib
+        contrib,
+        hit.objectId
     );
     //successful if we have any contribution
     return contrib > 0.0 ? RESULT_CODE_SUCCESS : RESULT_CODE_RAY_ABSORBED;
@@ -160,7 +163,8 @@ ResultCode combineRaysAligned(
         camera.hit.normal,
         ray.state.wavelength,
         time,
-        contrib
+        contrib,
+        camera.hit.objectId
     );
     //successful if we have any contribution
     return contrib > 0.0 ? RESULT_CODE_SUCCESS : RESULT_CODE_RAY_ABSORBED;

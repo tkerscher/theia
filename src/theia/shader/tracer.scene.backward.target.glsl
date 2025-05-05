@@ -34,7 +34,7 @@ layout(scalar) uniform DispatchParams {
 
 layout(scalar) uniform TraceParams {
     uvec2 camMedium;
-    uint targetId;
+    int targetId;
     PropagateParams propagation;
 } params;
 

@@ -5,7 +5,7 @@ import hephaistos as hp
 from hephaistos.pipeline import PipelineStage, SourceCodeMixin
 from hephaistos.queue import IOQueue, QueueBuffer, QueueTensor, QueueView, clearQueue
 
-from ctypes import Structure, c_float, c_uint32
+from ctypes import Structure, c_float, c_int32, c_uint32
 
 from theia.camera import Camera
 from theia.light import WavelengthSource
@@ -59,6 +59,7 @@ class HitItem(Structure):
         ("wavelength", c_float),
         ("time", c_float),
         ("contrib", c_float),
+        ("objectId", c_int32),
     ]
 
 
@@ -80,6 +81,7 @@ class PolarizedHitItem(Structure):
         ("wavelength", c_float),
         ("time", c_float),
         ("contrib", c_float),
+        ("objectId", c_int32),
     ]
 
 

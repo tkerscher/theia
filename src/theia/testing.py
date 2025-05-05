@@ -215,6 +215,7 @@ class CameraDirectSampler(PipelineStage):
             ("samplePos", vec3),
             ("sampleNrm", vec3),
             ("sampleContrib", c_float),
+            ("sampleObjectId", c_int32),
             ("sampleHitPos", vec3),
             ("sampleHitNrm", vec3),
             ("rayPos", vec3),
@@ -227,6 +228,7 @@ class CameraDirectSampler(PipelineStage):
             ("hitPos", vec3),
             ("hitDir", vec3),
             ("hitNrm", vec3),
+            ("objectId", c_int32),
         ]
 
     class UnpolarizedItem(Structure):
@@ -236,6 +238,7 @@ class CameraDirectSampler(PipelineStage):
             ("samplePos", vec3),
             ("sampleNrm", vec3),
             ("sampleContrib", c_float),
+            ("sampleObjectId", c_int32),
             ("sampleHitPos", vec3),
             ("sampleHitNrm", vec3),
             ("rayPos", vec3),
@@ -245,6 +248,7 @@ class CameraDirectSampler(PipelineStage):
             ("hitPos", vec3),
             ("hitDir", vec3),
             ("hitNrm", vec3),
+            ("objectId", c_int32),
         ]
 
     def __init__(

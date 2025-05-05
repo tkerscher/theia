@@ -14,6 +14,8 @@ struct HitItem {
     float wavelength;
     float time;
     float contrib;
+
+    int objectId; //Id of the intersected geometry
 };
 
 #endif

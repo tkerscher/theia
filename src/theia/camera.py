@@ -6,7 +6,7 @@ from hephaistos.glsl import buffer_reference, mat3, mat4x3, vec3
 from hephaistos.pipeline import PipelineStage, SourceCodeMixin
 from hephaistos.queue import IOQueue
 
-from ctypes import Structure, c_float, c_uint32
+from ctypes import Structure, c_float, c_int32, c_uint32
 
 import theia.units as u
 from theia.light import WavelengthSampleItem, WavelengthSource
@@ -84,6 +84,7 @@ class CameraRayItem(Structure):
         ("hitPosition", c_float * 3),
         ("hitDirection", c_float * 3),
         ("hitNormal", c_float * 3),
+        ("objectId", c_int32),
     ]
 
 
@@ -99,6 +100,7 @@ class PolarizedCameraRayItem(Structure):
         ("hitPosition", c_float * 3),
         ("hitDirection", c_float * 3),
         ("hitNormal", c_float * 3),
+        ("objectId", c_int32),
     ]
 
 

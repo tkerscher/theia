@@ -519,6 +519,8 @@ class VolumeForwardTracer(Tracer):
     maxTime: float, default=1000.0 ns
         Max total time including delay from the source and travel time, after
         which a ray gets stopped
+    objectId: int, default=0
+        Object id to use for creating hits.
     polarized: bool, default=False
         Whether to simulate polarization effects.
     disableDirectLighting: bool, default=False
@@ -547,6 +549,8 @@ class VolumeForwardTracer(Tracer):
         device address of the medium the scene is emerged in, e.g. the
         address of a water medium for an underwater simulation.
         Defaults to zero specifying vacuum.
+    objectId: int
+        Object id to use for creating hits.
     lowerBBoxCorner: (float, float, float)
         Lower limit of the x,y,z coordinates a ray must stay above to not get
         stopped
@@ -563,6 +567,7 @@ class VolumeForwardTracer(Tracer):
     class TraceParams(Structure):
         _fields_ = [
             ("medium", buffer_reference),
+            ("objectId", c_int32),
             ("scatterCoefficient", c_float),
             ("lowerBBoxCorner", vec3),
             ("upperBBoxCorner", vec3),
@@ -580,6 +585,7 @@ class VolumeForwardTracer(Tracer):
         rng: RNG,
         *,
         medium: int,
+        objectId: int = 0,
         capacity: int | None = None,
         callback: TraceEventCallback = EmptyEventCallback(),
         nScattering: int = 6,
@@ -626,6 +632,7 @@ class VolumeForwardTracer(Tracer):
         self.setParams(
             scatterCoefficient=scatterCoefficient,
             medium=medium,
+            objectId=objectId,
             lowerBBoxCorner=traceBBox.lowerCorner,
             upperBBoxCorner=traceBBox.upperCorner,
             maxTime=maxTime,
@@ -1035,9 +1042,11 @@ class SceneForwardTracer(Tracer):
     maxPathLength: int, default=6
         Maximum number of events per simulated ray. An event includes volume
         scatter and scene intersection.
-    targetIdx: int, default=0
-        Id of the detector, the tracer should try to hit.
-        Hits on other detectors are ignored to make estimates easier.
+    targetId: int, default=-1
+        Id of the detector, the tracer should try to hit. Hits on other
+        detectors are ignored to make estimates easier.
+        A negative value will cause the tracer to report all hits regardless of
+        the detector id.
     targetGuide: TargetGuide | None, default=None
         Optional target proxy used to sample scatter directions towards it.
     scatterCoefficient: float, default=NaN
@@ -1078,7 +1087,7 @@ class SceneForwardTracer(Tracer):
 
     Stage Parameters
     ----------------
-    targetIdx: int
+    targetId: int
         Id of the detector, the tracer should try to hit.
     scatterCoefficient: float
         Scatter coefficient used for sampling ray lengths. Negative values or
@@ -1093,7 +1102,7 @@ class SceneForwardTracer(Tracer):
 
     class TraceParams(Structure):
         _fields_ = [
-            ("targetIdx", c_uint32),
+            ("targetId", c_int32),
             ("sourceMedium", buffer_reference),
             ("scatterCoefficient", c_float),
             ("_lowerBBoxCorner", vec3),
@@ -1114,7 +1123,7 @@ class SceneForwardTracer(Tracer):
         capacity: int | None = None,
         callback: TraceEventCallback = EmptyEventCallback(),
         maxPathLength: int = 6,
-        targetIdx: int = 0,
+        targetId: int = -1,
         targetGuide: TargetGuide | None = None,
         scatterCoefficient: float = float("NaN"),
         sourceMedium: int | None = None,
@@ -1169,7 +1178,7 @@ class SceneForwardTracer(Tracer):
         self._volumeBorderDisabled = disableVolumeBorder
         self._useRefractedHitDir = useRefractedHitDir
         self.setParams(
-            targetIdx=targetIdx,
+            targetId=targetId,
             scatterCoefficient=scatterCoefficient,
             sourceMedium=sourceMedium,
             maxTime=maxTime,
@@ -1583,9 +1592,11 @@ class SceneBackwardTargetTracer(Tracer):
     maxPathLength: int, default=6
         Maximum number of events per simulated ray. An event includes volume
         scatter and scene intersections.
-    targetId: int, default=0
-        Id of the light source, the tracer should try to hit.
-        Hits on other sources are ignored to make estimates easier.
+    targetId: int, default=-1
+        Id of the light source, the tracer should try to hit. Hits on other
+        sources are ignored to make estimates easier.
+        A negative value will cause the tracer to report all hits regardless of
+        the light source's id.
     targetGuide: TargetGuide | None, default=None
         Optional target proxy used to sample scatter directions towards it.
     scatterCoefficient: float, default=NaN
@@ -1638,7 +1649,7 @@ class SceneBackwardTargetTracer(Tracer):
     class TraceParams(Structure):
         _fields_ = [
             ("_medium", buffer_reference),
-            ("targetId", c_uint32),
+            ("targetId", c_int32),
             ("scatterCoefficient", c_float),
             ("_lowerBBoxCorner", vec3),
             ("_upperBBoxCorner", vec3),
@@ -1659,7 +1670,7 @@ class SceneBackwardTargetTracer(Tracer):
         callback: TraceEventCallback = EmptyEventCallback(),
         medium: int | None = None,
         maxPathLength: int = 6,
-        targetId: int = 0,
+        targetId: int = -1,
         targetGuide: TargetGuide | None = None,
         scatterCoefficient: float = float("NaN"),
         maxTime: float = 1000.0 * u.ns,
@@ -2069,9 +2080,6 @@ class BidirectionalPathTracer(Tracer):
         Length of the light subpath
     cameraPathLength: int, default=6
         Length of the camera subpath
-    targetIdx: int, default=0
-        Id of the detector, the tracer should generate hits for.
-        Hits on other detectors are ignored to make estimates easier.
     scatterCoefficient: float, default=NaN
         Scatter coefficient used for sampling ray lengths. Tuning this parameter
         affects the time distribution of the hits. If negative or NaN, tracer

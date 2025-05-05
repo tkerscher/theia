@@ -53,6 +53,8 @@ struct CameraQueue {
     float hitNrmX[CAMERA_QUEUE_SIZE];
     float hitNrmY[CAMERA_QUEUE_SIZE];
     float hitNrmZ[CAMERA_QUEUE_SIZE];
+
+    int objectId[CAMERA_QUEUE_SIZE];
 };
 
 //Thanks to GLSL not having references, but only passes variables by copy we
@@ -74,7 +76,7 @@ CameraRay RAY = createCameraRay(\
         QUEUE.m02[IDX], QUEUE.m12[IDX], QUEUE.m22[IDX], QUEUE.m32[IDX],\
         QUEUE.m03[IDX], QUEUE.m13[IDX], QUEUE.m23[IDX], QUEUE.m33[IDX]\
     ),\
-    QUEUE.contrib[IDX], QUEUE.timeDelta[IDX],\
+    QUEUE.contrib[IDX], QUEUE.timeDelta[IDX], QUEUE.objectId[IDX],\
     vec3(QUEUE.hitPosX[IDX], QUEUE.hitPosY[IDX], QUEUE.hitPosZ[IDX]),\
     vec3(QUEUE.hitDirX[IDX], QUEUE.hitDirY[IDX], QUEUE.hitDirZ[IDX]),\
     vec3(QUEUE.hitNrmX[IDX], QUEUE.hitNrmY[IDX], QUEUE.hitNrmZ[IDX]),\
@@ -86,7 +88,7 @@ CameraRay RAY = createCameraRay(\
 CameraRay RAY = createCameraRay(\
     vec3(QUEUE.posX[IDX], QUEUE.posY[IDX], QUEUE.posZ[IDX]),\
     vec3(QUEUE.dirX[IDX], QUEUE.dirY[IDX], QUEUE.dirZ[IDX]),\
-    QUEUE.contrib[IDX], QUEUE.timeDelta[IDX],\
+    QUEUE.contrib[IDX], QUEUE.timeDelta[IDX], QUEUE.objectId[IDX],\
     vec3(QUEUE.hitPosX[IDX], QUEUE.hitPosY[IDX], QUEUE.hitPosZ[IDX]),\
     vec3(QUEUE.hitDirX[IDX], QUEUE.hitDirY[IDX], QUEUE.hitDirZ[IDX]),\
     vec3(QUEUE.hitNrmX[IDX], QUEUE.hitNrmY[IDX], QUEUE.hitNrmZ[IDX]));
@@ -135,7 +137,8 @@ QUEUE.hitDirY[IDX] = RAY.hit.direction.y;\
 QUEUE.hitDirZ[IDX] = RAY.hit.direction.z;\
 QUEUE.hitNrmX[IDX] = RAY.hit.normal.x;\
 QUEUE.hitNrmY[IDX] = RAY.hit.normal.y;\
-QUEUE.hitNrmZ[IDX] = RAY.hit.normal.z;
+QUEUE.hitNrmZ[IDX] = RAY.hit.normal.z;\
+QUEUE.objectId[IDX] = RAY.hit.objectId;
 
 #elif defined(LIGHT_QUEUE_POLARIZED)
 
@@ -160,7 +163,8 @@ QUEUE.hitDirY[IDX] = RAY.hit.direction.y;\
 QUEUE.hitDirZ[IDX] = RAY.hit.direction.z;\
 QUEUE.hitNrmX[IDX] = RAY.hit.normal.x;\
 QUEUE.hitNrmY[IDX] = RAY.hit.normal.y;\
-QUEUE.hitNrmZ[IDX] = RAY.hit.normal.z;
+QUEUE.hitNrmZ[IDX] = RAY.hit.normal.z;\
+QUEUE.objectId[IDX] = RAY.hit.objectId;
 
 #endif
 

@@ -19,6 +19,7 @@ HitItem createHit(
     const PolarizedForwardRay ray,  ///< Ray generating a hit
     vec3 objHitPos,                 ///< Hit position in object space
     vec3 objHitNormal,              ///< Hit normal in object space
+    int objectId,                   ///< Id of the hit object
     mat3 worldToObj                 ///< Transformation from world to object space
 ) {
     float contrib = ray.state.lin_contrib * exp(ray.state.log_contrib);
@@ -49,7 +50,8 @@ HitItem createHit(
         hitPolRef,
         ray.state.wavelength,
         ray.state.time,
-        contrib
+        contrib,
+        objectId
     );
 }
 
@@ -62,6 +64,7 @@ HitItem createHit(
     const RayState state,
     vec3 objHitPos,
     vec3 objHitNormal,
+    int objectId,
     mat3 worldToObj
 ) {
     float contrib = state.lin_contrib * exp(state.log_contrib);
@@ -75,7 +78,8 @@ HitItem createHit(
         objHitNormal,
         state.wavelength,
         state.time,
-        contrib
+        contrib,
+        objectId
     );
 }
 
@@ -83,18 +87,20 @@ HitItem createHit(
     const UnpolarizedForwardRay ray,
     vec3 objHitPos,
     vec3 objHitNormal,
+    int objectId,
     mat3 worldToObj
 ) {
-    return createHit(ray.state, objHitPos, objHitNormal, worldToObj);
+    return createHit(ray.state, objHitPos, objHitNormal, objectId, worldToObj);
 }
 
 HitItem createHit(
     const UnpolarizedBackwardRay ray,
     vec3 objHitPos,
     vec3 objHitNormal,
+    int objectId,
     mat3 worldToObj
 ) {
-    return createHit(ray.state, objHitPos, objHitNormal, worldToObj);
+    return createHit(ray.state, objHitPos, objHitNormal, objectId, worldToObj);
 }
 
 #endif

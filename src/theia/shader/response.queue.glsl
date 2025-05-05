@@ -28,6 +28,8 @@ struct HitQueue {
     float wavelength[HIT_QUEUE_SIZE];
     float time[HIT_QUEUE_SIZE];
     float contrib[HIT_QUEUE_SIZE];
+
+    int objectId[HIT_QUEUE_SIZE];
 };
 
 //Thanks to GLSL not having references, but only passes variables by copy we
@@ -45,7 +47,7 @@ HitItem HIT = HitItem(\
     vec3(QUEUE.nrmX[IDX], QUEUE.nrmY[IDX], QUEUE.nrmZ[IDX]),\
     vec4(QUEUE.stokesI[IDX], QUEUE.stokesQ[IDX], QUEUE.stokesU[IDX], QUEUE.stokesV[IDX]),\
     vec3(QUEUE.polX[IDX], QUEUE.polY[IDX], QUEUE.polZ[IDX]),\
-    QUEUE.wavelength[IDX], QUEUE.time[IDX], QUEUE.contrib[IDX]);
+    QUEUE.wavelength[IDX], QUEUE.time[IDX], QUEUE.contrib[IDX], QUEUE.objectId[IDX]);
 
 #elif defined(POLARIZATION)
 
@@ -58,7 +60,7 @@ HitItem HIT = HitItem(\
     vec3(QUEUE.posX[IDX], QUEUE.posY[IDX], QUEUE.posZ[IDX]),\
     vec3(QUEUE.dirX[IDX], QUEUE.dirY[IDX], QUEUE.dirZ[IDX]),\
     vec3(QUEUE.nrmX[IDX], QUEUE.nrmY[IDX], QUEUE.nrmZ[IDX]),\
-    QUEUE.wavelength[IDX], QUEUE.time[IDX], QUEUE.contrib[IDX]);
+    QUEUE.wavelength[IDX], QUEUE.time[IDX], QUEUE.contrib[IDX], QUEUE.objectId[IDX]);
 
 #endif
 
@@ -84,7 +86,8 @@ QUEUE.polY[IDX] = HIT.polRef.y;\
 QUEUE.polZ[IDX] = HIT.polRef.z;\
 QUEUE.wavelength[IDX] = HIT.wavelength;\
 QUEUE.time[IDX] = HIT.time;\
-QUEUE.contrib[IDX] = HIT.contrib;
+QUEUE.contrib[IDX] = HIT.contrib;\
+QUEUE.objectId[IDX] = HIT.objectId;
 
 #elif defined(HIT_QUEUE_POLARIZED)
 
@@ -107,7 +110,8 @@ QUEUE.polY[IDX] = 0.0;\
 QUEUE.polZ[IDX] = 0.0;\
 QUEUE.wavelength[IDX] = HIT.wavelength;\
 QUEUE.time[IDX] = HIT.time;\
-QUEUE.contrib[IDX] = HIT.contrib;
+QUEUE.contrib[IDX] = HIT.contrib;\
+QUEUE.objectId[IDX] = HIT.objectId;
 
 #else
 
@@ -123,7 +127,8 @@ QUEUE.nrmY[IDX] = HIT.normal.y;\
 QUEUE.nrmZ[IDX] = HIT.normal.z;\
 QUEUE.wavelength[IDX] = HIT.wavelength;\
 QUEUE.time[IDX] = HIT.time;\
-QUEUE.contrib[IDX] = HIT.contrib;
+QUEUE.contrib[IDX] = HIT.contrib;\
+QUEUE.objectId[IDX] = HIT.objectId;
 
 #endif
 

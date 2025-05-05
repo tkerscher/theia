@@ -34,7 +34,7 @@ layout(scalar) uniform DispatchParams {
 };
 
 layout(scalar) uniform TraceParams {
-    uint targetIdx;
+    int targetId;
     uvec2 sceneMedium;
 
     PropagateParams propagation;
@@ -73,14 +73,14 @@ void traceMain() {
         SurfaceHit hit;
         ResultCode result = trace(
             ray, hit,
-            params.targetIdx,
+            params.targetId,
             idx, dim,
             params.propagation,
             allowResponse
         );
         if (result >= 0) {
             result = processInteraction(
-                ray, hit, params.targetIdx,
+                ray, hit, params.targetId,
                 idx, dim,
                 params.propagation,
                 allowResponse,
