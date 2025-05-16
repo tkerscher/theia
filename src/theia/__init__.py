@@ -18,8 +18,8 @@ else:
 if not hp.suitableDeviceAvailable():
     raise RuntimeError("No suitable device available!")
 
-# import modules
-submodules = [
+# define submodules
+__all__ = [
     "camera",
     "cascades",
     "light",
@@ -33,11 +33,15 @@ submodules = [
     "trace",
     "units",
 ]
-for module in submodules:
-    globals()[module] = importlib.import_module(f"theia.{module}")
-
-__all__ = submodules
 
 
 def __dir__():
     return __all__
+
+
+# lazy import of submodules
+def __getattr__(attr):
+    if attr in __all__:
+        return importlib.import_module(f"theia.{attr}")
+
+    raise AttributeError(f"module 'theia' has no attribute {attr!r}")
