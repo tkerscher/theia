@@ -404,9 +404,6 @@ class Tracer(PipelineStage):
         groupCount = max(groupCount, 1)
         self.setParams(_batchSize=value, _groupCountX=groupCount)
 
-        # notify response
-        self.response.updateConfig(self._getTraceConfig())
-
     @property
     def blockSize(self) -> int:
         """Number of threads in a single work group"""
@@ -450,11 +447,28 @@ class Tracer(PipelineStage):
         """Response function processing each simulated hit"""
         return self._response
 
-    @abstractmethod
-    def collectStages(self) -> list[PipelineStage]:
+    def collectStages(
+        self,
+        *,
+        useOriginalNames: bool = False,
+    ) -> list[tuple[str, PipelineStage]]:
         """
         Returns a list of all pipeline stages involved with this tracer in the
-        correct order suitable for creating a pipeline.
+        correct order suitable for creating a pipeline. If useOriginalNames is
+        False, stages will be named according to their function in the tracer,
+        instead of their original names.
+        """
+        stages = self._collectStages()
+        if useOriginalNames:
+            return [(s.name, s) for _, s in stages]
+        else:
+            return stages
+
+    @abstractmethod
+    def _collectStages(self) -> list[tuple[str, PipelineStage]]:
+        """
+        Internal implementation of collectStages() in derived classes returning
+        the list of renamed pipeline stages in correct order.
         """
         pass
 
@@ -472,6 +486,11 @@ class Tracer(PipelineStage):
             self.normalization,
             self.polarized,
         )
+
+    def _finishParams(self, i: int) -> None:
+        super()._finishParams(i)
+        # give response a chance to respond to any changes
+        self.response.updateConfig(self._getTraceConfig())
 
 
 class VolumeForwardTracer(Tracer):
@@ -721,15 +740,15 @@ class VolumeForwardTracer(Tracer):
         """Source used to sample wavelengths"""
         return self._wavelengthSource
 
-    def collectStages(self) -> list[PipelineStage]:
+    def _collectStages(self) -> list[tuple[str, PipelineStage]]:
         return [
-            self.rng,
-            self.wavelengthSource,
-            self.source,
-            self.target,
-            self,
-            self.callback,
-            self.response,
+            ("rng", self.rng),
+            ("photons", self.wavelengthSource),
+            ("lightSource", self.source),
+            ("target", self.target),
+            ("tracer", self),
+            ("callback", self.callback),
+            ("response", self.response),
         ]
 
     def _finishParams(self, i: int) -> None:
@@ -988,11 +1007,20 @@ class VolumeBackwardTracer(Tracer):
         """Source used to sample wavelengths"""
         return self._wavelengthSource
 
-    def collectStages(self) -> list[PipelineStage]:
-        stages = [self.rng, self.wavelengthSource, self.source, self.camera]
+    def _collectStages(self) -> list[tuple[str, PipelineStage]]:
+        stages = [
+            ("rng", self.rng),
+            ("photons", self.wavelengthSource),
+            ("lightSource", self.source),
+            ("camera", self.camera),
+        ]
         if self.target is not None:
-            stages.append(self.target)
-        stages.extend([self, self.callback, self.response])
+            stages.append(("target", self.target))
+        stages += [
+            ("tracer", self),
+            ("callback", self.callback),
+            ("response", self.response),
+        ]
         return stages
 
     def _finishParams(self, i: int) -> None:
@@ -1275,11 +1303,19 @@ class SceneForwardTracer(Tracer):
         """Source used to sample wavelengths"""
         return self._wavelengthSource
 
-    def collectStages(self) -> list[PipelineStage]:
-        stages = [self.rng, self.wavelengthSource, self.source]
+    def _collectStages(self) -> list[tuple[str, PipelineStage]]:
+        stages = [
+            ("rng", self.rng),
+            ("photons", self.wavelengthSource),
+            ("lightSource", self.source),
+        ]
         if self.targetGuide is not None:
-            stages.append(self.targetGuide)
-        stages.extend([self, self.callback, self.response])
+            stages.append(("guide", self.targetGuide))
+        stages += [
+            ("tracer", self),
+            ("callback", self.callback),
+            ("response", self.response),
+        ]
         return stages
 
     def run(self, i: int) -> list[hp.Command]:
@@ -1537,15 +1573,15 @@ class SceneBackwardTracer(Tracer):
         """Source used to sample wavelengths"""
         return self._wavelengthSource
 
-    def collectStages(self):
+    def _collectStages(self) -> list[tuple[str, PipelineStage]]:
         return [
-            self.rng,
-            self.wavelengthSource,
-            self.source,
-            self.camera,
-            self,
-            self.callback,
-            self.response,
+            ("rng", self.rng),
+            ("photons", self.wavelengthSource),
+            ("lightSource", self.source),
+            ("camera", self.camera),
+            ("tracer", self),
+            ("callback", self.callback),
+            ("response", self.response),
         ]
 
     def run(self, i: int) -> list[hp.Command]:
@@ -1809,11 +1845,19 @@ class SceneBackwardTargetTracer(Tracer):
         """Source used to sample wavelengths"""
         return self._wavelengthSource
 
-    def collectStages(self) -> list[PipelineStage]:
-        stages = [self.rng, self.wavelengthSource, self.camera]
+    def _collectStages(self) -> list[tuple[str, PipelineStage]]:
+        stages = [
+            ("rng", self.rng),
+            ("photons", self.wavelengthSource),
+            ("camera", self.camera),
+        ]
         if self.targetGuide is not None:
-            stages.append(self.targetGuide)
-        stages.extend([self, self.callback, self.response])
+            stages.append(("guide", self.targetGuide))
+        stages += [
+            ("tracer", self),
+            ("callback", self.callback),
+            ("response", self.response),
+        ]
         return stages
 
     def run(self, i: int) -> list[hp.Command]:
@@ -2021,15 +2065,15 @@ class DirectLightTracer(Tracer):
         """Source used to sample wavelengths"""
         return self._wavelengthSource
 
-    def collectStages(self) -> list[PipelineStage]:
+    def _collectStages(self) -> list[tuple[str, PipelineStage]]:
         return [
-            self.rng,
-            self.wavelengthSource,
-            self.source,
-            self.camera,
-            self,
-            self.callback,
-            self.response,
+            ("rng", self.rng),
+            ("photons", self.wavelengthSource),
+            ("lightSource", self.source),
+            ("camera", self.camera),
+            ("tracer", self),
+            ("callback", self.callback),
+            ("response", self.response),
         ]
 
     def run(self, i: int) -> list[hp.Command]:
@@ -2292,15 +2336,15 @@ class BidirectionalPathTracer(Tracer):
         """Source used to sample wavelengths"""
         return self._wavelengthSource
 
-    def collectStages(self):
+    def _collectStages(self) -> list[tuple[str, PipelineStage]]:
         return [
-            self.rng,
-            self.wavelengthSource,
-            self.source,
-            self.camera,
-            self,
-            self.callback,
-            self.response,
+            ("rng", self.rng),
+            ("photons", self.wavelengthSource),
+            ("lightSource", self.source),
+            ("camera", self.camera),
+            ("tracer", self),
+            ("callback", self.callback),
+            ("response", self.response),
         ]
 
     def run(self, i: int) -> list[hp.Command]:

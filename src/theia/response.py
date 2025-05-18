@@ -1,5 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
+from warnings import warn
 
 import hephaistos as hp
 from hephaistos.pipeline import PipelineStage, SourceCodeMixin
@@ -35,7 +36,6 @@ __all__ = [
     "SampleValueResponse",
     "StoreValueHitResponse",
     "UniformValueResponse",
-    "ValueHitResponse",
     "ValueItem",
     "ValueResponse",
 ]
@@ -118,8 +118,7 @@ class TraceConfig:
 class HitResponse(SourceCodeMixin):
     """
     Base class for response functions called for each hit produced by a tracer.
-    A response function is a GLSL function consuming a single `HitItem` as
-    described in `createHitItem`:
+    A response function is a GLSL function consuming a single `HitItem`:
 
     ```
     void response(HitItem item)
@@ -135,9 +134,12 @@ class HitResponse(SourceCodeMixin):
 
     def prepare(self, config: TraceConfig) -> None:
         """
-        Called by e.g. a `Tracer` when binding the response into its program
-        notifying it about its configuration to allow it to make adequate
-        adjustments to itself beforehand.
+        Called by e.g. a `Tracer` during initialization to notify this response
+        about the tracer's configuration allowing it to make adequate
+        adjustments beforehand. If the response is shared among multiple
+        tracers, prepare will be called exactly once by each of them. Responses
+        should therefore lazily allocate resources at the latest in `bindParams`
+        and use `prepare` to keep track of the worst case.
         """
         pass
 
@@ -166,6 +168,9 @@ class HitRecorder(HitResponse):
 
     Parameters
     ----------
+    capacity: int, default=0
+        Maximum number of items to record per batch. If a non-positive number
+        is provided, the capacity will be adjusted to the tracer's capacity.
     polarized: bool, default=False
         Whether to save the polarization state.
 
@@ -177,18 +182,36 @@ class HitRecorder(HitResponse):
 
     _sourceCode = ShaderLoader("response.record.glsl")
 
-    def __init__(self, *, polarized: bool = False) -> None:
+    def __init__(self, *, capacity: int = 0, polarized: bool = False) -> None:
         super().__init__()
         # save params
-        self._capacity = 0
+        self._capacity = capacity
         self._polarized = polarized
         item = PolarizedHitItem if polarized else HitItem
         self._queue = IOQueue(item, mode="retrieve")
+        if capacity > 0:
+            self._queue.initialize(capacity)
 
     def prepare(self, config: TraceConfig) -> None:
         maxHits = config.maxHitsPerThread * config.capacity
-        self._capacity = maxHits
-        self.queue.initialize(maxHits)
+        if self.queue.initialized and maxHits > self.capacity:
+            warn(
+                f"tracer reported maxHits: {maxHits}, "
+                f"but response was initialized with capacity: {self.capacity}"
+            )
+        elif not self.queue.initialized:
+            # update worst case
+            self._capacity = max(self._capacity, maxHits)
+
+    def updateConfig(self, config: TraceConfig) -> None:
+        maxHits = config.batchSize * config.maxHitsPerThread
+        if not self.queue.initialized:
+            self._capacity = max(maxHits, self._capacity)
+        elif maxHits > self.capacity:
+            warn(
+                f"tracer reported maxHits: {maxHits}, "
+                f"but response was initialized with capacity: {self.capacity}"
+            )
 
     @property
     def capacity(self) -> int:
@@ -215,7 +238,9 @@ class HitRecorder(HitResponse):
 
     def bindParams(self, program: hp.Program, i: int) -> None:
         if not self.queue.initialized:
-            raise RuntimeError("Hit response has not been prepared")
+            if self.capacity <= 0:
+                raise RuntimeError(f"Cannot create a queue of size {self.capacity}")
+            self.queue.initialize(self.capacity)
         super().bindParams(program, i)
         program.bindParams(HitQueueOut=self.queue.tensor)
 
@@ -265,8 +290,15 @@ class HitReplay(PipelineStage):
         self._response = response
 
         # prepare response
-        c = TraceConfig(capacity, blockSize, capacity, 1, normalization, polarized)
-        response.prepare(c)
+        self._config = TraceConfig(
+            capacity,
+            blockSize,
+            capacity,
+            1,
+            normalization,
+            polarized,
+        )
+        response.prepare(self._config)
 
         # create code if needed
         if code is None:
@@ -325,6 +357,12 @@ class HitReplay(PipelineStage):
         order suitable for creating a pipeline-
         """
         return [self, self.response]
+
+    def _finishParams(self, i: int) -> None:
+        super()._finishParams(i)
+        # if response is shared, we might need to reset the config
+        # NOTE: This only works because the response comes after the tracer
+        self.response.updateConfig(self._config)
 
     def run(self, i: int) -> list[hp.Command]:
         self._bindParams(self._program, i)
@@ -496,7 +534,15 @@ class StoreValueHitResponse(HitResponse):
         maxHits = config.maxHitsPerThread * config.capacity
         if self._queue is None:
             self._queue = createValueQueue(maxHits)
-        elif self.queue.capacity < maxHits:
+        elif self._queue.capacity < maxHits:
+            raise RuntimeError(
+                f"Queue not big enough to store hits: Queue has capacity of"
+                f"{self._queue.capacity} but {maxHits} needed"
+            )
+
+    def updateConfig(self, config: TraceConfig) -> None:
+        maxHits = config.maxHitsPerThread * config.capacity
+        if self.queue is not None and self.queue.capacity < maxHits:
             raise RuntimeError(
                 f"Queue not big enough to store hits: Queue has capacity of"
                 f"{self.queue.capacity} but {maxHits} needed"
@@ -577,6 +623,8 @@ class SampleValueResponse(HitResponse):
 
     def result(self, i: int) -> NDArray:
         """Returns the result of the given config"""
+        if self._buffer is None:
+            raise RuntimeError("Response has not been prepared!")
         return self._buffer[i].numpy()
 
     def update(self, i):
@@ -584,7 +632,7 @@ class SampleValueResponse(HitResponse):
         if self._updateResponse:
             self.response.update(i)
 
-    def run(self, i):
+    def run(self, i) -> list[hp.Command]:
         if self._tensor is None:
             raise RuntimeError("Response has not been prepared!")
         return [hp.retrieveTensor(self._tensor, self._buffer[i])]
@@ -856,6 +904,12 @@ class HistogramReducer(PipelineStage):
         return self._blockSize
 
     @property
+    def capacity(self) -> int:
+        """Maximum number of histograms"""
+        # since input tensor may have been provided externally, we need to calculate it
+        return self.histIn.size_bytes // (4 * self.nBins)
+
+    @property
     def histIn(self) -> hp.Tensor:
         """Tensor containing the list of histograms to reduce"""
         return self._histIn
@@ -963,9 +1017,11 @@ class HistogramHitResponse(HitResponse):
         self.setParams(t0=t0, binSize=binSize)
         self._nBins = nBins
         self._normalization = normalization
+        self._requestedNorm = 1.0  # keeps track of norm passed through TraceConfigs
         self._retrieve = retrieve
         self._reduceBlockSize = reduceBlockSize
         self._updateResponse = updateResponse
+        self._nHistMax = 0  # keeps track of worst case between prepare() calls
         self._reducer = None
 
     @property
@@ -1037,35 +1093,56 @@ class HistogramHitResponse(HitResponse):
 
     def prepare(self, config: TraceConfig) -> None:
         self.response.prepare(config)
-        norm = self.normalization
-        if norm is None:
-            norm = config.normalization
-        self._reducer = HistogramReducer(
+        self._requestedNorm = config.normalization
+        nHistMax = -(config.capacity // -config.blockSize)
+        if self._reducer is None:
+            self._nHistMax = max(self._nHistMax, nHistMax)
+        elif nHistMax > self._reducer.capacity:
+            raise RuntimeError(
+                f"Tracer may produce up to {nHistMax} intermediate histograms, "
+                f"but the response can only fit {self._reducer.capacity}"
+            )
+
+    def updateConfig(self, config: TraceConfig) -> None:
+        if self._reducer is None:
+            self._requestedNorm = config.normalization
+        else:
+            self._reducer.nHist = -(config.batchSize // -config.blockSize)
+            if self.normalization is None:
+                self._reducer.normalization = config.normalization
+
+    def _initReducer(self) -> HistogramReducer:
+        if self.normalization is not None:
+            norm = self.normalization
+        else:
+            norm = self._requestedNorm
+        # return instead of just assigning to make type checker happy...
+        return HistogramReducer(
             nBins=self.nBins,
-            nHist=-(config.batchSize // -config.blockSize),
-            retrieve=self._retrieve,
+            nHist=self._nHistMax,
+            retrieve=self.retrieve,
             normalization=norm,
             blockSize=self._reduceBlockSize,
         )
 
-    def updateConfig(self, config: TraceConfig) -> None:
-        if self.normalization is None and self._reducer is not None:
-            self._reducer.normalization = config.normalization
-
     def _bindParams(self, program: hp.Program, i: int) -> None:
         super()._bindParams(program, i)
         # connect response and reducer
+        if self._reducer is None:
+            self._reducer = self._initReducer()
         program.bindParams(HistogramOut=self._reducer.histIn)
 
     def update(self, i: int) -> None:
         if self._reducer is None:
-            raise RuntimeError("Response has not been prepared")
+            self._reducer = self._initReducer()
         super().update(i)
         self._reducer.update(i)
         if self._updateResponse:
             self.response.update(i)
 
     def run(self, i: int) -> list[hp.Command]:
+        if self._reducer is None:
+            raise RuntimeError("Response has not been prepared")
         return self._reducer.run(i)
 
 
@@ -1164,6 +1241,7 @@ class KernelHistogramHitResponse(HitResponse):
         self._response = response
         self._nBins = nBins
         self._normalization = normalization
+        self._requestedNorm = 1.0  # keeps track of norm passed through TraceConfigs
         self._retrieve = retrieve
         self._reduceBlockSize = reduceBlockSize
         self._updateResponse = updateResponse
@@ -1173,6 +1251,7 @@ class KernelHistogramHitResponse(HitResponse):
             kernelBandwidth=kernelBandwidth,
             kernelSupport=kernelSupport,
         )
+        self._nHistMax = 0  # keeps track of worst case between prepare() calls
         self._reducer = None
 
     @property
@@ -1244,35 +1323,56 @@ class KernelHistogramHitResponse(HitResponse):
 
     def prepare(self, config: TraceConfig) -> None:
         self.response.prepare(config)
-        norm = self.normalization
-        if norm is None:
-            norm = config.normalization
-        self._reducer = HistogramReducer(
+        self._requestedNorm = config.normalization
+        nHistMax = -(config.capacity // -config.blockSize)
+        if self._reducer is None:
+            self._nHistMax = max(self._nHistMax, nHistMax)
+        elif nHistMax > self._reducer.capacity:
+            raise RuntimeError(
+                f"Tracer may produce up to {nHistMax} intermediate histograms, "
+                f"but the response can only fit {self._reducer.capacity}"
+            )
+
+    def updateConfig(self, config: TraceConfig) -> None:
+        if self._reducer is None:
+            self._requestedNorm = config.normalization
+        else:
+            self._reducer.nHist = -(config.batchSize // -config.blockSize)
+            if self.normalization is None:
+                self._reducer.normalization = config.normalization
+
+    def _initReducer(self) -> HistogramReducer:
+        if self.normalization is not None:
+            norm = self.normalization
+        else:
+            norm = self._requestedNorm
+        # return instead of just assigning to make type checker happy...
+        return HistogramReducer(
             nBins=self.nBins,
-            nHist=-(config.batchSize // -config.blockSize),
-            retrieve=self._retrieve,
+            nHist=self._nHistMax,
+            retrieve=self.retrieve,
             normalization=norm,
             blockSize=self._reduceBlockSize,
         )
 
-    def updateConfig(self, config: TraceConfig) -> None:
-        if self.normalization is None and self._reducer is not None:
-            self._reducer.normalization = config.normalization
-
     def _bindParams(self, program: hp.Program, i: int) -> None:
         super()._bindParams(program, i)
         # connect response and reducer
+        if self._reducer is None:
+            self._reducer = self._initReducer()
         program.bindParams(HistogramOut=self._reducer.histIn)
 
     def update(self, i: int) -> None:
         if self._reducer is None:
-            raise RuntimeError("Response has not been prepared")
+            self._reducer = self._initReducer()
         super().update(i)
         self._reducer.update(i)
         if self._updateResponse:
             self.response.update(i)
 
     def run(self, i: int) -> list[hp.Command]:
+        if self._reducer is None:
+            raise RuntimeError("Response has not been prepared")
         return self._reducer.run(i)
 
 

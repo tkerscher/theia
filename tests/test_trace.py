@@ -70,6 +70,7 @@ def test_tracerReportsConfig():
 
     # update batch size
     tracer.batchSize = batchSize2
+    tracer.update(0)
     # check updateConfig was called with the correct config
     assert response.updatedConfig is not None
     assert response.updatedConfig.batchSize == batchSize2
