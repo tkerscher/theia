@@ -128,7 +128,7 @@ def test_SceneForwardTracer_GroundTruth(
     # create pipeline + scheduler
     batches = []
 
-    def process(config: int, task: int) -> None:
+    def process(config: int, batch: int, args) -> None:
         batch = dumpQueue(recorder.queue.view(config))
         batches.append(batch)
 
@@ -263,7 +263,7 @@ def test_SceneForwardTracer_Crosscheck(
     # create pipeline + scheduler
     hists = []
 
-    def process(config: int, task: int) -> None:
+    def process(config: int, batch: int, args) -> None:
         hists.append(response.result(config).copy())
 
     pipeline = pl.Pipeline(tracer.collectStages())
@@ -308,15 +308,13 @@ def test_SceneForwardTracer_Crosscheck(
     # create pipeline + scheduler
     hists = []
 
-    def process(config: int, task: int) -> None:
+    def process(config: int, batch: int, args) -> None:
         hists.append(response.result(config).copy())
 
     pipeline = pl.Pipeline(tracer.collectStages())
     scheduler = pl.PipelineScheduler(pipeline, processFn=process)
     # create batches
-    tasks = [
-        {},
-    ] * n_batches  # rng advances on its own, so no updates
+    tasks = [{}] * n_batches  # rng advances on its own, so no updates
     scheduler.schedule(tasks)
     scheduler.wait()
     # destroy scheduler to allow for freeing resources
@@ -431,7 +429,7 @@ def test_SceneBackwardTracer(
     total = 0
     stokes = []
 
-    def process(config: int, task: int) -> None:
+    def process(config: int, batch: int, args) -> None:
         nonlocal total
         result = recorder.queue.view(config)
         result = result[: result.count]
@@ -451,7 +449,7 @@ def test_SceneBackwardTracer(
 
     # create batches
     tasks = [
-        {},
+        {}
     ] * n_batches  # rng advances on its own, so we dont have to update any params
     scheduler.schedule(tasks)
     scheduler.wait()
@@ -552,7 +550,7 @@ def test_SceneForwardTracer_MultiMedia(polarized: bool):
     # create pipeline + scheduler
     hists = []
 
-    def process(config: int, task: int) -> None:
+    def process(config: int, batch: int, args) -> None:
         hists.append(response.result(config).copy())
 
     pipeline = pl.Pipeline(tracer.collectStages())
@@ -663,7 +661,7 @@ def test_SceneBackwardTracer_MultiMedia(polarized: bool):
     # create pipeline + scheduler
     hists = []
 
-    def process(config: int, task: int) -> None:
+    def process(config: int, batch: int, args) -> None:
         hists.append(response.result(config).copy())
 
     pipeline = pl.Pipeline(tracer.collectStages())
@@ -704,7 +702,7 @@ def test_SceneBackwardTracer_MultiMedia(polarized: bool):
     # create pipeline + scheduler
     hists = []
 
-    def process(config: int, task: int) -> None:
+    def process(config: int, batch: int, args) -> None:
         hists.append(response.result(config).copy())
 
     pipeline = pl.Pipeline(tracer.collectStages())
@@ -796,7 +794,7 @@ def test_SceneBackwardTargetTrace() -> None:
     # create pipeline + scheduler
     hists = []
 
-    def process(config: int, task: int) -> None:
+    def process(config: int, batch: int, args) -> None:
         hists.append(response.result(config).copy())
 
     pipeline = pl.Pipeline(tracer.collectStages())
@@ -895,7 +893,7 @@ def test_VolumeForwardTracer(
     total = 0
     stokes = []
 
-    def process(config: int, task: int) -> None:
+    def process(config: int, batch: int, args) -> None:
         nonlocal total
         result = recorder.queue.view(config)
         result = result[: result.count]
@@ -1015,7 +1013,7 @@ def test_VolumeBackwardTracer(
     total = 0
     stokes = []
 
-    def process(config: int, task: int) -> None:
+    def process(config: int, batch: int, args) -> None:
         nonlocal total
         result = recorder.queue.view(config)
         result = result[: result.count]
@@ -1150,7 +1148,7 @@ def test_BidirectionalPathTracer(
     total = 0
     # stokes = []
 
-    def process(config: int, task: int) -> None:
+    def process(config: int, batch: int, args) -> None:
         nonlocal total
         result = recorder.queue.view(config)
         result = result[: result.count]
@@ -1198,7 +1196,7 @@ def test_BidirectionalPathTracer(
 
     singleTotal = 0
 
-    def process(config: int, task: int) -> None:
+    def process(config: int, batch: int, args) -> None:
         nonlocal singleTotal
         result = recorder.queue.view(config)
         result = result[: result.count]
@@ -1293,7 +1291,7 @@ def test_DirectTracer(mu_a: float, mu_s: float, g: float, polarized: bool):
     # create pipeline + scheduler
     batches = []
 
-    def process(config: int, task: int) -> None:
+    def process(config: int, batch: int, args) -> None:
         batch = dumpQueue(recorder.queue.view(config))
         batches.append(batch)
 

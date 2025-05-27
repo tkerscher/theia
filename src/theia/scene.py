@@ -677,7 +677,7 @@ class Scene:
         self._bbox = value
 
     @property
-    def geometries(self) -> hp.ByteTensor:
+    def geometries(self) -> hp.Tensor:
         """The tensor holding the array of geometries in the scene"""
         return self._geometries
 

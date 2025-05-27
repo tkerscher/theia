@@ -1045,7 +1045,7 @@ class CherenkovLightSource(LightSource):
         self.setParams(_trackDir=dir, _trackDist=dist)
 
 
-class ParticleTrack(hp.ByteTensor):
+class ParticleTrack(hp.Tensor):
     """
     Storage class for saving particle tracks on the GPU.
 

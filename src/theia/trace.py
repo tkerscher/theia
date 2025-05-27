@@ -99,7 +99,7 @@ class EventStatisticCallback(TraceEventCallback):
     def __init__(self) -> None:
         super().__init__()
         # allocate mapped tensor for statistics
-        self._tensor = hp.ByteTensor(sizeof(self.Statistic), mapped=True)
+        self._tensor = hp.Tensor(sizeof(self.Statistic), mapped=True)
         if not self._tensor.isMapped:
             raise RuntimeError("Could not create mapped tensor")
         self._stat = self.Statistic.from_address(self._tensor.memory)
@@ -221,8 +221,8 @@ class TrackRecordCallback(TraceEventCallback):
         # allocate memory
         self._cols = 11 if polarized else 4
         words = capacity * length * self._cols + capacity * 2  # track + length + codes
-        self._tensor = hp.ByteTensor(words * 4)
-        self._buffer = [hp.RawBuffer(words * 4) for _ in range(2)]
+        self._tensor = hp.Tensor(words * 4)
+        self._buffer = [hp.Buffer(words * 4) for _ in range(2)]
 
     @property
     def capacity(self) -> int:

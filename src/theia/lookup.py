@@ -10,7 +10,6 @@ from scipy.interpolate import (
 
 import hephaistos as hp
 from ctypes import memmove
-from hephaistos import ByteTensor
 
 from typing import Final, Literal
 
@@ -73,10 +72,10 @@ class Table:
         memmove(ptr, self._data.ctypes.data, self._data.nbytes)
         return self.nbytes
 
-    def upload(self) -> hp.ByteTensor:
+    def upload(self) -> hp.Tensor:
         """Uploads the table to the GPU"""
-        buffer = hp.RawBuffer(self.nbytes)
-        tensor = hp.ByteTensor(self.nbytes)
+        buffer = hp.Buffer(self.nbytes)
+        tensor = hp.Tensor(self.nbytes)
         self.copy(buffer.address)
         hp.execute(hp.updateTensor(buffer, tensor))
         return tensor
@@ -97,7 +96,7 @@ def getTableSize(a: ArrayLike | tuple[int, ...] | None) -> int:
     return (len(a) + sum(a)) * 4  # 4 bytes per float
 
 
-def uploadTables(data: list[NDArray]) -> tuple[ByteTensor, list[int]]:
+def uploadTables(data: list[NDArray]) -> tuple[hp.Tensor, list[int]]:
     """
     Creates a table for each data entry in the given list and uploads them to
     the GPU. Returns the tensor storing them and a the corresponding list of
@@ -110,7 +109,7 @@ def uploadTables(data: list[NDArray]) -> tuple[ByteTensor, list[int]]:
 
     Returns
     -------
-    tensor: ByteTensor
+    tensor: Tensor
         Tensor containing the table data
     addresses: list[int]
         Device addresses pointing to the individual tables on the device.
@@ -118,8 +117,8 @@ def uploadTables(data: list[NDArray]) -> tuple[ByteTensor, list[int]]:
     tables = [Table(d) for d in data]
     size = sum([table.nbytes for table in tables])
 
-    buffer = hp.RawBuffer(size)
-    tensor = ByteTensor(size)
+    buffer = hp.Buffer(size)
+    tensor = hp.Tensor(size)
 
     adr_list = []
     adr = tensor.address

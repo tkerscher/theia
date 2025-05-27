@@ -116,7 +116,7 @@ class Medium:
         /  1  m12  0   0  \\  \n
         | m12 m22  0   0  |   \n
         |  0   0  m33 m34 |   \n
-        \  0   0 -m34 m33 /   \n
+       \\  0   0 -m34 m33 /   \n
     """
 
     class GLSL(Structure):
@@ -954,8 +954,8 @@ class MaterialStore:
             allocMaterial(mat)
 
         # allocate actual memory
-        self._tensor = hp.ByteTensor(size, mapped=(not freeze))
-        self._buffer = hp.RawBuffer(size)
+        self._tensor = hp.Tensor(size, mapped=(not freeze))
+        self._buffer = hp.Buffer(size)
         # calculate device addresses
         adr = self._tensor.address
         self._table_adr = {t: adr + d for t, (d, _) in self._table_ptr.items()}
@@ -1114,7 +1114,7 @@ class MaterialStore:
             if isinstance(material.inside, Medium):
                 self.updateMedium(material.inside)
             if isinstance(material.outside, Medium):
-                self.updateMaterial(material.outside)
+                self.updateMedium(material.outside)
 
 
 #################################### MODELS ####################################
@@ -1291,6 +1291,7 @@ class SellmeierEquation:
         """
         Calculates the group velocity in for the given wavelengths
         """
+        wavelength = np.asarray(wavelength)
         n = self.refractive_index(wavelength)
         L = u.convert(wavelength, u.nm)
         L2 = np.square(wavelength)
@@ -1341,6 +1342,7 @@ class BK7Model(SellmeierEquation, MediumModel):
         # the probe thickness, as thicker ones should give a better result
         # To avoid taking the average with inf, we actually take the average
         # of the absorption lengths, i.e. inf -> 0
+        wavelength = np.asarray(wavelength)
 
         mu = None
         # disable error, since we'll take the log of zero
@@ -1391,19 +1393,21 @@ class HenyeyGreensteinPhaseFunction:
         Evaluates the log phase function for the given angles as cos(theta).
         Normalized with respect to unit sphere.
         """
+        cos_theta = np.asarray(cos_theta)
         return np.log(
             (1.0 - self.g**2)
             / np.power(1.0 + self.g**2 - 2 * self.g * cos_theta, 1.5)
             / (4.0 * np.pi)
         )
 
-    def phase_sampling(self, eta: ArrayLike) -> ArrayLike:
+    def phase_sampling(self, eta: ArrayLike) -> NDArray:
         """
         Samples the phase function using provided unit random numbers eta.
         Returns the cosine of the sampled angle.
 
         See Zhang, J.: On Sampling of Scattering Phase Functions, 2019
         """
+        eta = np.asarray(eta)
         if abs(self.g) < 1e-7:
             # prevent division by zero: g=0 -> uniform
             return 1.0 - 2.0 * eta
@@ -1867,6 +1871,7 @@ class KokhanovskyOceanWaterPhaseMatrix:
 
     def phase_m33(self, cos_theta: ArrayLike) -> NDArray:
         """m33 element of the phase matrix"""
+        cos_theta = np.asarray(cos_theta)
         theta = np.arccos(cos_theta)
         ct_sq = np.square(cos_theta)
         e = self.xi * np.exp(-self.alpha * theta)
