@@ -15,8 +15,8 @@ license = { text = "MIT" }
 dependencies = [
     "hephaistos",
     "jsonschema~=4.23",
-    "numpy~=1.22",
-    "scipy~=1.8",
+    "numpy>=1.22",
+    "scipy>=1.8",
     "trimesh[easy]~=4.5.3"
 ]
 
