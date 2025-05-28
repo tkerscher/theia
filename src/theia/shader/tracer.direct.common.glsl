@@ -79,7 +79,7 @@ void sampleDirect(
         result = combineRaysAligned(ray, camera, params, hit);
         if (result >= 0 && hit.contrib > 0.0) {
             result = RESULT_CODE_RAY_DETECTED;
-            response(hit);
+            response(hit, idx, dim);
         }
     }
 

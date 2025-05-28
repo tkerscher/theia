@@ -21,7 +21,7 @@ layout(scalar) writeonly buffer HitQueueOut {
 
 void initResponse() {}
 
-void response(HitItem item) {
+void response(HitItem item, uint dim, inout uint idx) {
     uint id = atomicAdd(hitQueueOut.count, 1);
     SAVE_HIT(item, hitQueueOut.queue, id)
 }

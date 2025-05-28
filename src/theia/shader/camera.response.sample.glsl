@@ -94,7 +94,7 @@ void sampleMain() {
         ray.contrib,
         0
     );
-    response(hit);
+    response(hit, idx, dim);
 }
 
 void main() {

@@ -49,7 +49,12 @@ Medium getMedium() {
 #include "callback.util.glsl"
 
 void createResponse(
-    ForwardRay ray, const TargetSample hit, vec3 dir, float weight, bool scattered
+    ForwardRay ray,
+    const TargetSample hit,
+    vec3 dir,
+    float weight,
+    bool scattered,
+    uint idx, inout uint dim
 ) {
     //check if hit
     if (!hit.valid) return;
@@ -73,7 +78,7 @@ void createResponse(
         hit.worldToObj
     );
     if (item.contrib > 0.0)
-        response(item);
+        response(item, idx, dim);
 }
 
 #ifndef DISABLE_MIS
@@ -139,8 +144,8 @@ void sampleTargetMIS(ForwardRay ray, uint idx, inout uint dim) {
     float wPhase = pPP * pPP / (pPP*pPP + pTP*pTP);
 
     //create hits
-    createResponse(ray, phaseHit, dirPhase, wPhase, true);
-    createResponse(ray, targetHit, dirTarget, wTarget, true);
+    createResponse(ray, phaseHit, dirPhase, wPhase, true, idx, dim);
+    createResponse(ray, targetHit, dirTarget, wTarget, true, idx, dim);
 }
 
 #endif
@@ -184,7 +189,7 @@ ResultCode trace(
             hit.worldToObj
         );
         if (item.contrib > 0.0)
-            response(item);
+            response(item, idx, dim);
 
         return RESULT_CODE_RAY_DETECTED;
     }
@@ -241,7 +246,7 @@ void traceMain() {
     //try to extend first ray to sphere if direct lighting and MIS is enabled
     #if !defined(DISABLE_DIRECT_LIGHTING) && !defined(DISABLE_MIS)
     TargetSample directHit = intersectTarget(ray.state.position, ray.state.direction);
-    createResponse(ray, directHit, ray.state.direction, 1.0, false);
+    createResponse(ray, directHit, ray.state.direction, 1.0, false, idx, dim);
     #endif
 
     //trace loop: first iteration

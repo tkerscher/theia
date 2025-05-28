@@ -34,7 +34,8 @@ void createResponse(
     RAY ray,                            ///< Ray that generated that hit
     const SurfaceHit hit,               ///< Surface hit
     const Reflectance surface,          ///< Surface properties
-    bool absorb                         ///< True, if the surface absorbs the ray
+    bool absorb,                        ///< True, if the surface absorbs the ray
+    uint idx, inout uint dim            ///< RNG state
 ) {
     //if target is not absorbing, we have to emulate a transmission before the
     //response as we have to subtract the reflected part.
@@ -63,7 +64,7 @@ void createResponse(
         hit.worldToObj
     );
     if (item.contrib > 0.0)
-        response(item);
+        response(item, idx, dim);
 }
 
 /**
@@ -74,7 +75,7 @@ ResultCode processHit(
     const SurfaceHit hit,           ///< Surface hit
     const PropagateParams params,   ///< Propagation parameters
     int targetId,                   ///< Id of target
-    float u,                        ///< Random number
+    uint idx, inout uint dim,       ///< RNG state
     bool allowResponse              ///< Whether a detector hit should create a response
 ) {
     //propagate ray to hit
@@ -100,7 +101,7 @@ ResultCode processHit(
 
     //create response if allowed
     if (allowResponse && isTarget && (targetId < 0 || hit.customId == targetId)) {
-        createResponse(ray, hit, surface, isAbs);
+        createResponse(ray, hit, surface, isAbs, idx, dim);
         //do not return early as the ray is allowed to carry on
         //(e.g. partially reflect)
         result = RESULT_CODE_RAY_DETECTED;
@@ -121,7 +122,7 @@ ResultCode processHit(
     float r = 0.5 * (surface.r_s*surface.r_s + surface.r_p*surface.r_p);
     if (canReflect && canTransmit) {
         //importance sample what to do
-        if (u < r) {
+        if (random(idx, dim) < r) {
             reflectRayIS(ray, hit, surface);
         }
         else {
@@ -160,7 +161,8 @@ void processShadowRay(
     RAY ray,                        ///< Shadow ray
     const SurfaceHit hit,           ///< Surface hit of shadow ray
     int targetId,                   ///< Id of target
-    const PropagateParams params    ///< Propagation parameters
+    const PropagateParams params,   ///< Propagation parameters
+    uint idx, inout uint dim        ///< RNG state
 ) {
     //check if we hit target
     bool isTarget = (hit.flags & MATERIAL_TARGET_BIT) != 0;
@@ -174,7 +176,7 @@ void processShadowRay(
 
     //create response
     bool black = (hit.flags & MATERIAL_BLACK_BODY_BIT) != 0;
-    createResponse(ray, hit, surface, black);
+    createResponse(ray, hit, surface, black, idx, dim);
 }
 
 /**
@@ -186,6 +188,7 @@ void traceShadowRay(
     float dist,                     ///< Max distance of shadow ray
     int targetId,                   ///< Id of target
     const PropagateParams params,   ///< Propagation parameters
+    uint idx, inout uint dim,       ///< RNG state
     float weight                    ///< Weight of shadow ray applied to its hits
 ) {
     //scatter local ray into dir (takes care of polarization)
@@ -207,7 +210,7 @@ void traceShadowRay(
     
     //process shadow ray
     ray.state.lin_contrib *= weight; //apply weight here
-    processShadowRay(ray, hit, targetId, params);
+    processShadowRay(ray, hit, targetId, params, idx, dim);
 }
 
 #ifndef SCENE_TRAVERSE_DISABLE_MIS
@@ -261,8 +264,8 @@ void sampleTargetMIS(
     float wPhase = pPP * pPP / (pPP*pPP + pTP*pTP);
 
     //trace shadow rays
-    traceShadowRay(ray, dirPhase, phaseSample.dist, targetId, params, wPhase);
-    traceShadowRay(ray, targetSample.dir, targetSample.dist, targetId, params, wTarget);
+    traceShadowRay(ray, dirPhase, phaseSample.dist, targetId, params, idx, dim, wPhase);
+    traceShadowRay(ray, targetSample.dir, targetSample.dist, targetId, params, idx, dim, wTarget);
 }
 
 #endif
@@ -332,7 +335,7 @@ ResultCode trace(
     //Check if hit was actually our shadow ray
     if (mis_target && hit.valid && dist > sampledDist && queryResult >= 0) {
         //create response
-        processShadowRay(ray, hit, targetId, params);
+        processShadowRay(ray, hit, targetId, params, idx, dim);
         //act like we didn't actually hit anything
         hit.valid = false;
         dist = sampledDist;
@@ -371,7 +374,7 @@ ResultCode processInteraction(
             ray, hit,
             params,
             targetId,
-            random(idx, dim),
+            idx, dim,
             allowResponse
         );
     }

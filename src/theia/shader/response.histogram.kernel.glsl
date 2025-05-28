@@ -42,9 +42,9 @@ float kernelCdf(float x) {
     return 0.5 + 0.5 * tanh(c1 * x - c2 * atan(c3 * x));
 }
 
-void response(HitItem item) {
+void response(HitItem item, uint idx, inout uint dim) {
     //get response value
-    float value = responseValue(item);
+    float value = responseValue(item, idx, dim);
 
     //calculate which bins will be affected
     float t = item.time - responseParams.t0;

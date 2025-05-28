@@ -5,6 +5,9 @@
 
 layout(local_size_x = BLOCK_SIZE) in;
 
+//optional RNG
+#include "rng.glsl"
+
 #include "response.queue.glsl"
 //test for rare edge case:
 //combine HitRecorder & HitReplay but mismatch polarization
@@ -30,14 +33,16 @@ layout(scalar) readonly buffer HitQueueIn {
 };
 
 void main() {
+    //init RNG
+    uint idx = gl_GlobalInvocationID.x;
+    uint dim = 0;
     //init response
     initResponse();
 
     //process hit
-    uint idx = gl_GlobalInvocationID.x;
     if (idx < hitCount) {
         LOAD_HIT(hit, queue, idx)
-        response(hit);
+        response(hit, idx, dim);
     }
 
     //finalize response

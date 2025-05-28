@@ -26,9 +26,9 @@ void initResponse() {
     barrier();
 }
 
-void response(HitItem item) {
+void response(HitItem item, uint dim, inout uint idx) {
     //get response value
-    float value = responseValue(item);
+    float value = responseValue(item, dim, idx);
 
     //update local history
     uint bin = int(floor((item.time - responseParams.t0) / responseParams.binSize));

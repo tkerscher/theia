@@ -3,7 +3,7 @@
 
 void initResponse() {}
 
-void response(HitItem item) {}
+void response(HitItem item, uint idx, inout uint dim) {}
 
 void finalizeResponse() {}
 

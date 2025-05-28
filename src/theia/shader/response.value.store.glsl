@@ -9,9 +9,9 @@ layout(scalar) writeonly buffer ValueQueueOut {
 
 void initResponse() {}
 
-void response(HitItem item) {
-    uint idx = atomicAdd(valueQueueOut.count, 1);
-    valueQueueOut.value[idx] = responseValue(item);
+void response(HitItem item, uint idx, inout uint dim) {
+    // uint idx = atomicAdd(valueQueueOut.count, 1);
+    valueQueueOut.value[idx] = responseValue(item, idx, dim);
     valueQueueOut.time[idx] = item.time;
 }
 

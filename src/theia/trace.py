@@ -364,7 +364,7 @@ class Tracer(PipelineStage):
         *,
         batchSize: int,
         blockSize: int,
-        capacity: int,
+        capacity: int | None,
         nRNGSamples: int,
         maxHitsPerThread: int,
         polarized: bool = False,
@@ -628,6 +628,7 @@ class VolumeForwardTracer(Tracer):
         rngStride = 3 if disableTargetSampling else 7
         nRNG = source.nRNGForward + wavelengthSource.nRNGSamples
         nRNG += rngStride * pathLength
+        nRNG += maxHitsPerThread * response.nRNGSamples
         # init tracer
         super().__init__(
             response,
@@ -903,6 +904,7 @@ class VolumeBackwardTracer(Tracer):
             rngPre += camera.nRNGDirect
             rngPre += source.nRNGBackward
         nRNG = rngPre + rngStride * nScattering
+        nRNG += maxHitsPerThread * response.nRNGSamples
         # init tracer
         super().__init__(
             response,
@@ -1179,6 +1181,7 @@ class SceneForwardTracer(Tracer):
         # init tracer
         nRNG = source.nRNGForward + wavelengthSource.nRNGSamples
         nRNG += rngStride * maxPathLength
+        nRNG += maxHits * response.nRNGSamples
         super().__init__(
             response,
             {"TraceParams": self.TraceParams},
@@ -1462,6 +1465,7 @@ class SceneBackwardTracer(Tracer):
             rngPre += camera.nRNGDirect
             rngPre += source.nRNGBackward
         nRNG = rngPre + rngStride * maxPathLength
+        nRNG += maxHits * response.nRNGSamples
         # init tracer
         super().__init__(
             response,
@@ -1729,6 +1733,7 @@ class SceneBackwardTargetTracer(Tracer):
         # init tracer
         nRNG = camera.nRNGSamples + wavelengthSource.nRNGSamples
         nRNG += rngStride * maxPathLength
+        nRNG += maxHits * response.nRNGSamples
         super().__init__(
             response,
             {"TraceParams": self.TraceParams},
@@ -1976,7 +1981,7 @@ class DirectLightTracer(Tracer):
             blockSize=blockSize,
             capacity=capacity,
             maxHitsPerThread=1,
-            nRNGSamples=source.nRNGBackward + camera.nRNGDirect,
+            nRNGSamples=source.nRNGBackward + camera.nRNGDirect + response.nRNGSamples,
             polarized=polarized,
         )
 
@@ -2215,6 +2220,7 @@ class BidirectionalPathTracer(Tracer):
         # calculate rng samples
         nRNG = source.nRNGForward + camera.nRNGSamples + wavelengthSource.nRNGSamples
         nRNG += (lightPathLength + cameraPathLength) * 4
+        nRNG += maxHits * response.nRNGSamples
         # init tracer
         super().__init__(
             response,

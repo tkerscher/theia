@@ -140,7 +140,13 @@ void createLightSubPath(
     }
 }
 
-void connectVertex(BackwardRay ray, CameraRay cam, SourceRay light, uint pathLength) {
+void connectVertex(
+    BackwardRay ray,
+    CameraRay cam,
+    SourceRay light,
+    uint pathLength,
+    uint idx, inout uint dim    
+) {
     //check if visible
     if (!isVisible(ray.state.position, light.position))
         return;
@@ -168,11 +174,11 @@ void connectVertex(BackwardRay ray, CameraRay cam, SourceRay light, uint pathLen
     hit.contrib /= d*d;
 
     if (result >= 0 && hit.contrib > 0.0) {
-        response(hit);
+        response(hit, idx, dim);
     }
 }
 
-void completePath(BackwardRay ray, CameraRay cam, uint camLength) {
+void completePath(BackwardRay ray, CameraRay cam, uint camLength, uint idx, inout uint dim) {
     //fail safe: do not even try to connect in vacuum (no scatter)
     if (ray.state.medium == uvec2(0))
         return;
@@ -186,7 +192,7 @@ void completePath(BackwardRay ray, CameraRay cam, uint camLength) {
             //-> total path length is i + nCamera + 2(zero index) + 1(connection)
             uint pathLength = camLength + i + 3;
             //complete path
-            connectVertex(ray, cam, lightPath[i].ray, pathLength);
+            connectVertex(ray, cam, lightPath[i].ray, pathLength, idx, dim);
         }
     }
 }
@@ -215,7 +221,7 @@ void simulateCamera(
         //on success...
         if (result >= 0) {
             //connect camera ray to light vertices
-            completePath(ray, cam, i);
+            completePath(ray, cam, i, idx, dim);
             //handle interaction
             processInteraction(
                 ray, hit,

@@ -121,16 +121,36 @@ class HitResponse(SourceCodeMixin):
     A response function is a GLSL function consuming a single `HitItem`:
 
     ```
-    void response(HitItem item)
+    void response(HitItem item, uint idx, inout uint dim)
     ```
+
+    `idx` and `dim` are the state of the RNG and can be used to draw random
+    numbers. Additionally, the following two functions must be present:
+
+    ````
+    void initResponse()
+    void finalizeResponse()
+    ```
+
+    These will get called at the start and end of the simulation respectively.
     """
 
     name = "Hit Response"
 
     def __init__(
-        self, params: dict[str, type[Structure]] = {}, extra: set[str] = set()
+        self,
+        params: dict[str, type[Structure]] = {},
+        extra: set[str] = set(),
+        *,
+        nRNGSamples: int = 0,
     ) -> None:
         super().__init__(params, extra)
+        self._nRNGSamples = nRNGSamples
+
+    @property
+    def nRNGSamples(self) -> int:
+        """Number of random numbers drawn per generated hit"""
+        return self._nRNGSamples
 
     def prepare(self, config: TraceConfig) -> None:
         """
@@ -258,6 +278,9 @@ class HitReplay(PipelineStage):
         Maximum number of hits that can be processed per run
     response: HitResponse
         Response to be called on each hit
+    rng: RNG | None, default=None
+        The random number generator used by the response. May be `None` if the
+        response does not require random numbers.
     polarized: bool, default=False
         Whether the hits contain polarization information.
     normalization: float, default=1.0
@@ -277,17 +300,23 @@ class HitReplay(PipelineStage):
         capacity: int,
         response: HitResponse,
         *,
+        rng: RNG | None = None,
         normalization: float = 1.0,
         polarized: bool = False,
         blockSize: int = 128,
         code: bytes | None = None,
     ) -> None:
+        # check if we have a rng if needed
+        if response.nRNGSamples > 0 and rng is None:
+            raise ValueError("response requires a rng but none was given!")
+
         super().__init__()
         # save params
         self._blockSize = blockSize
         self._capacity = capacity
         self._polarized = polarized
         self._response = response
+        self._rng = rng
 
         # prepare response
         self._config = TraceConfig(
@@ -308,7 +337,10 @@ class HitReplay(PipelineStage):
                 HIT_QUEUE_POLARIZED=polarized,
                 POLARIZATION=polarized,
             )
-            headers = {"response.glsl": response.sourceCode}
+            headers = {
+                "response.glsl": response.sourceCode,
+                "rng.glsl": rng.sourceCode if rng is not None else "",
+            }
             code = compileShader("response.replay.glsl", preamble, headers)
         self._code = code
         self._program = hp.Program(self._code)
@@ -347,6 +379,11 @@ class HitReplay(PipelineStage):
         return self._queue
 
     @property
+    def rng(self) -> RNG | None:
+        """The optional RNG used by the response, or `None` if not specified"""
+        return self._rng
+
+    @property
     def response(self) -> HitResponse:
         """Response function called for each hit"""
         return self._response
@@ -356,7 +393,10 @@ class HitReplay(PipelineStage):
         Returns a list of all stages involved with this stage in the correct
         order suitable for creating a pipeline-
         """
-        return [self, self.response]
+        if self.rng is not None:
+            return [self.rng, self, self.response]
+        else:
+            return [self, self.response]
 
     def _finishParams(self, i: int) -> None:
         super()._finishParams(i)
@@ -399,17 +439,31 @@ class ValueResponse(SourceCodeMixin):
     response functions.
 
     The corresponding shader code has the following signature:
+
     ```
-    float responseValue(HitItem item)
+    float responseValue(HitItem item, uint idx, inout uint dim)
     ```
+
+    `idx` and `dim` are the current RNG state and can be used to draw random
+    numbers.
     """
 
     name = "Value Response"
 
     def __init__(
-        self, params: dict[str, type[Structure]] = {}, extra: set[str] = set()
+        self,
+        params: dict[str, type[Structure]] = {},
+        extra: set[str] = set(),
+        *,
+        nRNGSamples: int = 0,
     ) -> None:
         super().__init__(params, extra)
+        self._nRNGSamples = nRNGSamples
+
+    @property
+    def nRNGSamples(self) -> int:
+        """Number of random numbers drawn per hit"""
+        return self._nRNGSamples
 
     def prepare(self, config: TraceConfig) -> None:
         """
@@ -438,17 +492,22 @@ class CustomValueResponse(ValueResponse):
     value function:
 
     ```
-    float responseValue(HitItem item)
+    float responseValue(HitItem item, uint idx, inout uint dim)
     ```
+
+    `idx` and `dim` are the current RNG state and can be used to draw random
+    numbers.
 
     Parameters
     ----------
     code: str
         User provided source code (GLSL).
+    nRNGSamples: int, default=0
+        Number of random numbers drawn per hit.
     """
 
-    def __init__(self, code: str) -> None:
-        super().__init__()
+    def __init__(self, code: str, *, nRNGSamples: int = 0) -> None:
+        super().__init__(nRNGSamples=nRNGSamples)
         # add include guards before
         _code = "#ifndef _INCLUDE_RESPONSE_CUSTOM\n"
         _code += "#define _INCLUDE_RESPONSE_CUSTOM\n"
@@ -495,7 +554,7 @@ class StoreValueHitResponse(HitResponse):
         queue: QueueTensor | None = None,
         updateResponse: bool = True,
     ) -> None:
-        super().__init__()
+        super().__init__(nRNGSamples=response.nRNGSamples)
         self._response = response
         self._queue = queue
         self._updateResponse = updateResponse
@@ -583,7 +642,7 @@ class SampleValueResponse(HitResponse):
     _sourceCode = ShaderLoader("response.value.sample.glsl")
 
     def __init__(self, response: ValueResponse, *, updateResponse: bool = True) -> None:
-        super().__init__()
+        super().__init__(nRNGSamples=response.nRNGSamples)
         self._response = response
         self._updateResponse = updateResponse
         # will later be created during prepare()
@@ -714,7 +773,9 @@ class CameraHitResponseSampler(PipelineStage):
         self._rng = rng
         self._polarized = polarized
         self._blockSize = blockSize
-        self._nRNGSamples = camera.nRNGSamples + wavelengthSource.nRNGSamples
+        self._nRNGSamples = (
+            camera.nRNGSamples + wavelengthSource.nRNGSamples + response.nRNGSamples
+        )
         if polarized:
             self._nRNGSamples += 3
         if self._nRNGSamples > 0 and rng is None:
@@ -1011,7 +1072,11 @@ class HistogramHitResponse(HitResponse):
         reduceBlockSize: int = 128,
         updateResponse: bool = True,
     ) -> None:
-        super().__init__({"ResponseParams": self.Params}, {"normalization"})
+        super().__init__(
+            {"ResponseParams": self.Params},
+            {"normalization"},
+            nRNGSamples=response.nRNGSamples,
+        )
         # save params
         self._response = response
         self.setParams(t0=t0, binSize=binSize)
@@ -1236,7 +1301,11 @@ class KernelHistogramHitResponse(HitResponse):
         reduceBlockSize: int = 128,
         updateResponse: bool = True,
     ) -> None:
-        super().__init__({"ResponseParams": self.Params}, {"normalization"})
+        super().__init__(
+            {"ResponseParams": self.Params},
+            {"normalization"},
+            nRNGSamples=response.nRNGSamples,
+        )
         # save params
         self._response = response
         self._nBins = nBins
