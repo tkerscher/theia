@@ -1,5 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
+from typing import List
 from warnings import warn
 
 import hephaistos as hp
@@ -18,6 +19,7 @@ from numpy.typing import NDArray
 
 
 __all__ = [
+    "createHitTimeQueue",
     "createValueQueue",
     "CameraHitResponseItem",
     "CameraHitResponseSampler",
@@ -30,10 +32,13 @@ __all__ = [
     "HitRecorder",
     "HitReplay",
     "HitResponse",
+    "HitTimeAndIdItem",
+    "HitTimeItem",
     "KernelHistogramHitResponse",
     "PolarizedCameraHitResponseItem",
     "PolarizedHitItem",
     "SampleValueResponse",
+    "StoreTimeHitResponse",
     "StoreValueHitResponse",
     "UniformValueResponse",
     "ValueItem",
@@ -407,6 +412,8 @@ class HitReplay(PipelineStage):
     def run(self, i: int) -> list[hp.Command]:
         self._bindParams(self._program, i)
         self.response.bindParams(self._program, i)
+        if self.rng is not None:
+            self.rng.bindParams(self._program, i)
         return [
             *self.queue.run(i),
             self._program.dispatch(self._groups),
@@ -552,6 +559,7 @@ class StoreValueHitResponse(HitResponse):
         self,
         response: ValueResponse,
         queue: QueueTensor | None = None,
+        *,
         updateResponse: bool = True,
     ) -> None:
         super().__init__(nRNGSamples=response.nRNGSamples)
@@ -611,6 +619,177 @@ class StoreValueHitResponse(HitResponse):
         super().update(i)
         if self._updateResponse:
             self.response.update(i)
+
+
+class HitTimeItem(Structure):
+    """Item used by `StoreTimeHitResponse` storing only time"""
+
+    _fields_ = [("time", c_float)]
+
+
+class HitTimeAndIdItem(Structure):
+    """Item used by `StoreTimeHitResponse` storing both time and object id"""
+
+    _fields_ = [("time", c_float), ("objectId", c_int32)]
+
+
+def createHitTimeQueue(capacity: int, storeObjectId: bool = True) -> QueueTensor:
+    """
+    Creates a new `QueueTensor` of the specified capacity to be used with
+    `StoreHitTimeResponse`.
+
+    Parameters
+    ----------
+    capacity: int
+        Maximum number of items in the queue
+    storeObjectId: bool, default=True
+        Whether to also store the object id of the hit.
+    """
+    item = HitTimeAndIdItem if storeObjectId else HitTimeItem
+    queue = QueueTensor(item, capacity)
+    hp.execute(clearQueue(queue))  # sets counter to zero
+    return queue
+
+
+class StoreTimeHitResponse(HitResponse):
+    """
+    Response function randomly storing the arrival time and optionally the
+    object id of the hits based on the probability calculated by the provided
+    `ValueResponse`. This is especially usefull if the corresponding tracer is
+    configured to trace single photons. In that case the stored times correspond
+    to single detected photons and the `ValueResponse` can be used to model a
+    detector response.
+
+    Parameters
+    ----------
+    response: ValueResponse
+        Value response processing the hits producing the acceptance probability.
+    queue: QueueTensor | None, default=None
+        Tensor in which the items will be stored. If `None` a new one will be
+        allocated during the tracer's preparation step.
+    retrieve: bool, default=True
+        Whether to retrieve the results from the device after tracing.
+    storeObjectId: bool, default=True
+        Whether to also store the `objectId` of the corresponding hit. Usefull
+        if multiple detectors are active at once during tracing.
+    updateResponse: bool, default=True
+        If True and this stage is requested to update by e.g. a pipeline it
+        will also cause the response to update.
+
+    Note
+    ----
+    During the update step in a pipeline, the response gets also updated making
+    it unnecessary to include as a separate step in most cases. This stage,
+    however, ignores any commands produced by run() as it is not clear where to
+    put them chronologically.
+    """
+
+    name = "Store Time Hit Response"
+
+    _sourceCode = ShaderLoader("response.time.store.glsl")
+
+    def __init__(
+        self,
+        response: ValueResponse,
+        queue: QueueTensor | None = None,
+        *,
+        retrieve: bool = True,
+        storeObjectId: bool = True,
+        updateResponse: bool = True,
+    ) -> None:
+        super().__init__(nRNGSamples=response.nRNGSamples + 1)
+        self._response = response
+        self._queue = queue
+        self._retrieve = retrieve
+        self._storeObjectId = storeObjectId
+        self._updateResponse = updateResponse
+        self._buffers = None
+
+    @property
+    def queue(self) -> QueueTensor | None:
+        """Tensor to be filled with the arrival times and optionally the object ids"""
+        return self._queue
+
+    @property
+    def response(self) -> ValueResponse:
+        """Value response function processing hits."""
+        return self._response
+
+    @property
+    def retrieve(self) -> bool:
+        """Whether the stored times are retrieved from the GPU"""
+        return self._retrieve
+
+    @property
+    def sourceCode(self) -> str:
+        if self.queue is None:
+            raise RuntimeError("Response has not been prepared!")
+        # assemble source code
+        guardStart = "#ifndef _INCLUDE_RESPONSE\n#define _INCLUDE_RESPONSE\n"
+        guardEnd = "#endif\n"
+        preamble = createPreamble(
+            VALUE_QUEUE_SIZE=self.queue.capacity,
+            RESPONSE_STORE_OBJECT_ID=self._storeObjectId,
+        )
+        return "\n".join(
+            [guardStart, preamble, self.response.sourceCode, self._sourceCode, guardEnd]
+        )
+
+    def result(self, i: int) -> QueueView | None:
+        """
+        The retrieved i-th queue. `None` if `retrieve` is `False` or the
+        response has not yet been prepared.
+        """
+        if not self.retrieve or self._buffers is None:
+            return None
+        else:
+            return self._buffers[i].view
+
+    def prepare(self, config: TraceConfig) -> None:
+        self.response.prepare(config)
+        maxHits = config.maxHitsPerThread * config.capacity
+        if self._queue is None:
+            self._queue = createHitTimeQueue(maxHits, self._storeObjectId)
+        elif self._queue.capacity < maxHits:
+            warn(
+                f"The provided queue's capacity ({self._queue.capacity}) is less "
+                f"than the max hit count reported by the tracer ({maxHits}). "
+                f"Data corruption may occur!"
+            )
+        expItem = HitTimeAndIdItem if self._storeObjectId else HitTimeItem
+        if self._queue.item is not expItem:
+            raise RuntimeError(
+                f"Unexpected queue item: {self._queue.item}. Expected {expItem}"
+            )
+        if self.retrieve:
+            # allocate double buffered buffers
+            self._buffers = [
+                QueueBuffer(expItem, self._queue.capacity) for _ in range(2)
+            ]
+
+    def updateConfig(self, config: TraceConfig) -> None:
+        # It's save to assume maxHits won't change so nothing to do here
+        pass
+
+    def bindParams(self, program: hp.Program, i: int) -> None:
+        if self.queue is None:
+            raise RuntimeError("Hit response has not been prepared")
+        super().bindParams(program, i)
+        program.bindParams(ValueQueueOut=self.queue)
+        self.response.bindParams(program, i)
+
+    def update(self, i: int) -> None:
+        super().update(i)
+        if self._updateResponse:
+            self.response.update(i)
+
+    def run(self, i: int) -> list[hp.Command]:
+        if self.retrieve:
+            if self._buffers is None:
+                raise RuntimeError("Response has not been prepared!")
+            return [hp.retrieveTensor(self._queue, self._buffers[i])]
+        else:
+            return []
 
 
 class SampleValueResponse(HitResponse):

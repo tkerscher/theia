@@ -1,6 +1,7 @@
 import pytest
 
 import numpy as np
+import hephaistos as hp
 import scipy.stats as stats
 import theia.response
 import theia.units as u
@@ -239,3 +240,40 @@ def test_CameraHitResponseSamples(polarized: bool):
 
     # we do not check the fields for now as this would make the test a test of
     # the camera
+
+
+@pytest.mark.parametrize("storeObjectId", [True, False])
+def test_StoreTimeHitResponse(storeObjectId: bool, rng) -> None:
+    N = 32 * 256
+
+    # create pipeline
+    philox = PhiloxRNG(key=0xC0FFEE)
+    value = theia.response.UniformValueResponse()
+    response = theia.response.StoreTimeHitResponse(value, storeObjectId=storeObjectId)
+    replay = theia.response.HitReplay(N, response, rng=philox)
+    # create hits
+    samples = replay.queue.view(0)
+    samples["position"] = (10.0 * rng.random((N, 3)) - 5.0) * u.m
+    samples["direction"] = rng.random((N, 3))
+    samples["normal"] = rng.random((N, 3))
+    samples["wavelength"] = (rng.random((N,)) * 100.0 + 400.0) * u.nm
+    # samples["time"] = rng.random((N,)) * 200.0 * u.ns
+    samples["time"] = np.arange(N)  # use integers for better checking
+    samples["contrib"] = rng.random((N,))
+    samples["objectId"] = np.arange(N, dtype=np.int32)  # use same as time stamp
+    # run pipeline
+    runPipeline(replay.collectStages())
+
+    result = response.result(0)
+    assert result is not None
+    # we expect about half the photons to be accepted
+    assert abs(result.count / N - 0.5) < 0.005
+    # we can't reproduce the sampling as the random numbers drawn are lost
+    # -> simply check whether we can find the sampled time stamps in the input
+    assert result["time"].min() >= 0
+    assert result["time"].max() < N
+    assert len(np.unique(result["time"])) == result.count
+    if storeObjectId:
+        assert np.all(result["time"] == result["objectId"])
+    else:
+        assert "objectId" not in result.fields
