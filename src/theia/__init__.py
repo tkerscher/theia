@@ -29,6 +29,7 @@ __all__ = [
     "response",
     "scene",
     "target",
+    "task",
     "testing",
     "trace",
     "units",
