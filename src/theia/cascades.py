@@ -1,11 +1,16 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
+from enum import IntEnum
 
 import numpy as np
 import theia.units as u
+from theia.light import LightSource, MuonTrackLightSource, ParticleCascadeLightSource
 
 from scipy.stats import norm
 
-from typing import Final
+from hephaistos.pipeline import PipelineParams
+from typing import Final, Type
 
 """
 Parameterization shown here are based on L. Raedel's master thesis and
@@ -28,6 +33,8 @@ __all__ = [
     "Gamma",
     "K0_Long",
     "Neutron",
+    "Particle",
+    "ParticleType",
     "PiMinus",
     "PiPlus",
     "PMinus",
@@ -35,6 +42,8 @@ __all__ = [
     "X0_ice",
     "X0_water",
     "createCascadeParameters",
+    "createParamsFromParticle",
+    "getCascadeParamsFromParticleType",
     "rho_ice",
     "rho_water",
 ]
@@ -55,6 +64,47 @@ rho_ice: Final[float] = 0.91
 """Density of ice"""
 rho_water: Final[float] = 1.039  # deep sea water
 """Density of sea water"""
+
+
+class ParticleType(IntEnum):
+    """Particle IDs following the PDG Monte Carlo particle numbering scheme"""
+
+    UNKNOWN = 0
+    GAMMA = 22
+    E_PLUS = -11
+    E_MINUS = 11
+    MU_PLUS = -13
+    MU_MINUS = 13
+    TAU_PLUS = -15
+    TAU_MINUS = 15
+    PI_0 = 111
+    PI_PLUS = 211
+    PI_MINUS = -211
+    K0_LONG = 130
+    NEUTRON = 2112
+    P_PLUS = 2212
+    P_MINUS = -2212
+
+
+@dataclass
+class Particle:
+    """Structure describing a particle"""
+
+    particleType: ParticleType
+    """Type of the particle"""
+
+    position: tuple[float, float, float]
+    """Position of the particle"""
+    direction: tuple[float, float, float]
+    """Direction the particle travels"""
+
+    energy: float
+    """Energy of the particle"""
+    startTime: float = 0.0
+    """Time point this particle starts to exists"""
+    length: float = float("NaN")
+    """Track length if applicable or `NaN` otherwise"""
+    speed: float = 1.0 * u.c
 
 
 @dataclass
@@ -275,3 +325,146 @@ Neutron: Final[CascadePrimaryParticle] = CascadePrimaryParticle(
     b_angular_shift=3.4157386880981093,
     b_angular_slope=-0.20638832466150736,
 )
+
+_cascadeParticlesMap = {
+    ParticleType.GAMMA: Gamma,
+    ParticleType.E_MINUS: EMinus,
+    ParticleType.E_PLUS: EPlus,
+    ParticleType.PI_0: Gamma,  # decays immediately to two gammas
+    ParticleType.PI_PLUS: PiPlus,
+    ParticleType.PI_MINUS: PiMinus,
+    ParticleType.K0_LONG: K0_Long,
+    ParticleType.P_PLUS: PPlus,
+    ParticleType.P_MINUS: PMinus,
+    ParticleType.NEUTRON: Neutron,
+}
+
+
+def getCascadeParamsFromParticleType(t: ParticleType) -> CascadePrimaryParticle | None:
+    """
+    Returns the cascade parameterization for the given particle type or `None`
+    if no known parameterization exist.
+    """
+    return _cascadeParticlesMap.get(t)
+
+
+# particle to params converters
+_trackParticles = {
+    ParticleType.MU_PLUS,
+    ParticleType.MU_MINUS,
+    ParticleType.TAU_PLUS,
+    ParticleType.TAU_MINUS,
+}
+
+
+def _createTrackParams(
+    particle: Particle, **kwargs
+) -> tuple[Type[LightSource], PipelineParams] | None:
+    if particle.particleType not in _trackParticles:
+        return None
+
+    # calculate end point
+    if not particle.length > 0.0:  # This also catches NaN
+        raise ValueError("particle is muon like, but no track length was specified!")
+    x, y, z = particle.position
+    dx, dy, dz = particle.direction
+    l = particle.length / np.sqrt(dx**2 + dy**2 + dz**2)  # normalize direction
+    endPos = (x + l * dx, y + l * dy, z + l * dz)
+    endTime = particle.startTime + particle.length / particle.speed
+
+    # assemble and return pipeline params
+    name = kwargs.get("lightSourceName", "lightSource")
+    if name:
+        name += "__"
+    params = {
+        f"{name}startPosition": particle.position,
+        f"{name}startTime": particle.startTime,
+        f"{name}endPosition": endPos,
+        f"{name}endTime": endTime,
+        f"{name}muonEnergy": particle.energy,
+    }
+    return (MuonTrackLightSource, params)
+
+
+def _createCascadeParams(
+    particle: Particle, **kwargs
+) -> tuple[Type[LightSource], PipelineParams] | None:
+    # fetch cascade parameterization
+    primary = getCascadeParamsFromParticleType(particle.particleType)
+    if primary is None:
+        return None
+    # get params
+    x0 = kwargs.get("x0", X0_water)
+    rho = kwargs.get("density", rho_water)
+    cascade_params = createCascadeParameters(primary, particle.energy, x0, rho)
+    # normalize direction
+    dx, dy, dz = particle.direction
+    l = np.sqrt(dx**2 + dy**2 + dz**2)
+    direction = (dx / l, dy / l, dz / l)
+
+    # assemble and return pipeline params
+    name = kwargs.get("lightSourceName", "lightSource")
+    if name:
+        name += "__"
+    params = {
+        f"{name}startPosition": particle.position,
+        f"{name}startTime": particle.startTime,
+        f"{name}direction": direction,
+        f"{name}energyScale": cascade_params.energyScale,
+        f"{name}a_angular": cascade_params.a_angular,
+        f"{name}b_angular": cascade_params.b_angular,
+        f"{name}a_long": cascade_params.a_long,
+        f"{name}b_long": cascade_params.b_long,
+    }
+    return (ParticleCascadeLightSource, params)
+
+
+_converters = [
+    _createTrackParams,
+    _createCascadeParams,
+]
+
+
+def createParamsFromParticle(
+    particle: Particle,
+    *,
+    x0: float = X0_water,
+    density: float = rho_water,
+    lightSourceName: str = "lightSource",
+) -> tuple[Type[LightSource], PipelineParams]:
+    """
+    Returns the parameterization and corresponding light source for a given
+    particle.
+
+    Parameters
+    ----------
+    particle: Particle
+        Particle to process
+    x0: float, default=X0_water
+        Radiation length of the surrounding media
+    density: float, default=rho_water
+        Density of the surrounding media
+    lightSourceName: str, default="lightSource"
+        Name of the light source as noted in the corresponding pipeline.
+        If not empty, parameter names will be prepended with
+        '{lightSourceName}__' as expected by a pipeline.
+
+    Returns
+    -------
+    lightSource: Type[LightSource]
+        Light source to which the parameterization applies
+    params: PipelineParams
+        Parameterization of the light source
+    """
+    # assemble kwargs
+    kwargs = {
+        "x0": x0,
+        "density": density,
+        "lightSourceName": lightSourceName,
+    }
+    # try every converter until we are successful
+    for convert in _converters:
+        if (res := convert(particle, **kwargs)) is not None:
+            return res
+    # tried everything but nothing worked
+    raise ValueError(f"Could not create params from particle '{particle}'!")
