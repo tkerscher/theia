@@ -6,7 +6,8 @@ from hephaistos.glsl import buffer_reference, vec3
 from hephaistos.pipeline import PipelineStage, SourceCodeMixin
 
 from abc import abstractmethod
-from ctypes import Structure, c_float, c_int32, c_uint32, addressof, memset, sizeof
+from ctypes import Structure, c_float, c_int32, c_uint32, c_uint64
+from ctypes import addressof, memset, sizeof
 from numpy.ctypeslib import as_array
 
 from theia.camera import Camera
@@ -82,18 +83,18 @@ class EventStatisticCallback(TraceEventCallback):
 
     class Statistic(Structure):
         _fields_ = [
-            ("created", c_uint32),
-            ("scattered", c_uint32),
-            ("hit", c_uint32),
-            ("detected", c_uint32),
-            ("volume", c_uint32),
-            ("lost", c_uint32),
-            ("decayed", c_uint32),
-            ("absorbed", c_uint32),
-            ("missed", c_uint32),
-            ("maxIter", c_uint32),
-            ("error", c_uint32),
-            ("mismatch", c_uint32),
+            ("created", c_uint64),
+            ("scattered", c_uint64),
+            ("hit", c_uint64),
+            ("detected", c_uint64),
+            ("volume", c_uint64),
+            ("lost", c_uint64),
+            ("decayed", c_uint64),
+            ("absorbed", c_uint64),
+            ("missed", c_uint64),
+            ("maxIter", c_uint64),
+            ("error", c_uint64),
+            ("mismatch", c_uint64),
         ]
 
     def __init__(self) -> None:
