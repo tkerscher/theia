@@ -4,18 +4,18 @@
 #include "ray.glsl"
 
 layout(scalar) writeonly buffer Statistics {
-    uint created;
-    uint scattered;
-    uint hit;
-    uint detect;
-    uint volume;
-    uint lost;
-    uint decayed;
-    uint absorbed;
-    uint missed;
-    uint maxIter;
-    uint error;
-    uint mismatch;
+    uint64_t created;
+    uint64_t scattered;
+    uint64_t hit;
+    uint64_t detect;
+    uint64_t volume;
+    uint64_t lost;
+    uint64_t decayed;
+    uint64_t absorbed;
+    uint64_t missed;
+    uint64_t maxIter;
+    uint64_t error;
+    uint64_t mismatch;
 } stats;
 
 void onEvent(const RayState ray, ResultCode code, uint idx, uint i) {
