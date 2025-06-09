@@ -32,11 +32,13 @@ __all__ = [
     "SceneBackwardTracer",
     "SceneBackwardTargetTracer",
     "SceneForwardTracer",
+    "ScenePhotonTracer",
     "Tracer",
     "TraceEventCallback",
     "TrackRecordCallback",
     "VolumeBackwardTracer",
     "VolumeForwardTracer",
+    "VolumePhotonTracer",
 ]
 
 
@@ -2363,3 +2365,595 @@ class BidirectionalPathTracer(Tracer):
         self.rng.bindParams(self._program, i)
         self.wavelengthSource.bindParams(self._program, i)
         return self._dispatch(self._program, i)
+
+
+class ScenePhotonTracer(Tracer):
+    """
+    Path tracer simulating individual photons, that is paths only 'carry' a
+    single photon, produce a single hit and get randomly absorbed according to
+    the media's absorption coefficient.
+
+    Parameters
+    ----------
+    batchSize: int
+        Number of photons to trace per batch.
+    source: LightSource
+        Source producing light rays. Note that its contribution factor will be
+        ignored as it is assumed to be equal to the total photon count.
+    wavelengthSource: WavelengthSource
+        Source to sample wavelengths from. Its contribution factor is ignored.
+    response: HitResponse
+        Response function simulating the detector
+    rng: RNG
+        Generator for creating random numbers
+    scene: Scene
+        Scene in which the rays are traced.
+    capacity: int | None, default=None
+        Maximum batch size. If None, same as `batchSize`.
+    callback: TraceEventCallback, default=EmptyEventCallback()
+        Callback called for each tracing event. See `TraceEventCallback`
+    targetId: int, default=-1
+        Id of the detector, the tracer should try to hit. Hits on other
+        detectors are ignored to make estimates easier.
+        A negative value will cause the tracer to report all hits regardless of
+        the detector id.
+    sourceMedium: int | None, default=None
+        Medium surrounding the light source. If None, uses the scene`s medium.
+    maxTime: float, default=1000.0 ns
+        Max total time including delay from the source and travel time, after
+        which a ray gets stopped
+    nScatteringPerRun: int, default=10
+        Number of scatter events to simulate per run. See `nRun`.
+    nRuns: int, default=10
+        Number of runs. Total amount of scatter events simulated will be
+        `nRuns` times `nScatteringPerRun`. Changing the distribution between
+        these two parameters can be used to tune performance.
+    polarized: bool, default=False
+        Whether to simulate polarization effects.
+    disableTransmission: bool, default=False
+        Disables GPU code handling transmission, which may improve performance.
+        Rays will default to always reflect where possible.
+    disableVolumeBorder: bool, default=False
+        Disables GPU code handling volume borders, which may improve performance
+        if there are none. Settings this to `True` while the scene contains
+        volume border will produce wrong results.
+    useRefractedHitDir: bool, default=False
+        If True, uses the refracted ray direction as the incident direction when
+        creating hits. Only affects materials without the `BLACK_BODY` flag,
+        i.e. hits on a surface marked as black body will always use the
+        unrefracted direction regardless of this option.
+    blockSize: int, default=128
+        Number of threads in a single work group
+
+    Stage Parameters
+    ----------------
+    targetId: int
+        Id of the detector, the tracer should try to hit.
+    maxTime: float
+        Max total time including delay from the source and travel time, after
+        which a ray gets stopped
+
+    Note
+    ----
+    Absorption will not be sampled when a detector is hit. Instead the survival
+    chance is reported as contribution. You can use e.g. `StoreTimeHitResponse`
+    to sample this final absorption process.
+    """
+
+    name = "Scene Photon Tracer"
+
+    class TraceParams(Structure):
+        _fields_ = [
+            ("targetId", c_int32),
+            ("sourceMedium", buffer_reference),
+            ("_scatterCoefficient", c_float),
+            ("_lowerBBoxCorner", vec3),
+            ("_upperBBoxCorner", vec3),
+            ("maxTime", c_float),
+            ("_maxDist", c_float),
+        ]
+
+    class Push(Structure):
+        _fields_ = [
+            ("pathOffset", c_uint32),
+            ("dim", c_uint32),
+            ("save", c_uint32),
+        ]
+
+    def __init__(
+        self,
+        batchSize: int,
+        source: LightSource,
+        wavelengthSource: WavelengthSource,
+        response: HitResponse,
+        rng: RNG,
+        scene: Scene,
+        *,
+        capacity: int | None = None,
+        callback: TraceEventCallback = EmptyEventCallback(),
+        targetId: int = -1,
+        sourceMedium: int | None = None,
+        maxTime: float = 1.0 * u.ms,
+        nScatteringPerRun: int = 10,
+        nRuns: int = 10,
+        polarized: bool = False,
+        disableTransmission: bool = False,
+        disableVolumeBorder: bool = False,
+        useRefractedHitDir: bool = False,
+        blockSize: int = 128,
+    ) -> None:  # check if ray tracing was enabled
+        if not hp.isRaytracingEnabled():
+            raise RuntimeError("Ray tracing is not supported on this system!")
+
+        nRNG = source.nRNGForward + wavelengthSource.nRNGSamples
+        nRNG += 5 * nRuns * nScatteringPerRun
+        nRNG += response.nRNGSamples
+        self._nRNGPerRun = 5 * nScatteringPerRun + response.nRNGSamples
+        super().__init__(
+            response,
+            {"TraceParams": self.TraceParams},
+            batchSize=batchSize,
+            blockSize=blockSize,
+            capacity=capacity,
+            maxHitsPerThread=1,
+            nRNGSamples=nRNG,
+            polarized=polarized,
+        )
+
+        # fetch scene's medium if none is specified
+        if sourceMedium is None:
+            sourceMedium = scene.medium
+        # save params
+        self._source = source
+        self._wavelengthSource = wavelengthSource
+        self._callback = callback
+        self._rng = rng
+        self._scene = scene
+        self._nRuns = nRuns
+        self._nScatteringPerRun = nScatteringPerRun
+        self._useRefractedHitDir = useRefractedHitDir
+        self._transmissionDisabled = disableTransmission
+        self._volumeBorderDisabled = disableVolumeBorder
+        self.setParams(
+            targetId=targetId,
+            _scatterCoefficient=float("NaN"),
+            sourceMedium=sourceMedium,
+            maxTime=maxTime,
+            _lowerBBoxCorner=scene.bbox.lowerCorner,
+            _upperBBoxCorner=scene.bbox.upperCorner,
+            _maxDist=scene.bbox.diagonal,
+        )
+
+        # allocate queues
+        itemSize = 17 * 4
+        headerSize = 4 * 4
+        queueSize = headerSize + itemSize * self.capacity
+        self._queues = [hp.Tensor(queueSize) for _ in range(2)]
+
+        # compile code
+        preamble = createPreamble(
+            BLOCK_SIZE=blockSize,
+            DISABLE_TRANSMISSION=disableTransmission,
+            DISABLE_VOLUME_BORDER=disableVolumeBorder,
+            HIT_USE_TRANSMITTED_DIR=useRefractedHitDir,
+            PATH_LENGTH=nScatteringPerRun,
+            PHOTON_QUEUE_SIZE=self.capacity,
+            POLARIZATION=polarized,
+        )
+        headers = {
+            "callback.glsl": callback.sourceCode,
+            "response.glsl": response.sourceCode,
+            "rng.glsl": rng.sourceCode,
+            "source.glsl": source.sourceCode,
+            "photon.glsl": wavelengthSource.sourceCode,
+        }
+        code_init = compileShader("tracer.scene.photon.init.glsl", preamble, headers)
+        code_loop = compileShader("tracer.scene.photon.loop.glsl", preamble, headers)
+        # create programs
+        self._init = hp.Program(code_init)
+        self._loop = hp.Program(code_loop)
+        # bind scene
+        self._init.bindParams(Geometries=scene.geometries, tlas=scene.tlas)
+        self._loop.bindParams(Geometries=scene.geometries, tlas=scene.tlas)
+
+    @property
+    def callback(self) -> TraceEventCallback:
+        """Callback called for each tracing event"""
+        return self._callback
+
+    @property
+    def hitsUseRefractedDir(self) -> bool:
+        """Whether the refracted ray direction is used to create hits."""
+        return self._useRefractedHitDir
+
+    @property
+    def nScatteringPerRun(self) -> int:
+        """Number of scatter events to simulate per run. See `nRun`."""
+        return self._nScatteringPerRun
+
+    @property
+    def nRuns(self) -> int:
+        """
+        Number of runs. Total amount of scatter events simulated will be
+        `nRuns` times `nScatteringPerRun`.
+        """
+        return self._nRuns
+
+    @property
+    def maxPathLength(self) -> int:
+        """Maximum number of events per simulated ray"""
+        return self._nRuns * self._nScatteringPerRun
+
+    @property
+    def rng(self) -> RNG:
+        """Generator for creating random numbers"""
+        return self._rng
+
+    @property
+    def scene(self) -> Scene:
+        """Scene in which the rays are traced"""
+        return self._scene
+
+    @property
+    def source(self) -> LightSource:
+        """Source producing light rays"""
+        return self._source
+
+    @property
+    def transmissionDisabled(self) -> bool:
+        """Whether transmission is disabled"""
+        return self._transmissionDisabled
+
+    @property
+    def volumeBorderDisabled(self) -> bool:
+        """Whether volume borders are disabled"""
+        return self._volumeBorderDisabled
+
+    @property
+    def wavelengthSource(self) -> WavelengthSource:
+        """Source used to sample wavelengths"""
+        return self._wavelengthSource
+
+    def _collectStages(self) -> list[tuple[str, PipelineStage]]:
+        return [
+            ("rng", self.rng),
+            ("photons", self.wavelengthSource),
+            ("lightSource", self.source),
+            ("tracer", self),
+            ("callback", self.callback),
+            ("response", self.response),
+        ]
+
+    def run(self, i: int) -> list[hp.Command]:
+        # bind resources
+        def bind(program):
+            self._bindParams(program, i)
+            self.callback.bindParams(program, i)
+            self.source.bindParams(program, i)
+            self.wavelengthSource.bindParams(program, i)
+            self.response.bindParams(program, i)
+            self.rng.bindParams(program, i)
+
+        bind(self._init)
+        bind(self._loop)
+        self._init.bindParams(
+            PhotonQueueIn=self._queues[0], PhotonQueueOut=self._queues[1]
+        )
+
+        # issue init run
+        commands: list[hp.Command]
+        commands = [
+            hp.clearTensor(self._queues[1], 0, 12, 1),
+            hp.clearTensor(self._queues[1], 12, 4, 0),
+            *self._dispatch(self._init, i),
+        ]
+        # issue loop runs
+        for r in range(1, self._nRuns):
+            # swap in and out queue
+            qIn, qOut = self._queues[r % 2], self._queues[(r + 1) % 2]
+            self._loop.bindParams(PhotonQueueIn=qIn, PhotonQueueOut=qOut)
+            push = self.Push(
+                r * self._nScatteringPerRun,
+                r * self._nRNGPerRun,
+                1 if r < self._nRuns - 1 else 0,
+            )
+            cmdRun = [
+                hp.flushMemory(),  # wait on previous run
+                hp.clearTensor(qOut, 0, 12, 1),  # clear "new" output queue
+                hp.clearTensor(qOut, 12, 4, 0),
+                self._loop.dispatchIndirectPush(bytes(push), qIn),
+            ]
+            commands.extend(cmdRun)
+
+        return commands
+
+
+class VolumePhotonTracer(Tracer):
+    """
+    Path tracer simulating individual photons, that is paths only 'carry' a
+    single photon, produce a single hit and get randomly absorbed according to
+    the media's absorption coefficient.
+
+    Parameters
+    ----------
+    batchSize: int
+        Number of photons to trace per batch
+    source: LightSource
+        Source producing light rays. Note that its contribution factor will be
+        ignored as it is assumed to be equal to the total photon count.
+    target: Target
+        Target model used to generate hits.
+    wavelengthSource: WavelengthSource
+        Source to sample wavelengths from. Its contribution factor is ignored.
+    response: HitResponse
+        Response function simulating the detector
+    rng: RNG
+        Generator for creating random numbers
+    medium: int
+        Device address of the medium the scene is emerged in, e.g. the address
+        of a water medium for an underwater simulation.
+    capacity: int | None, default=None
+        Maximum batch size. If None, same as `batchSize`.
+    callback: TraceEventCallback, default=EmptyEventCallback()
+        Callback called for each tracing event. See `TraceEventCallback`
+    traceBBox: RectBBox, default=(-1km,1km)^3
+        Boundary box marking limits beyond tracing of an individual ray is
+        stopped
+    maxTime: float, default=1000.0 ns
+        Max total time including delay from the source and travel time, after
+        which a ray gets stopped
+    nScatteringPerRun: int, default=10
+        Number of scatter events to simulate per run. See `nRun`.
+    nRuns: int, default=10
+        Number of runs. Total amount of scatter events simulated will be
+        `nRuns` times `nScatteringPerRun`. Changing the distribution between
+        these two parameters can be used to tune performance.
+    objectId: int, default=0
+        Object id to use for creating hits.
+    polarized: bool, default=False
+        Whether to simulate polarization effects.
+    blockSize: int, default=128
+        Number of threads in a single work group
+
+    Stage Parameters
+    ----------------
+    medium: int
+        device address of the medium the scene is emerged in, e.g. the
+        address of a water medium for an underwater simulation.
+        Defaults to zero specifying vacuum.
+    objectId: int
+        Object id to use for creating hits.
+    lowerBBoxCorner: (float, float, float)
+        Lower limit of the x,y,z coordinates a ray must stay above to not get
+        stopped
+    upperBBoxCorner: (float, float, float)
+        Upper limit of the x,y,z coordinates a ray must stay below to not get
+        stopped
+    maxTime: float
+        Max total time including delay from the source and travel time, after
+        which a ray gets stopped
+
+    Note
+    ----
+    Absorption will not be sampled when the target is hit. Instead the survival
+    chance is reported as contribution. You can use e.g. `StoreTimeHitResponse`
+    to sample this final absorption process.
+    """
+
+    name = "Volume Photon Tracer"
+
+    class TraceParams(Structure):
+        _fields_ = [
+            ("medium", buffer_reference),
+            ("objectId", c_int32),
+            ("_scatterCoefficient", c_float),
+            ("lowerBBoxCorner", vec3),
+            ("upperBBoxCorner", vec3),
+            ("maxTime", c_float),
+            ("_maxDist", c_float),
+        ]
+
+    class Push(Structure):
+        _fields_ = [
+            ("pathOffset", c_uint32),
+            ("dim", c_uint32),
+            ("save", c_uint32),
+        ]
+
+    def __init__(
+        self,
+        batchSize: int,
+        source: LightSource,
+        target: Target,
+        wavelengthSource: WavelengthSource,
+        response: HitResponse,
+        rng: RNG,
+        *,
+        medium: int,
+        objectId: int = 0,
+        capacity: int | None = None,
+        callback: TraceEventCallback = EmptyEventCallback(),
+        traceBBox: RectBBox = RectBBox((-1.0 * u.km,) * 3, (1.0 * u.km,) * 3),
+        maxTime: float = 1000.0 * u.ns,
+        nScatteringPerRun: int = 10,
+        nRuns: int = 10,
+        polarized: bool = False,
+        blockSize: int = 128,
+        code: bytes | None = None,
+    ) -> None:
+        nRNG = source.nRNGForward + wavelengthSource.nRNGSamples
+        nRNG += 4 * nRuns * nScatteringPerRun
+        nRNG += response.nRNGSamples
+        self._nRNGPerRun = 4 * nScatteringPerRun + response.nRNGSamples
+        # init tracer
+        super().__init__(
+            response,
+            {"TraceParams": self.TraceParams},
+            batchSize=batchSize,
+            blockSize=blockSize,
+            capacity=capacity,
+            maxHitsPerThread=1,
+            nRNGSamples=nRNG,
+            polarized=polarized,
+        )
+        # save params
+        self._source = source
+        self._wavelengthSource = wavelengthSource
+        self._rng = rng
+        self._target = target
+        self._callback = callback
+        self._nRuns = nRuns
+        self._nScatteringPerRun = nScatteringPerRun
+        self.setParams(
+            _scatterCoefficient=float("NaN"),
+            medium=medium,
+            objectId=objectId,
+            lowerBBoxCorner=traceBBox.lowerCorner,
+            upperBBoxCorner=traceBBox.upperCorner,
+            maxTime=maxTime,
+            _maxDist=traceBBox.diagonal,
+        )
+
+        # allocate queues
+        itemSize = 17 * 4
+        headerSize = 4 * 4
+        queueSize = headerSize + itemSize * self.capacity
+        self._queues = [hp.Tensor(queueSize) for _ in range(2)]
+
+        # compile code
+        preamble = createPreamble(
+            BLOCK_SIZE=blockSize,
+            PATH_LENGTH=nScatteringPerRun,
+            PHOTON_QUEUE_SIZE=self.capacity,
+            POLARIZATION=polarized,
+        )
+        headers = {
+            "callback.glsl": callback.sourceCode,
+            "response.glsl": response.sourceCode,
+            "rng.glsl": rng.sourceCode,
+            "source.glsl": source.sourceCode,
+            "photon.glsl": wavelengthSource.sourceCode,
+            "target.glsl": target.sourceCode,
+        }
+        code_init = compileShader("tracer.volume.photon.init.glsl", preamble, headers)
+        code_loop = compileShader("tracer.volume.photon.loop.glsl", preamble, headers)
+        # create programs
+        self._init = hp.Program(code_init)
+        self._loop = hp.Program(code_loop)
+
+    @property
+    def callback(self) -> TraceEventCallback:
+        """Callback called for each tracing event"""
+        return self._callback
+
+    @property
+    def nScatteringPerRun(self) -> int:
+        """Number of scatter events to simulate per run. See `nRun`."""
+        return self._nScatteringPerRun
+
+    @property
+    def nRuns(self) -> int:
+        """
+        Number of runs. Total amount of scatter events simulated will be
+        `nRuns` times `nScatteringPerRun`.
+        """
+        return self._nRuns
+
+    @property
+    def maxPathLength(self) -> int:
+        """Maximum number of events per simulated ray"""
+        return self._nRuns * self._nScatteringPerRun
+
+    @property
+    def rng(self) -> RNG:
+        """Generator for creating random numbers"""
+        return self._rng
+
+    @property
+    def source(self) -> LightSource:
+        """Source producing light rays"""
+        return self._source
+
+    @property
+    def target(self) -> Target:
+        """Target model used to determine hits"""
+        return self._target
+
+    @property
+    def traceBBox(self) -> RectBBox:
+        """Boundary box of simulated rays"""
+        return RectBBox(
+            self.getParam("lowerBBoxCorner"), self.getParam("upperBBoxCorner")
+        )
+
+    @traceBBox.setter
+    def traceBBox(self, value: RectBBox) -> None:
+        self.setParams(
+            lowerBBoxCorner=value.lowerCorner,
+            upperBBoxCorner=value.upperCorner,
+            _maxDist=value.diagonal,
+        )
+
+    @property
+    def wavelengthSource(self) -> WavelengthSource:
+        """Source used to sample wavelengths"""
+        return self._wavelengthSource
+
+    def _collectStages(self) -> list[tuple[str, PipelineStage]]:
+        return [
+            ("rng", self.rng),
+            ("photons", self.wavelengthSource),
+            ("lightSource", self.source),
+            ("target", self.target),
+            ("tracer", self),
+            ("callback", self.callback),
+            ("response", self.response),
+        ]
+
+    def _finishParams(self, i: int) -> None:
+        super()._finishParams(i)
+        self.setParam("_maxDist", self.traceBBox.diagonal)
+
+    def run(self, i: int) -> list[hp.Command]:
+        # bind resources
+        def bind(program):
+            self._bindParams(program, i)
+            self.callback.bindParams(program, i)
+            self.source.bindParams(program, i)
+            self.wavelengthSource.bindParams(program, i)
+            self.response.bindParams(program, i)
+            self.rng.bindParams(program, i)
+            self.target.bindParams(program, i)
+
+        bind(self._init)
+        bind(self._loop)
+        self._init.bindParams(
+            PhotonQueueIn=self._queues[0], PhotonQueueOut=self._queues[1]
+        )
+
+        # issue init run
+        commands: list[hp.Command]
+        commands = [
+            hp.clearTensor(self._queues[1], 0, 12, 1),
+            hp.clearTensor(self._queues[1], 12, 4, 0),
+            *self._dispatch(self._init, i),
+        ]
+        # issue loop runs
+        for r in range(1, self._nRuns):
+            # swap in and out queue
+            qIn, qOut = self._queues[r % 2], self._queues[(r + 1) % 2]
+            self._loop.bindParams(PhotonQueueIn=qIn, PhotonQueueOut=qOut)
+            push = self.Push(
+                r * self._nScatteringPerRun,
+                r * self._nRNGPerRun,
+                1 if r < self._nRuns - 1 else 0,
+            )
+            cmdRun = [
+                hp.flushMemory(),  # wait on previous run
+                hp.clearTensor(qOut, 0, 12, 1),  # clear "new" output queue
+                hp.clearTensor(qOut, 12, 4, 0),
+                self._loop.dispatchIndirectPush(bytes(push), qIn),
+            ]
+            commands.extend(cmdRun)
+
+        return commands

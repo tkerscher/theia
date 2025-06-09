@@ -1461,3 +1461,184 @@ def test_DirectTracer_scene(polarized: bool):
     assert stats.detected + stats.decayed + stats.absorbed == tracer.batchSize
     assert stats.detected == len(hits)
     assert stats.absorbed > 0
+
+
+@pytest.mark.parametrize("polarized", [False, True])
+def test_ScenePhotonTracer(polarized: bool):
+    if not hp.isRaytracingEnabled():
+        pytest.skip("ray tracing not supported")
+
+    N = 32 * 256
+    # MAX_PATH = 10
+    N_RUNS = 5
+    N_SCATTER = 5
+    T0, T1 = 10.0 * u.ns, 20.0 * u.ns
+    T_MAX = 1.0 * u.ms
+    capacity = 48 * 256
+    light_pos = (-1.0, -7.0, 0.0) * u.m
+    light_budget = float(N)
+
+    # create materials
+    water = WaterTestModel().createMedium()
+    glass = theia.material.BK7Model().createMedium()
+    mat = theia.material.Material("mat", glass, water, flags=("DR", "B"))
+    matStore = theia.material.MaterialStore([mat])
+    # create scene
+    store = theia.scene.MeshStore(
+        {"cube": "assets/cone.stl", "sphere": "assets/sphere.stl"}
+    )
+    r, d = 40.0 * u.m, 5.0 * u.m
+    r_scale = 0.99547149974733 * u.m  # radius of inscribed sphere (icosphere)
+    r_insc = r * r_scale
+    x, y, z = 10.0, 5.0, -5.0
+    t1 = Transform.TRS(scale=r, translate=(x, y, z + r + d))
+    c1 = store.createInstance("sphere", "mat", t1, detectorId=0)
+    t2 = Transform.TRS(
+        scale=r, translate=(x, y, z - r - d), rotate=(0.0, 0.0, 1.0, 110.0)
+    )
+    c2 = store.createInstance("sphere", "mat", t2, detectorId=1)
+    scene = theia.scene.Scene(
+        [c1, c2], matStore.material, medium=matStore.media["water"]
+    )
+
+    # create pipeline stages
+    rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
+    photons = theia.light.UniformWavelengthSource()
+    source = theia.light.SphericalLightSource(
+        position=light_pos, timeRange=(T0, T1), budget=light_budget
+    )
+    recorder = theia.response.HitRecorder(polarized=polarized)
+    stats = theia.trace.EventStatisticCallback()
+    tracer = theia.trace.ScenePhotonTracer(
+        N,
+        source,
+        photons,
+        recorder,
+        rng,
+        scene,
+        capacity=capacity,
+        targetId=-1,
+        nRuns=N_RUNS,
+        nScatteringPerRun=N_SCATTER,
+        maxTime=T_MAX,
+        callback=stats,
+        polarized=polarized,
+    )
+    # run pipeline
+    pl.runPipeline(tracer.collectStages())
+    hits = recorder.queue.view(0)
+
+    # check hits
+    assert hits.count > 0
+    assert hits.count <= tracer.maxHits
+    hits = hits[: hits.count]
+    assert stats.created == N
+
+    r_hits = np.sqrt(np.square(hits["position"]).sum(-1))
+    assert np.all((r_hits <= 1.0) & (r_hits >= r_scale))
+    assert np.allclose(np.square(hits["normal"]).sum(-1), 1.0)
+    assert np.max(hits["time"]) <= T_MAX
+    assert (hits["objectId"] == 0).sum() > 0
+    assert (hits["objectId"] == 1).sum() > 0
+
+    # sanity check polarization
+    if polarized:
+        # check stokes is normalized
+        assert np.abs(hits["stokes"][:, 0] - 1.0).max() < 1e-6
+        assert np.sqrt(np.square(hits["stokes"][:, 1:]).sum(-1).max()) - 1.0 <= 1e-6
+        assert hits["stokes"][:, 1:].max() <= 1.0
+        assert hits["stokes"][:, 1:].min() >= -1.0
+        # check polarization ref is perpendicular to plane of incidence and normalized
+        # note: this only works because we use spheres and only scale and translate them
+        polRef = hits["polarizationRef"]
+        assert np.abs(np.square(polRef).sum(-1) - 1.0).max() < 1e-6
+        polRef_exp = np.cross(hits["direction"], hits["normal"])
+        d = np.square(polRef_exp).sum(-1)
+        mask = d > 1e-7
+        polRef_exp /= np.sqrt(d)[:, None]
+        # for very small angle we reuse the old polRef to minimize error
+        assert np.abs(np.abs((polRef_exp * polRef).sum(-1))[mask] - 1.0).max() < 1e-6
+
+
+@pytest.mark.parametrize("polarized", [False, True])
+def test_VolumePhotonTracer(polarized: bool):
+    N = 32 * 256
+    # MAX_PATH = 10
+    N_RUNS = 5
+    N_SCATTER = 5
+    T0, T1 = 10.0 * u.ns, 20.0 * u.ns
+    T_MAX = float("inf")
+    capacity = 48 * 256
+    objectId = 42
+    light_pos = (-1.0, -7.0, 0.0) * u.m
+    light_budget = 1000.0
+    target_pos, target_radius = (5.0, 2.0, -8.0) * u.m, 4.0 * u.m
+
+    # create water medium
+    water = WaterTestModel().createMedium()
+    store = theia.material.MaterialStore([], media=[water])
+
+    # estimate max speed
+    d_min = (
+        np.sqrt(np.square(np.subtract(light_pos, target_pos)).sum(-1)) - target_radius
+    )
+    v_max = np.max(water.group_velocity)
+    t_min = d_min / v_max + T0
+
+    # create pipeline
+    rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
+    photons = theia.light.UniformWavelengthSource()
+    source = theia.light.SphericalLightSource(
+        position=light_pos, budget=light_budget, timeRange=(T0, T1)
+    )
+    target = SphereTarget(position=target_pos, radius=target_radius)
+    recorder = theia.response.HitRecorder(polarized=polarized)
+    stats = theia.trace.EventStatisticCallback()
+    tracer = theia.trace.VolumePhotonTracer(
+        N,
+        source,
+        target,
+        photons,
+        recorder,
+        rng,
+        medium=store.media["water"],
+        objectId=objectId,
+        capacity=capacity,
+        nRuns=N_RUNS,
+        nScatteringPerRun=N_SCATTER,
+        maxTime=T_MAX,
+        callback=stats,
+        polarized=polarized,
+    )
+    # run pipeline
+    pl.runPipeline(tracer.collectStages())
+    hits = recorder.queue.view(0)
+
+    # check hits
+    assert hits.count > 0
+    assert hits.count <= N
+    hits = hits[: hits.count]
+    assert stats.created == N
+
+    assert np.allclose(np.square(hits["position"]).sum(-1), 1.0)
+    assert np.allclose(np.square(hits["normal"]).sum(-1), 1.0)
+    assert np.min(hits["time"]) >= t_min
+    assert np.max(hits["time"]) <= T_MAX
+    assert np.allclose(hits["objectId"], objectId)
+
+    # sanity check polarization
+    if polarized:
+        # check stokes is normalized
+        assert np.abs(hits["stokes"][:, 0] - 1.0).max() < 1e-6
+        assert np.square(hits["stokes"][:, 1:]).sum(-1).max() <= 1.0
+        assert hits["stokes"][:, 1:].max() <= 1.0
+        assert hits["stokes"][:, 1:].min() >= -1.0
+        # check polarization ref is perpendicular to plane of incidence and normalized
+        polRef = hits["polarizationRef"]
+        assert np.abs(np.square(polRef).sum(-1) - 1.0).max() < 1e-6
+        polRef_exp = np.cross(hits["direction"], hits["normal"])
+        d = np.square(polRef_exp).sum(-1)
+        mask = d > 1e-7
+        polRef_exp /= np.sqrt(d)[:, None]
+        # for very small angle we reuse the old polRef to minimize error
+        assert np.abs(np.abs((polRef_exp * polRef).sum(-1))[mask] - 1.0).max() < 1e-6

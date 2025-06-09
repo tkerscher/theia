@@ -1336,3 +1336,243 @@ def test_DirectTracer(mu_a: float, mu_s: float, g: float, polarized: bool):
         assert stokes[:, 1:].max() <= 1.0
         assert stokes[:, 1:].min() >= -1.0
         assert np.all(np.square(stokes[:, 1:]).sum(-1) <= 1.0)
+
+
+@pytest.mark.parametrize(
+    "mu_a,mu_s,g,polarized",
+    [
+        (0.0, 0.05, 0.0, False),
+        (0.05, 0.05, 0.0, False),
+        (0.05, 0.01, -0.9, False),
+        (0.05, 0.01, 0.9, False),
+        # FIXME: Polarization seems broken for now
+        # (0.0, 0.05, 0.0, True),
+        (0.05, 0.01, -0.9, True),
+    ],
+)
+def test_ScenePhotonTracer(mu_a: float, mu_s: float, g: float, polarized: bool):
+    if not hp.isRaytracingEnabled():
+        pytest.skip("ray tracing is not supported")
+
+    # Scene settings
+    position = (12.0, 15.0, 0.2) * u.m
+    radius = 60.0 * u.m
+    # Light settings
+    budget = 1e6
+    t0 = 10.0 * u.ns
+    lam = 400.0 * u.nm  # doesn't really matter
+    # tracer settings
+    max_length = 80
+    scatter_coef = 0.05
+    maxTime = float("inf")
+    n_runs = 20
+    n_scatterPerRun = 5
+    # simulation settings
+    batch_size = 1 * 1024 * 1024
+    n_batches = 20
+
+    # create materials
+    model = MediumModel(mu_a, mu_s, g)
+    medium = model.createMedium()
+    material = theia.material.Material("det", medium, None, flags="DB")
+    matStore = theia.material.MaterialStore([material])
+    # load meshes
+    meshStore = theia.scene.MeshStore({"sphere": "assets/sphere.stl"})
+    # create scene
+    trafo = Transform.TRS(scale=radius, translate=position)
+    target = meshStore.createInstance("sphere", "det", trafo, detectorId=0)
+    scene = theia.scene.Scene(
+        [target],
+        matStore.material,
+        medium=matStore.media["homogenous"],
+    )
+
+    # create tracer
+    rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
+    photons = theia.light.UniformWavelengthSource(lambdaRange=(lam, lam))
+    light = theia.light.SphericalLightSource(
+        position=position, timeRange=(t0, t0), budget=budget
+    )
+    # use scene tracer as known truth source for estimating the amount hits
+    hist_response = theia.response.HistogramHitResponse(
+        theia.response.UniformValueResponse(),
+        binSize=50.0 * u.ns,
+        nBins=400,
+    )
+    hist_tracer = theia.trace.SceneForwardTracer(
+        batch_size,
+        light,
+        photons,
+        hist_response,
+        rng,
+        scene,
+        maxPathLength=max_length,
+        scatterCoefficient=scatter_coef,
+        maxTime=maxTime,
+        polarized=polarized,
+    )
+    rng.autoAdvance = hist_tracer.nRNGSamples
+    # create pipeline + scheduler
+    hists = []
+    process = lambda c, b, _: hists.append(hist_response.result(c).copy())
+    hist_pipeline = pl.Pipeline(hist_tracer.collectStages())
+    scheduler = pl.PipelineScheduler(hist_pipeline, processFn=process)
+
+    # create batches
+    tasks = [{} for i in range(n_batches)]
+    scheduler.schedule(tasks)
+    scheduler.wait()
+    # destroy scheduler to allow for freeing resources
+    scheduler.destroy()
+
+    # get total amount of expected hits
+    hist = np.mean(hists, 0)
+    exp_hits = hist.sum()
+
+    # next we can do the photon tracer
+    response = theia.response.StoreTimeHitResponse(
+        theia.response.UniformValueResponse()
+    )
+    # response = theia.response.HitRecorder()
+    stats = theia.trace.EventStatisticCallback()
+    tracer = theia.trace.ScenePhotonTracer(
+        int(budget),  # this way a single batch is enough
+        light,
+        photons,
+        response,
+        rng,
+        scene,
+        nScatteringPerRun=n_scatterPerRun,
+        nRuns=n_runs,
+        maxTime=maxTime,
+        polarized=polarized,
+        callback=stats,
+    )
+    # run pipeline only once
+    pl.runPipeline(tracer.collectStages())
+    hits = response.result(0)
+    # hits = response.queue.view(0)
+    # check amount
+    assert hits is not None
+    if mu_a != 0.0:
+        # since the photon tracer samples a random distribution we need to allow a
+        # rather large error. here we use 5 sigmas as a rather pessimistic test
+        assert np.abs(hits.count - exp_hits) < 5.0 * np.sqrt(exp_hits)
+    else:
+        # no absorption means we should recover all photons
+        assert hits.count == int(budget)
+
+
+@pytest.mark.parametrize(
+    "mu_a,mu_s,g,polarized",
+    [
+        (0.0, 0.05, 0.0, False),
+        (0.05, 0.05, 0.0, False),
+        (0.05, 0.01, -0.9, False),
+        (0.05, 0.01, 0.9, False),
+        # FIXME: Polarization seems broken for now
+        # (0.0, 0.05, 0.0, True),
+        (0.05, 0.01, -0.9, True),
+    ],
+)
+def test_VolumePhotonTracer(mu_a: float, mu_s: float, g: float, polarized: bool):
+    # Scene settings
+    position = (12.0, 15.0, 0.2) * u.m
+    radius = 60.0 * u.m
+    # light settings
+    budget = 1e6
+    t0 = 10.0 * u.ns
+    lam = 400.0 * u.nm
+    # tracer settings
+    max_length = 80
+    maxTime = float("inf")
+    scatter_coef = 0.05
+    n_runs = 40
+    n_scatterPerRun = 5
+    # simulation settings
+    # batch_size = 2 * 1024 * 1024 # does not work on my laptop!?
+    batch_size = 1 * 1024 * 1024
+    n_batches = 20
+
+    # create medium
+    model = MediumModel(mu_a, mu_s, g)
+    medium = model.createMedium()
+    store = theia.material.MaterialStore([], media=[medium])
+
+    # create scene
+    rng = theia.random.PhiloxRNG(key=0xC0FFEE)
+    photons = theia.light.UniformWavelengthSource(lambdaRange=(lam, lam))
+    light = theia.light.SphericalLightSource(
+        position=position, timeRange=(t0, t0), budget=budget
+    )
+    target = InnerSphereTarget(position=position, radius=radius)
+    # use volume tracer as known truth source for estimating the amount of hits
+    hist_response = theia.response.HistogramHitResponse(
+        theia.response.UniformValueResponse(),
+        binSize=50.0 * u.ns,
+        nBins=400,
+    )
+    hist_tracer = theia.trace.VolumeForwardTracer(
+        batch_size,
+        light,
+        target,
+        photons,
+        hist_response,
+        rng,
+        medium=store.media["homogenous"],
+        maxTime=maxTime,
+        nScattering=max_length,
+        scatterCoefficient=scatter_coef,
+        polarized=polarized,
+    )
+    rng.autoAdvance = hist_tracer.nRNGSamples
+    # create pipeline + scheduler
+    hists = []
+    process = lambda c, b, _: hists.append(hist_response.result(c).copy())
+    hist_pipeline = pl.Pipeline(hist_tracer.collectStages())
+    scheduler = pl.PipelineScheduler(hist_pipeline, processFn=process)
+
+    # create batches
+    tasks = [{} for i in range(n_batches)]
+    scheduler.schedule(tasks)
+    scheduler.wait()
+    # destroy scheduler to allow for freeing resources
+    scheduler.destroy()
+
+    # get total amount of expected hits
+    hist = np.mean(hists, 0)
+    exp_hits = hist.sum()
+
+    # next we can do the photon tracer
+    response = theia.response.StoreTimeHitResponse(
+        theia.response.UniformValueResponse()
+    )
+    # response = theia.response.HitRecorder()
+    stats = theia.trace.EventStatisticCallback()
+    tracer = theia.trace.VolumePhotonTracer(
+        int(budget),  # this way a single batch is enough
+        light,
+        target,
+        photons,
+        response,
+        rng,
+        medium=store.media["homogenous"],
+        nScatteringPerRun=n_scatterPerRun,
+        nRuns=n_runs,
+        maxTime=maxTime,
+        polarized=polarized,
+        callback=stats,
+    )
+    # run pipeline only once
+    pl.runPipeline(tracer.collectStages())
+    hits = response.result(0)
+    # hits = response.queue.view(0)
+    # check amount
+    assert hits is not None
+    if mu_a != 0.0:
+        # since the photon tracer samples a random distribution we need to allow a
+        # rather large error. here we use 5 sigmas as a rather pessimistic test
+        assert np.abs(hits.count - exp_hits) < 5.0 * np.sqrt(exp_hits)
+    else:
+        # no absorption means we should recover all photons
+        assert hits.count == int(budget)
