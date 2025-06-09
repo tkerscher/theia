@@ -787,7 +787,10 @@ class StoreTimeHitResponse(HitResponse):
         if self.retrieve:
             if self._buffers is None:
                 raise RuntimeError("Response has not been prepared!")
-            return [hp.retrieveTensor(self._queue, self._buffers[i])]
+            return [
+                hp.retrieveTensor(self._queue, self._buffers[i]),
+                clearQueue(self._queue),  # reset counter to zero
+            ]
         else:
             return []
 
