@@ -1192,15 +1192,15 @@ class MuonTrackLightSource(LightSource):
 
     Parameters
     ----------
-    startPosition: (float, float, float)
+    startPosition: (float, float, float), default=(0.0, 0.0, 0.0)
         Start position of the track
-    startTime: float
+    startTime: float, default=0.0ns
         Time at which the muon is at `startPosition`
-    endPosition: (float, float, float)
+    endPosition: (float, float, float), default=(0.0, 0.0, 0.0)
         End position of the track
-    endTime: float
+    endTime: float, default=0.0ns
         Time at which the muon is at `endPosition`
-    muonEnergy: float
+    muonEnergy: float, default=1GeV
         Energy of the muon producing secondary particles
     applyFrankTamm: bool, default=True
         Whether to apply the Frank-Tamm equation describing the light yield as a
@@ -1239,11 +1239,11 @@ class MuonTrackLightSource(LightSource):
 
     def __init__(
         self,
-        startPosition: tuple[float, float, float],
-        startTime: float,
-        endPosition: tuple[float, float, float],
-        endTime: float,
-        muonEnergy: float,
+        startPosition: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        startTime: float = 0.0,
+        endPosition: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        endTime: float = 0.0,
+        muonEnergy: float = 1.0 * u.GeV,
         applyFrankTamm: bool = True,
     ) -> None:
         super().__init__(
@@ -1301,26 +1301,25 @@ class ParticleCascadeLightSource(LightSource):
 
     Parameters
     ----------
-    startPosition: (float, float, float)
+    startPosition: (float, float, float), default=(0.0, 0.0, 0.0)
         Start position of the cascade
-    startTime: float
+    startTime: float, default=0.0 ns
         Time point at which the cascade started
-    direction: (float, float, float)
+    direction: (float, float, float), default=(0.0, 0.0, 1.0)
         Direction in which the cascade evolves, i.e. away from the start point.
-    energyScale: float
-        Also called Frank-Tamm factor in [1]_. Ratio of this tracks length to
-        one of an Cherenkov track without secondary particles emitting the same
-        amount of light. This value is typically larger than one.
-    a_angular: float
+    effectiveLength: float, default=0.0
+        Length of a Cherenkov track producing the same amount of photons. See
+        e.g. eq. 4.7 in [1]_
+    a_angular: float, default=0.0
         The a parameter of the angular light emission distribution (eq. 4.5 in
         [1]_).
-    b_angular: float
+    b_angular: float, default=0.0
         The b parameter of the angular light emission distribution (eq. 4.5 in
         [1]_)
-    a_long: float
+    a_long: float, default=0.0
         The a parameter of the longitudinal light emission distribution (eq.
         4.10 in [1]_).
-    b_long: float
+    b_long: float, default=0.0
         The b parameter of the longitudinal light emission distribution. Note
         that this differs from eq. 4.10 in [1]_ in order to match the definition
         used by ice tray. Here (and in ice tray), this is the radiation length
@@ -1339,10 +1338,9 @@ class ParticleCascadeLightSource(LightSource):
         End position of the track
     endTime: float
         Time at which the muon is at `endPosition`
-    energyScale: float
-        Also called Frank-Tamm factor in [1]_. Ratio of this tracks length to
-        one of an Cherenkov track without secondary particles emitting the same
-        amount of light. This value is typically larger than one.
+    effectiveLength: float
+        Length of a Cherenkov track producing the same amount of photons. See
+        e.g. eq. 4.7 in [1]_
     a_angular: float
         The a parameter of the angular light emission distribution (eq. 4.5 in
         [1]_).
@@ -1380,7 +1378,7 @@ class ParticleCascadeLightSource(LightSource):
             ("startPosition", vec3),
             ("startTime", c_float),
             ("direction", vec3),
-            ("energyScale", c_float),
+            ("effectiveLength", c_float),
             ("a_angular", c_float),
             ("b_angular", c_float),
             ("a_long", c_float),
@@ -1389,14 +1387,14 @@ class ParticleCascadeLightSource(LightSource):
 
     def __init__(
         self,
-        startPosition: tuple[float, float, float],
-        startTime: float,
-        direction: tuple[float, float, float],
-        energyScale: float,
-        a_angular: float,
-        b_angular: float,
-        a_long: float,
-        b_long: float,
+        startPosition: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        startTime: float = 0.0 * u.ns,
+        direction: tuple[float, float, float] = (0.0, 0.0, 1.0),
+        effectiveLength: float = 1.0,
+        a_angular: float = 0.0,
+        b_angular: float = 0.0,
+        a_long: float = 0.0,
+        b_long: float = 0.0,
         applyFrankTamm: bool = True,
     ) -> None:
         super().__init__(
@@ -1418,7 +1416,7 @@ class ParticleCascadeLightSource(LightSource):
             startPosition=startPosition,
             startTime=startTime,
             direction=direction,
-            energyScale=energyScale,
+            effectiveLength=effectiveLength,
             a_angular=a_angular,
             b_angular=b_angular,
             a_long=a_long,
@@ -1450,7 +1448,7 @@ def frankTamm(
     Evaluates the Frank-Tamm equation in units of [m^-1 nm^-1] for the given
     wavelengths and refractive indices:
 
-        d^2           alpha  /            1       \\
+       d^2 N          alpha  /            1       \\
      --------- = 2pi ------- | 1 - -------------- |
       dx dlam         lam^2 \\      (beta * n)^2  /
 
