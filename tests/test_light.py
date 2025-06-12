@@ -8,7 +8,8 @@ import scipy.stats as stats
 from scipy.stats.sampling import NumericalInversePolynomial
 
 import hephaistos as hp
-from hephaistos.pipeline import runPipeline
+from hephaistos.pipeline import Pipeline, PipelineScheduler, runPipeline
+from hephaistos.queue import dumpQueue
 from ctypes import Structure, c_float
 
 import theia.cascades
@@ -68,6 +69,76 @@ def test_hostLightSource(rng, polarized: bool):
     if polarized:
         assert np.allclose(lightResult["stokes"], rays["stokes"])
         assert np.allclose(lightResult["polarizationRef"], rays["polarizationRef"])
+
+
+@pytest.mark.parametrize("polarized", [False, True])
+def test_streaming(rng, polarized: bool):
+    N = 5 * 512
+    batchSize = 1024
+
+    # create input data
+    def createData():
+        data = {}
+        data["contrib"] = 10.0 * rng.random(N)
+        data["wavelength"] = 200.0 + 500.0 * rng.random(N)
+        x = (rng.random(N) * 10.0 - 5.0) * u.m
+        y = (rng.random(N) * 10.0 - 5.0) * u.m
+        z = (rng.random(N) * 10.0 - 5.0) * u.m
+        cos_theta = 2.0 * rng.random(N) - 1.0
+        sin_theta = np.sqrt(1.0 - cos_theta**2)
+        phi = rng.random(N) * 2.0 * np.pi
+        data["position"] = np.stack([x, y, z], axis=-1)
+        dx = sin_theta * np.cos(phi)
+        dy = cos_theta * np.cos(phi)
+        dz = np.sin(phi)
+        data["direction"] = np.stack([dx, dy, dz], axis=-1)
+        data["startTime"] = 50.0 * rng.random(N)
+        if polarized:
+            # We dont care about valid values
+            data["stokes"] = rng.random((N, 4))
+            data["polarizationRef"] = rng.random((N, 3))
+        return data
+
+    # create two data sets
+    data1 = createData()
+    data2 = createData()
+
+    # create light and sampler
+    photon = theia.light.StreamingHostWavelengthSource(
+        batchSize, data=data1, ignoreContrib=True
+    )
+    light = theia.light.StreamingHostLightSource(
+        batchSize, data=data1, polarized=polarized
+    )
+    sampler = theia.light.LightSampler(light, photon, batchSize, polarized=polarized)
+    # create pipeline + scheduler
+    lam = []
+    ray = []
+
+    def process(config: int, batch: int, args: None) -> None:
+        lam.append(dumpQueue(sampler.wavelengthQueue.view(config)))
+        ray.append(dumpQueue(sampler.lightQueue.view(config)))
+
+    pipeline = Pipeline(sampler.collectStages())
+    scheduler = PipelineScheduler(pipeline, processFn=process)
+    # create tasks to process all data
+    tasks = [{}, {}, {"count": 512}, {"data": data2, "count": 1024}, {}, {"count": 512}]
+    scheduler.schedule(tasks)
+    scheduler.wait()
+
+    # reassemble results
+    fields = sampler.lightQueue.view(0).fields
+    sampled1 = {f: np.concatenate([ray[i][f] for i in range(3)]) for f in fields}
+    sampled1["wavelength"] = np.concatenate([lam[i]["wavelength"] for i in range(3)])
+    sampled2 = {f: np.concatenate([ray[i][f] for i in range(3, 6)]) for f in fields}
+    sampled2["wavelength"] = np.concatenate([lam[i]["wavelength"] for i in range(3, 6)])
+    # check results
+    for l in lam:
+        assert np.all(l["contrib"] == 1.0)
+    for field, values in sampled1.items():
+        assert np.allclose(data1[field], values)
+    for field, values in sampled2.items():
+        assert np.allclose(data2[field], values)
 
 
 def test_HostSamplerMismatch():

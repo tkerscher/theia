@@ -20,6 +20,8 @@ from theia.scene import Scene
 from theia.util import ShaderLoader, compileShader, createPreamble
 import theia.units as u
 
+from warnings import warn
+
 from collections.abc import Callable
 from numpy.typing import ArrayLike, NDArray
 
@@ -40,6 +42,8 @@ __all__ = [
     "PencilLightSource",
     "PolarizedLightSampleItem",
     "SphericalLightSource",
+    "StreamingHostLightSource",
+    "StreamingHostWavelengthSource",
     "UniformWavelengthSource",
     "WavelengthSampleItem",
     "WavelengthSource",
@@ -92,6 +96,9 @@ class HostWavelengthSource(WavelengthSource):
         Optional update function called before the pipeline processes a task.
         `i` is the i-th configuration the update should affect.
         Can be used to stream in new samples on demand.
+    extra: set[str], default={}
+        Set of extra parameter name, that can be set and retrieved using the
+        stage api.
     """
 
     _sourceCode = ShaderLoader("wavelengthsource.host.glsl")
@@ -101,8 +108,9 @@ class HostWavelengthSource(WavelengthSource):
         capacity: int,
         *,
         updateFn: Callable[[HostWavelengthSource, int], None] | None = None,
+        extra: set[str] = set(),
     ) -> None:
-        super().__init__()
+        super().__init__(extra=extra)
 
         # save params
         self._capacity = capacity
@@ -139,6 +147,112 @@ class HostWavelengthSource(WavelengthSource):
 
     def run(self, i: int) -> list[hp.Command]:
         return [*self.queue.run(i), *super().run(i)]
+
+
+class StreamingHostWavelengthSource(HostWavelengthSource):
+    """
+    Wavelength source using a provided data source to sequentially feed pre
+    sampled wavelengths to the device. Subsequent batches move forward into the
+    provided data streaming it to the device. Providing new data resets the
+    stream.
+
+    Parameters
+    ----------
+    batchSize: int
+        Number of wavelengths to sample per batch
+    data: dict[str, ArrayLike] | None, default=None
+        Data source from which the batches are produced
+    ignoreContrib: bool, default=False
+        Whether the `contrib` field in data should be ignored. If `True`,
+        `contrib` will be constant 1.0. Usefull if the same data is also used
+        for `StreamingHostLightSource` to avoid wrong contributions.
+
+    Stage Parameters
+    ----------------
+    data: ArrayLike | None
+        Data source from which the batches are produced.
+
+    Note
+    ----
+    There is no special handling for when the last batch from the data is not
+    filling the queue completely. Data in the queue beyond the end is likely old
+    or garbage, but the source does not prevent the tracer from reading it.
+    """
+
+    name = "Streaming Host Wavelength Source"
+
+    def __init__(
+        self,
+        batchSize: int,
+        *,
+        data: dict[str, ArrayLike] | None = None,
+        ignoreContrib: bool = False,
+    ) -> None:
+        super().__init__(
+            batchSize,
+            updateFn=self._updateData,
+            extra={"data"},
+        )
+        if ignoreContrib:
+            self._dataFields = {"wavelength"}
+            # set contrib to constant 1.0
+            self.queue.view(0)["contrib"] = 1.0
+            self.queue.view(1)["contrib"] = 1.0
+        else:
+            self._dataFields = {"contrib", "wavelength"}
+        self.data = data
+
+    @property
+    def data(self) -> dict[str, NDArray] | None:
+        """Data used as streaming source"""
+        return self._data
+
+    @data.setter
+    def data(self, value: dict[str, ArrayLike] | None) -> None:
+        self._offset = 0
+        self._dataSize = 0
+        if value is None:
+            self._data = None
+            return
+        # check if all the needed fields are there
+        if not self._dataFields.issubset(value.keys()):
+            m = self._dataFields.difference(value.keys())
+            raise ValueError(f"provided data misses expected fields: {m}")
+        self._dataSize = np.size(value["wavelength"], 0)
+        # ensure all fields have the same size
+        for field in self._dataFields:
+            if np.size(value[field], 0) != self._dataSize:
+                raise ValueError("fields of provided data differ in size!")
+            # TODO: Check correct dimensions, too?
+        # create ndarray and store them for later
+        self._data = {f: np.asarray(value[f]) for f in self._dataFields}
+
+    @data.deleter
+    def data(self) -> None:
+        self.data = None
+
+    @staticmethod
+    def _updateData(source: HostWavelengthSource, i: int) -> None:
+        assert isinstance(source, StreamingHostWavelengthSource)
+        if source.data is None:
+            warn(
+                "StreamingHostWavelengthSource: "
+                "New data was requested but no source was given!"
+            )
+            return
+        if source._offset >= source._dataSize:
+            warn("StreamingHostWavelengthSource ran out of data!")
+            return
+
+        # calculate next data range
+        start = source._offset
+        end = min(source._offset + source.capacity, source._dataSize)
+        count = end - start
+        source._offset = end
+        # copy new data block
+        view = source.queue.view(i)
+        for field in source._dataFields:
+            view[field][:count] = source.data[field][start:end]
 
 
 class ConstWavelengthSource(WavelengthSource):
@@ -589,6 +703,9 @@ class HostLightSource(LightSource):
         Optional update function called before the pipeline processes a task.
         `i` is the i-th configuration the update should affect.
         Can be used to stream in new samples on demand.
+    extra: set[str], default={}
+        Set of extra parameter name, that can be set and retrieved using the
+        stage api.
 
     Note
     ----
@@ -604,8 +721,9 @@ class HostLightSource(LightSource):
         *,
         polarized: bool = False,
         updateFn: Callable[[HostLightSource, int], None] | None = None,
+        extra: set[str] = set(),
     ) -> None:
-        super().__init__(supportForward=True, supportBackward=False)
+        super().__init__(supportForward=True, supportBackward=False, extra=extra)
 
         # save params
         self._capacity = capacity
@@ -652,6 +770,104 @@ class HostLightSource(LightSource):
 
     def run(self, i: int) -> list[hp.Command]:
         return [*self.queue.run(i), *super().run(i)]
+
+
+class StreamingHostLightSource(HostLightSource):
+    """
+    Light source using a provided data source to sequentially feed light rays to
+    the device. Subsequent batches move forward into the provided data streaming
+    it to the device. Providing new data resets the stream.
+
+    Parameters
+    ----------
+    batchSize: int
+        Number of light rays per batch
+    data: dict[str, ArrayLike] | None, default=None
+        Data source from which the batches are produced.
+    polarized: bool, default=False
+        Whether polarization information should be passed to the tracer.
+
+    Stage Parameters
+    ----------------
+    data: dict[str, ArrayLike] | None
+        Data source from which the batches are produced.
+
+    Note
+    ----
+    There is no special handling for when the last batch from the data is not
+    filling the queue completely. Data in the queue beyond the end is likely old
+    or garbage, but the source does not prevent the tracer from reading it.
+    """
+
+    name = "Streaming Host Light Source"
+
+    def __init__(
+        self,
+        batchSize: int,
+        *,
+        data: dict[str, ArrayLike] | None = None,
+        polarized: bool = False,
+    ) -> None:
+        super().__init__(
+            batchSize,
+            polarized=polarized,
+            updateFn=self._updateData,
+            extra={"data"},
+        )
+        self._dataFields = self.queue.view(0).fields
+        self.data = data
+
+    @property
+    def data(self) -> dict[str, NDArray] | None:
+        """Data used as streaming source"""
+        return self._data
+
+    @data.setter
+    def data(self, value: dict[str, ArrayLike] | None) -> None:
+        self._offset = 0
+        self._dataSize = 0
+        if value is None:
+            self._data = None
+            return
+        # check if all the needed fields are there
+        if not self._dataFields.issubset(value.keys()):
+            m = self._dataFields.difference(value.keys())
+            raise ValueError(f"provided data misses expected fields: {m}")
+        self._dataSize = np.size(value["startTime"], 0)
+        # ensure all fields have the same size
+        for field in self._dataFields:
+            if np.size(value[field], 0) != self._dataSize:
+                raise ValueError("fields of provided data differ in size!")
+            # TODO: Check correct dimensions, too?
+        # create ndarray and store them for later
+        self._data = {f: np.asarray(value[f]) for f in self._dataFields}
+
+    @data.deleter
+    def data(self) -> None:
+        self.data = None
+
+    @staticmethod
+    def _updateData(source: HostLightSource, i: int) -> None:
+        assert isinstance(source, StreamingHostLightSource)
+        if source.data is None:
+            warn(
+                "StreamingHostLightSource: "
+                "New data was requested but no source was given!"
+            )
+            return
+        if source._offset >= source._dataSize:
+            warn("StreamingHostLightSource ran out of data!")
+            return
+
+        # calculate next data range
+        start = source._offset
+        end = min(source._offset + source._capacity, source._dataSize)
+        count = end - start
+        source._offset = end
+        # copy new data block
+        view = source.queue.view(i)
+        for field in source._dataFields:
+            view[field][:count] = source.data[field][start:end]
 
 
 class ConeLightSource(LightSource):
