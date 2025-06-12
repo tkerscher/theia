@@ -24,7 +24,7 @@ def test_createParamsFromParticle(pType: theia.cascades.ParticleType, rng) -> No
         return
 
     # check whether conversion works
-    source, params = theia.cascades.createParamsFromParticle(
+    source, params, lightYield = theia.cascades.createParamsFromParticle(
         particle, lightSourceName=""
     )
     s = source(**params)

@@ -926,8 +926,12 @@ def test_particleCascadeLightSource_fwd(applyFrankTamm: bool, particle: str) -> 
     direction = np.array([0.36, 0.48, 0.8])
     up = np.array([0.8, -0.6, 0.0])  # unit, orthogonal to direction
     E_primary = 1.0 * u.TeV
-    particle = theia.cascades.EMinus if particle == "e-" else theia.cascades.PiPlus
-    params = theia.cascades.createCascadeParameters(particle, E_primary, uRandom=0.6847)
+    if particle == "e-":
+        primary = theia.cascades.ParticleType.E_MINUS
+    else:
+        primary = theia.cascades.ParticleType.PI_PLUS
+    p = theia.cascades.Particle(primary, startPos, direction, E_primary, startTime)
+    params = theia.cascades.createParamsFromParticle(p, lightSourceName="")[1]
 
     # load water material
     water = WaterTestModel()
@@ -937,11 +941,7 @@ def test_particleCascadeLightSource_fwd(applyFrankTamm: bool, particle: str) -> 
     philox = PhiloxRNG(key=0xC0FFEE)
     photons = theia.light.UniformWavelengthSource(lambdaRange=lam_range)
     light = theia.light.ParticleCascadeLightSource(
-        startPos,
-        startTime,
-        direction,
-        applyFrankTamm=applyFrankTamm,
-        **asdict(params),
+        **params, applyFrankTamm=applyFrankTamm
     )
     sampler = theia.light.LightSampler(
         light, photons, N, rng=philox, medium=store.media["water"]
@@ -959,7 +959,7 @@ def test_particleCascadeLightSource_fwd(applyFrankTamm: bool, particle: str) -> 
     expTime = startTime + distPos / u.c
     assert np.allclose(expTime, result["startTime"])
     # check we sample along the whole track
-    z_max = (params.a_long - 1) * params.b_long  # mode of gamma dist
+    z_max = (params["a_long"] - 1) * params["b_long"]  # mode of gamma dist
     assert distPos.min() < 0.1 * z_max
     assert distPos.max() > 4.0 * z_max  # in theory infinite, but really unlikely
     # check direction
@@ -982,13 +982,13 @@ def test_particleCascadeLightSource_fwd(applyFrankTamm: bool, particle: str) -> 
     # instead of checking the individual sample contributions we check the MC
     # estimate which is the total number of photons produced
     est = result["contrib"].mean()
-    expEst = params.energyScale
+    expEst = params["effectiveLength"]
     if applyFrankTamm:
         lam = np.linspace(*lam_range, 1025)
         dlam = (lam_range[1] - lam_range[0]) / (len(lam) - 1)
         n = water.refractive_index(lam)
         dN_dx = integrate.romb(theia.light.frankTamm(lam, n), dlam)
-        expEst = dN_dx * params.energyScale
+        expEst = dN_dx * params["effectiveLength"]
         # we miss the contrib from the wavelength source in the sample
         expEst /= lam_range[1] - lam_range[0]
     assert np.abs(1.0 - est / expEst) < 5e-4
@@ -1011,8 +1011,13 @@ def test_particleCascadeLightSource_bwd(
     startPos, startTime = np.array([1.0, 5.0, -2.0]) * u.m, 0.5 * u.us
     direction = np.array([0.36, 0.48, 0.8])
     E_primary = 1.0 * u.TeV
-    particle = theia.cascades.EMinus if particle == "e-" else theia.cascades.PiPlus
-    params = theia.cascades.createCascadeParameters(particle, E_primary, uRandom=0.6847)
+    if particle == "e-":
+        primary = theia.cascades.ParticleType.E_MINUS
+    else:
+        primary = theia.cascades.ParticleType.PI_PLUS
+    p = theia.cascades.Particle(primary, startPos, direction, E_primary, startTime)
+    params = theia.cascades.createParamsFromParticle(p, lightSourceName="")[1]
+    a_long, b_long = params["a_long"], params["b_long"]
 
     # load water material
     water = WaterTestModel()
@@ -1022,11 +1027,7 @@ def test_particleCascadeLightSource_bwd(
     philox = PhiloxRNG(key=0xC0FFEE)
     photons = theia.light.UniformWavelengthSource(lambdaRange=lam_range)
     light = theia.light.ParticleCascadeLightSource(
-        startPos,
-        startTime,
-        direction,
-        applyFrankTamm=applyFrankTamm,
-        **asdict(params),
+        **params, applyFrankTamm=applyFrankTamm
     )
     sampler = BackwardLightSampler(
         N, light, photons, rng=philox, observer=observer, medium=store.media["water"]
@@ -1043,7 +1044,7 @@ def test_particleCascadeLightSource_bwd(
     expTime = startTime + distPos / u.c
     assert np.allclose(expTime, result["startTime"])
     # check we sample along the whole track
-    z_max = (params.a_long - 1) * params.b_long  # mode of gamma dist
+    z_max = (a_long - 1) * b_long  # mode of gamma dist
     assert distPos.min() < 0.1 * z_max
     assert distPos.max() > 4.0 * z_max  # in theory infinite, but really unlikely
     # check we aim at the observer
@@ -1055,7 +1056,7 @@ def test_particleCascadeLightSource_bwd(
     # instead of checking the individual sample contributions, we check the
     # corresponding MC estimate, which is the expected number of photons
     # arriving at the observer.
-    gamma = stats.gamma(params.a_long)
+    gamma = stats.gamma(a_long)
 
     # integrand
     def f(lam, x):
@@ -1063,7 +1064,7 @@ def test_particleCascadeLightSource_bwd(
         n = water.refractive_index(lam)
         result = theia.light.frankTamm(lam, n) if applyFrankTamm else 1.0
         # calculate emission position
-        result *= gamma.pdf(x / params.b_long) / params.b_long
+        result *= gamma.pdf(x / b_long) / b_long
         # calculate emission angle
         p = startPos + x * direction
         dir_p = observer - p
@@ -1071,9 +1072,9 @@ def test_particleCascadeLightSource_bwd(
         dir_p /= r
         cos_theta = np.multiply(dir_p, direction).sum()
         # evaluate emission profile
-        a, b = params.a_angular, params.b_angular
+        a, b = params["a_angular"], params["b_angular"]
         result *= trackAngularEmission_pdf(cos_theta, n, a=a, b=b)
-        result *= params.energyScale
+        result *= params["effectiveLength"]
         result /= 4.0 * np.pi * (r**2)
         # done
         return result
