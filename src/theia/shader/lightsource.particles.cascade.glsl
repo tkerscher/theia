@@ -18,7 +18,7 @@ layout(scalar) uniform CascadeParams {
     vec3 direction;
 
     //light yield parameters
-    float energyScale;
+    float effectiveLength;
     //angular emission profile
     float a_angular;
     float b_angular;
@@ -56,7 +56,7 @@ SourceRay sampleLight(
     vec3 rayDir = createLocalCOSY(cascade.direction) * sphericalToCartessian(phi, cos_theta);
 
     //add secondary particles' light yield by rescaling contrib
-    float contrib = cascade.energyScale;
+    float contrib = cascade.effectiveLength;
     //if we importance sample the Frank-Tamm formula, we must not apply it here
     //we assume the constant factor was applied elsewhere (e.g. wavelength source)
     #ifndef FRANK_TAMM_IS
@@ -91,7 +91,7 @@ SourceRay sampleLight(
     contrib *= dw_dA(rayPos, observer, normal);
     
     //apply scaling factor
-    contrib *= cascade.energyScale;
+    contrib *= cascade.effectiveLength;
     //if we importance sample the Frank-Tamm formula, we must not apply it here
     //we assume the constant factor was applied elsewhere (e.g. wavelength source)
     #ifndef FRANK_TAMM_IS
