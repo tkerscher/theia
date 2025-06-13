@@ -13,6 +13,10 @@ __all__ = [
     "m",
     "cm",
     "mm",
+    "inch",
+    "ft",
+    "yd",
+    "mi",
     "per_km",
     "per_m",
     "per_cm",
@@ -48,7 +52,7 @@ def __dir__():
     )
 
 
-Dimension = Literal["length", "time", "wavelength", "compound", "energy"]
+Dimension = Literal["length", "time", "wavelength", "compound", "energy", "angle"]
 """
 Fundamental dimensions the simulation knows about.
 `compound` indicates a compound unit.
@@ -187,6 +191,11 @@ km: Final[Unit] = Unit("length", 1000.0)
 m: Final[Unit] = Unit("length", 1.0)
 cm: Final[Unit] = Unit("length", 0.01)
 mm: Final[Unit] = Unit("length", 0.001)
+# imperial length
+inch: Final[Unit] = Unit("length", 0.0254)
+ft: Final[Unit] = Unit("length", 0.3048)
+yd: Final[Unit] = Unit("length", 0.9144)
+mi: Final[Unit] = Unit("length", 1609.344)
 # inverse length
 per_km: Final[Unit] = InverseUnit(km)
 per_m: Final[Unit] = InverseUnit(m)
