@@ -136,7 +136,7 @@ class HostWavelengthSource(WavelengthSource):
 
     def bindParams(self, program: Program, i: int) -> None:
         super().bindParams(program, i)
-        program.bindParams(PhotonQueueIn=self.queue.tensor)
+        program.bindParams(WavelengthQueueIn=self.queue.tensor)
 
     # PipelineStage API
 
@@ -786,6 +786,10 @@ class StreamingHostLightSource(HostLightSource):
         Data source from which the batches are produced.
     polarized: bool, default=False
         Whether polarization information should be passed to the tracer.
+    ignoreContrib: bool, default=False
+        Whether the `contrib` field in data should be ignored. If `True`,
+        `contrib` will be constant 1.0. Usefull if the same data is also used
+        for `StreamingHostWavelengthSource` to avoid wrong contributions.
 
     Stage Parameters
     ----------------
@@ -807,6 +811,7 @@ class StreamingHostLightSource(HostLightSource):
         *,
         data: dict[str, ArrayLike] | None = None,
         polarized: bool = False,
+        ignoreContrib: bool = False,
     ) -> None:
         super().__init__(
             batchSize,
@@ -814,7 +819,12 @@ class StreamingHostLightSource(HostLightSource):
             updateFn=self._updateData,
             extra={"data"},
         )
-        self._dataFields = self.queue.view(0).fields
+        self._dataFields = set(self.queue.view(0).fields)
+        if ignoreContrib:
+            self._dataFields.remove("contrib")
+            # set contrib to constant 1.0
+            self.queue.view(0)["contrib"] = 1.0
+            self.queue.view(1)["contrib"] = 1.0
         self.data = data
 
     @property
