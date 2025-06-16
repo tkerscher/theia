@@ -68,6 +68,12 @@ def test_ConvergeHistogramTask():
     pipeline = pl.Pipeline(tracer.collectStages())
     scheduler = pl.DynamicTaskScheduler(pipeline)
 
+    callbackCalled = False
+
+    def callback(task: theia.task.ConvergeHistogramTask):
+        nonlocal callbackCalled
+        callbackCalled = True
+
     # create params dict
     params = {
         "lightSource__position": light_pos,
@@ -83,6 +89,7 @@ def test_ConvergeHistogramTask():
         maxBatchCount=max_batches,
         atol=atol,
         rtol=rtol,
+        finishedCallback=callback,
     )
     # schedule task
     scheduler.scheduleTask(task)
@@ -90,6 +97,7 @@ def test_ConvergeHistogramTask():
 
     # check result
     assert task.converged
+    assert callbackCalled
     assert task.totalBatches <= max_batches
     assert task.totalBatches > initBatches  # to ensure we test the reissuing of batches
     error_thres = budget * rtol + atol  # upper limit

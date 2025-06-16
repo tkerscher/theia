@@ -8,6 +8,7 @@ from hephaistos.pipeline import DynamicTask, PipelineParams
 from theia.response import HistogramHitResponse, KernelHistogramHitResponse
 
 from numpy.typing import NDArray
+from typing import Callable
 
 __all__ = [
     "ConvergeHistogramTask",
@@ -48,6 +49,9 @@ class ConvergeHistogramTask(DynamicTask):
         Absolute error tolerance. See Notes
     rtol: float, default=5e-5
         Relative error tolerance. See Notes.
+    finishedCallback: (ConvergeHistogram) -> None | None, default=None
+        Optional callback called once the task finishes. Note that it will be
+        called from a different thread.
 
     Notes
     -----
@@ -68,6 +72,7 @@ class ConvergeHistogramTask(DynamicTask):
         # targetError: float = 0.1,
         atol: float = 0.1,
         rtol: float = 5e-5,
+        finishedCallback: Callable[[ConvergeHistogramTask], None] | None = None,
     ) -> None:
         super().__init__(params, pipeline, initialBatchCount=initialBatchCount)
         # check arguments
@@ -85,6 +90,7 @@ class ConvergeHistogramTask(DynamicTask):
         self._atol = atol
         self._totalBatches = 0
         self._converged = False
+        self._callback = finishedCallback
 
         # allocate variables for result
         self._result = np.zeros(response.nBins)
@@ -143,6 +149,10 @@ class ConvergeHistogramTask(DynamicTask):
     def totalBatches(self) -> int:
         """Total amount of batches used so far"""
         return self._totalBatches
+
+    def onTaskFinished(self) -> None:
+        if self._callback is not None:
+            self._callback(self)
 
     def processBatch(self, config: int) -> int:
         # update counter
