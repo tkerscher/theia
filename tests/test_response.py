@@ -59,7 +59,8 @@ def test_hitPolarizationMismatch():
         replay = theia.response.HitReplay(128, record, polarized=True)
 
 
-def test_histogramResponse(rng):
+@pytest.mark.parametrize("useSharedMemory", [True, False])
+def test_histogramResponse(rng, useSharedMemory: bool):
     N = 256 * 1024
     N_BINS = 50
     BIN_SIZE = 4.0 * u.ns
@@ -69,7 +70,12 @@ def test_histogramResponse(rng):
 
     value = theia.response.UniformValueResponse()
     response = theia.response.HistogramHitResponse(
-        value, nBins=N_BINS, t0=T0, binSize=BIN_SIZE, normalization=NORM
+        value,
+        nBins=N_BINS,
+        t0=T0,
+        binSize=BIN_SIZE,
+        normalization=NORM,
+        useSharedMemory=useSharedMemory,
     )
     replay = theia.response.HitReplay(N, response, blockSize=128)
 
@@ -124,7 +130,8 @@ def test_histogramEstimator(rng):
     assert np.allclose(result, expected * NORM)
 
 
-def test_kernelHistogramEstimator(rng):
+@pytest.mark.parametrize("useSharedMemory", [False, True])
+def test_kernelHistogramEstimator(rng, useSharedMemory: bool):
     N = 64 * 1024
     N_BINS = 200
     BIN_SIZE = 1.2 * u.ns
@@ -144,6 +151,7 @@ def test_kernelHistogramEstimator(rng):
         kernelBandwidth=BANDWIDTH,
         kernelSupport=SUPPORT,
         normalization=NORM,
+        useSharedMemory=useSharedMemory,
     )
     replay = theia.response.HitReplay(N, response)
 

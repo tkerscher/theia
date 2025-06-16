@@ -16,6 +16,7 @@ from theia.util import ShaderLoader, compileShader, createPreamble
 import theia.units as u
 
 from numpy.typing import NDArray
+from typing import Final
 
 
 __all__ = [
@@ -27,6 +28,7 @@ __all__ = [
     "EmptyResponse",
     "Estimator",
     "HistogramEstimator",
+    "HistogramHitResponse",
     "HistogramReducer",
     "HitItem",
     "HitRecorder",
@@ -1093,6 +1095,9 @@ class HistogramReducer(PipelineStage):
 
     name = "Histogram Reducer"
 
+    MAX_SHARED_MEMORY_BINS: Final[int] = 8192  # assume 32KB
+    """Max number of bins that still fit in shared memory"""
+
     class Params(Structure):
         """Parameters"""
 
@@ -1116,6 +1121,7 @@ class HistogramReducer(PipelineStage):
         retrieve: bool = True,
         normalization: float = 1.0,
         blockSize: int = 128,
+        useSharedMemory: bool = True,
     ) -> None:
         super().__init__({"Params": self.Params})
         # save params
@@ -1123,6 +1129,7 @@ class HistogramReducer(PipelineStage):
         self._nBins = nBins
         self._retrieve = retrieve
         self.setParams(normalization=normalization, nHist=nHist)
+        self._useSharedMemory = useSharedMemory
 
         # create code if needed
         if HistogramReducer.byte_code is None:
@@ -1138,6 +1145,8 @@ class HistogramReducer(PipelineStage):
         self._histIn = hp.FloatTensor(n) if histIn is None else histIn
         self._histOut = hp.FloatTensor(nBins) if histOut is None else histOut
         self._buffer = [hp.FloatBuffer(nBins) if retrieve else None for _ in range(2)]
+        # zero out memory
+        hp.execute(hp.clearTensor(self._histIn))
         # bind memory
         self._program.bindParams(HistogramIn=self._histIn, HistogramOut=self._histOut)
 
@@ -1181,6 +1190,7 @@ class HistogramReducer(PipelineStage):
         cmds = [
             hp.flushMemory(),
             self._program.dispatch(self._groups),
+            hp.clearTensor(self._histIn),
         ]
         if self.retrieve:
             cmds.append(hp.retrieveTensor(self.histOut, self._buffer[i]))
@@ -1215,6 +1225,10 @@ class HistogramHitResponse(HitResponse):
     updateResponse: bool, default=True
         If True, when this stage is requested to update by e.g. a pipeline it
         will also cause the response to update.
+    useSharedMemory: bool, default=True
+        Whether to use shared memory to create partial histograms, which may
+        improve performance. Ignored if there are too many bins to fit in
+        shared memory.
 
     Stage Parameters
     ----------------
@@ -1253,6 +1267,7 @@ class HistogramHitResponse(HitResponse):
         retrieve: bool = True,
         reduceBlockSize: int = 128,
         updateResponse: bool = True,
+        useSharedMemory: bool = True,
     ) -> None:
         super().__init__(
             {"ResponseParams": self.Params},
@@ -1270,6 +1285,9 @@ class HistogramHitResponse(HitResponse):
         self._updateResponse = updateResponse
         self._nHistMax = 0  # keeps track of worst case between prepare() calls
         self._reducer = None
+        if nBins > HistogramReducer.MAX_SHARED_MEMORY_BINS:
+            useSharedMemory = False
+        self._useSharedMemory = useSharedMemory
 
     @property
     def nBins(self) -> int:
@@ -1315,7 +1333,10 @@ class HistogramHitResponse(HitResponse):
     @property
     def sourceCode(self) -> str:
         # we need to define histogram size via macro -> enclose in include guards
-        preamble = createPreamble(N_BINS=self.nBins)
+        preamble = createPreamble(
+            N_BINS=self.nBins,
+            RESPONSE_HISTOGRAM_USE_SHARED_MEMORY=self.useSharedMemory,
+        )
         # Include value response
         return "\n".join(
             [
@@ -1327,6 +1348,11 @@ class HistogramHitResponse(HitResponse):
                 self._sourceCode,
             ]
         )
+
+    @property
+    def useSharedMemory(self) -> bool:
+        """Whether shared memory is used to create partial histograms"""
+        return self._useSharedMemory
 
     def result(self, i: int) -> NDArray | None:
         """
@@ -1370,6 +1396,7 @@ class HistogramHitResponse(HitResponse):
             retrieve=self.retrieve,
             normalization=norm,
             blockSize=self._reduceBlockSize,
+            useSharedMemory=self.useSharedMemory,
         )
 
     def _bindParams(self, program: hp.Program, i: int) -> None:
@@ -1428,6 +1455,10 @@ class KernelHistogramHitResponse(HitResponse):
     updateResponse: bool, default=True
         If True and this stage is requested to update e.g. by a pipeline, it
         will cause the response function to also update.
+    useSharedMemory: bool, default=True
+        Whether to use shared memory to create partial histograms, which may
+        improve performance. Ignored if there are too many bins to fit in
+        shared memory.
 
     Stage Parameters
     ----------------
@@ -1482,6 +1513,7 @@ class KernelHistogramHitResponse(HitResponse):
         retrieve: bool = True,
         reduceBlockSize: int = 128,
         updateResponse: bool = True,
+        useSharedMemory: bool = True,
     ) -> None:
         super().__init__(
             {"ResponseParams": self.Params},
@@ -1504,6 +1536,9 @@ class KernelHistogramHitResponse(HitResponse):
         )
         self._nHistMax = 0  # keeps track of worst case between prepare() calls
         self._reducer = None
+        if nBins > HistogramReducer.MAX_SHARED_MEMORY_BINS:
+            useSharedMemory = False
+        self._useSharedMemory = useSharedMemory
 
     @property
     def nBins(self) -> int:
@@ -1549,7 +1584,10 @@ class KernelHistogramHitResponse(HitResponse):
     @property
     def sourceCode(self) -> str:
         # we need to define histogram size via macro -> enclose in include guards
-        preamble = createPreamble(N_BINS=self.nBins)
+        preamble = createPreamble(
+            N_BINS=self.nBins,
+            RESPONSE_HISTOGRAM_USE_SHARED_MEMORY=self.useSharedMemory,
+        )
         # Include value response
         return "\n".join(
             [
@@ -1561,6 +1599,11 @@ class KernelHistogramHitResponse(HitResponse):
                 self._sourceCode,
             ]
         )
+
+    @property
+    def useSharedMemory(self) -> bool:
+        """Whether shared memory is used to create partial histograms"""
+        return self._useSharedMemory
 
     def result(self, i: int) -> NDArray | None:
         """
@@ -1604,6 +1647,7 @@ class KernelHistogramHitResponse(HitResponse):
             retrieve=self.retrieve,
             normalization=norm,
             blockSize=self._reduceBlockSize,
+            useSharedMemory=self.useSharedMemory,
         )
 
     def _bindParams(self, program: hp.Program, i: int) -> None:

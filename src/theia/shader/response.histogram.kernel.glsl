@@ -18,6 +18,8 @@ layout(scalar) uniform ResponseParams {
     float kernelSupport;
 } responseParams;
 
+#ifdef RESPONSE_KERNEL_HISTOGRAM_USE_SHARED_MEMORY
+
 shared float localHist[N_BINS];
 
 void initResponse() {
@@ -30,6 +32,34 @@ void initResponse() {
     memoryBarrierShared();
     barrier();
 }
+
+void updateBin(int bin, float value) {
+    atomicAdd(localHist[bin], value);
+}
+
+void finalizeResponse() {
+    //ensure we're finished with the local histogram
+    memoryBarrierShared();
+    barrier();
+
+    //copy local histogram from shared memory to global memory
+    uint histId = gl_WorkGroupID.x;
+    [[unroll]] for (uint i = gl_LocalInvocationID.x; i < N_BINS; i += BLOCK_SIZE) {
+        histsOut[histId].bins[i] = localHist[i];
+    }
+}
+
+#else //ifdef RESPONSE_KERNEL_HISTOGRAM_USE_SHARED_MEMORY
+
+void initResponse() {}
+
+void updateBin(int bin, float value) {
+    atomicAdd(histsOut[gl_WorkGroupID.x].bins[bin], value);
+}
+
+void finalizeResponse() {}
+
+#endif
 
 //For now we will only support gaussian kernel
 float kernelCdf(float x) {
@@ -67,19 +97,7 @@ void response(HitItem item, uint idx, inout uint dim) {
         float w = cdf - prev_cdf;
         prev_cdf = cdf;
         //update bin
-        atomicAdd(localHist[i], w * value);
-    }
-}
-
-void finalizeResponse() {
-    //ensure we're finished with the local histogram
-    memoryBarrierShared();
-    barrier();
-
-    //copy local histogram from shared memory to global memory
-    uint histId = gl_WorkGroupID.x;
-    [[unroll]] for (uint i = gl_LocalInvocationID.x; i < N_BINS; i += BLOCK_SIZE) {
-        histsOut[histId].bins[i] = localHist[i];
+        updateBin(i, w * value);
     }
 }
 
