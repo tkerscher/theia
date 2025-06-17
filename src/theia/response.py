@@ -1401,6 +1401,7 @@ class HistogramHitResponse(HitResponse):
 
     def _bindParams(self, program: hp.Program, i: int) -> None:
         super()._bindParams(program, i)
+        self.response.bindParams(program, i)
         # connect response and reducer
         if self._reducer is None:
             self._reducer = self._initReducer()
@@ -1652,6 +1653,7 @@ class KernelHistogramHitResponse(HitResponse):
 
     def _bindParams(self, program: hp.Program, i: int) -> None:
         super()._bindParams(program, i)
+        self.response.bindParams(program, i)
         # connect response and reducer
         if self._reducer is None:
             self._reducer = self._initReducer()
