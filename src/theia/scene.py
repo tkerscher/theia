@@ -67,6 +67,11 @@ class Transform:
         """Creates a new independent copy of this transformation"""
         return Transform(self._arr[:3, :].copy())
 
+    def freeze(self) -> Transform:
+        """Prevents the transform from being changed"""
+        self._arr.setflags(write=False)
+        return self
+
     def inverse(self) -> Transform:
         """Returns the inverse transformation"""
         inv = Transform()
@@ -277,6 +282,8 @@ class Transform:
     def __imatmul__(self, other: Transform) -> Transform:
         if type(other) != Transform:
             raise TypeError(other)
+        if not self._arr.flags.writeable:
+            raise RuntimeError("Tried to change frozen Transform!")
         self._arr = other._arr @ self._arr
         return self
 
@@ -787,6 +794,7 @@ class SceneTemplate:
             trafo = Transform(trafo[:3, :])
             if templateTransform is not None:
                 trafo @= templateTransform
+            trafo.freeze()
             # get material name
             mat = matDict[meshName]
             # calculate detectorId
@@ -850,7 +858,7 @@ class SceneTemplate:
         sceneMedium: int = 0,
         sceneTransformation: Transform | None = None,
         sceneBBox: RectBBox | None = None,
-        detectorIdStride: int = 0,
+        detectorIdStride: int | None = None,
     ) -> tuple[Scene, dict[tuple[str, int], int]]:
         """
         Creates a new scene consisting of copies of this template for each given
@@ -911,7 +919,7 @@ class SceneTemplate:
                     id += offset
                     detIdMap[(tempInst.name, i)] = id
                 # assemble transformation matrix
-                t = tempInst.transform
+                t = tempInst.transform.copy()
                 if trafo is not None:
                     t @= trafo
                 if sceneTransformation is not None:
