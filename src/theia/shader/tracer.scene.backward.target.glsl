@@ -54,7 +54,7 @@ void traceMain() {
     //there is no dedicated direct lighting tracer for this setting
     bool allowResponse = true;
     //trace loop
-    [[unroll]] for (uint i = 1; i <= PATH_LENGTH; ++i) {
+    for (uint i = 1; i <= PATH_LENGTH; ++i) {
         //trace ray
         bool last = i == PATH_LENGTH;
         SurfaceHit hit;

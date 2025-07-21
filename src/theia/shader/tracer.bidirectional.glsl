@@ -107,7 +107,7 @@ void createLightSubPath(
     #endif
 
     //trace loop
-    [[unroll]] for (uint i = 1; i <= LIGHT_PATH_LENGTH; ++i) {
+    for (uint i = 1; i <= LIGHT_PATH_LENGTH; ++i) {
         //trace ray
         bool last = i == LIGHT_PATH_LENGTH;
         SurfaceHit hit;
@@ -184,7 +184,7 @@ void completePath(BackwardRay ray, CameraRay cam, uint camLength, uint idx, inou
         return;
 
     //iterate over all light path vertices
-    [[unroll]] for (uint i = 0; i < LIGHT_PATH_LENGTH; ++i) {       
+    for (uint i = 0; i < LIGHT_PATH_LENGTH; ++i) {       
         if (i >= nLight) return;
 
         if (ray.state.medium == lightPath[i].medium) {
@@ -210,7 +210,7 @@ void simulateCamera(
     #endif
 
     //trace loop
-    [[unroll]] for (uint i = 0; i < CAMERA_PATH_LENGTH; ++i) {
+    for (uint i = 0; i < CAMERA_PATH_LENGTH; ++i) {
         //trace ray
         SurfaceHit hit;
         ResultCode result = trace(

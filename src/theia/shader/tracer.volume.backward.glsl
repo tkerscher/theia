@@ -138,7 +138,7 @@ void traceMain() {
     //trace loop
     //one iteration less than PATH_LENGTH as we will always create shadow rays
     //extending the path length by one
-    [[unroll]] for (uint i = 1; i < PATH_LENGTH; ++i) {
+    for (uint i = 1; i < PATH_LENGTH; ++i) {
         //trace ray
         ResultCode result = trace(ray, cam.hit, idx, dim);
         onEvent(ray, result, idx, iPath++);

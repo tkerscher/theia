@@ -67,7 +67,7 @@ void traceMain() {
 
     //trace loop
     bool allowResponse = ALLOW_RESPONSE_INIT;
-    [[unroll]] for (uint i = 1; i <= PATH_LENGTH; ++i) {
+    for (uint i = 1; i <= PATH_LENGTH; ++i) {
         //trace ray
         bool last = i == PATH_LENGTH; //mark last trace
         SurfaceHit hit;

@@ -257,10 +257,9 @@ void traceMain() {
         return;
     
     //trace loop: rest
-    [[unroll]] for (uint i = 0; i < PATH_LENGTH; ++i) {
+    for (uint i = 0; i < PATH_LENGTH; ++i) {
         //scatter ray
         vec2 u = random2D(idx, dim);
-        float cos_theta, phi;
         scatterRay(ray, u);
 
         //trace ray
