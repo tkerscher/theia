@@ -23,27 +23,27 @@ struct Result {
     vec3 trans_dir;
     float trans_contrib;
 };
-layout(scalar) writeonly buffer ResultBuffer { Result r[]; };
+writeonly buffer ResultBuffer { Result r[]; };
 
 #ifdef POLARIZATION
 struct PolRefResult {
     vec3 refl;
     vec3 trans;
 };
-layout(scalar) writeonly buffer PolRefBuffer { PolRefResult polRef[]; };
+writeonly buffer PolRefBuffer { PolRefResult polRef[]; };
 
 #ifdef FORWARD
 struct StokesResult {
     vec4 refl;
     vec4 trans;
 };
-layout(scalar) writeonly buffer StokesBuffer { StokesResult stokes[]; };
+writeonly buffer StokesBuffer { StokesResult stokes[]; };
 #else
 struct MuellerResult {
     mat4 refl;
     mat4 trans;
 };
-layout(scalar) writeonly buffer MuellerBuffer { MuellerResult mueller[]; };
+writeonly buffer MuellerBuffer { MuellerResult mueller[]; };
 #endif
 
 #endif //#ifdef POLARIZATION

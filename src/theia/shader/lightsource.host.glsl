@@ -5,7 +5,7 @@
 
 //read and return rays from a buffer
 
-layout(scalar) readonly buffer LightQueueIn {
+readonly buffer LightQueueIn {
     LightSourceQueue queue;
 } lightQueueIn;
 

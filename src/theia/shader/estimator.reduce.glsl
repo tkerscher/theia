@@ -2,14 +2,14 @@
 layout(local_size_x_id = 1) in;
 layout(constant_id = 2) const uint N_BINS = 100;
 
-layout(scalar) readonly buffer HistogramIn {
+readonly buffer HistogramIn {
     float histIn[];
 };
-layout(scalar) writeonly buffer HistogramOut {
+writeonly buffer HistogramOut {
     float histOut[];
 };
 
-layout(scalar) uniform Params{
+uniform Params{
     float norm;
     uint nHist;
 };

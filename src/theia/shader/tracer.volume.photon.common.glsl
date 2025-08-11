@@ -5,7 +5,7 @@
 #include "ray.propagate.glsl"
 #include "tracer.photon.queue.glsl"
 
-layout(scalar) uniform TraceParams {
+uniform TraceParams {
     uvec2 medium;
     int objectId;
 

@@ -1,7 +1,7 @@
 #ifndef _INCLUDE_LIGHTSOURCE_TARGET_FLAT
 #define _INCLUDE_LIGHTSOURCE_TARGET_FLAT
 
-layout(scalar) uniform LightTargetParams {
+uniform LightTargetParams {
     float width;
     float height; //length
     vec3 offset;

@@ -10,7 +10,7 @@
  * Parameterization of the light yield from a muon track and its secondary
  * particles up to 500MeV as described in the above papers.
 */
-layout(scalar) uniform MuonTrackParams {
+uniform MuonTrackParams {
     //geometric properties
     vec3 startPosition;
     float startTime;

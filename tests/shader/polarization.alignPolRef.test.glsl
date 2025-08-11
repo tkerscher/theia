@@ -6,7 +6,7 @@
 
 layout(local_size_x = 32) in;
 
-layout(scalar) writeonly buffer ResultBuffer { mat4 result[]; };
+writeonly buffer ResultBuffer { mat4 result[]; };
 
 void main() {
     uint i = gl_GlobalInvocationID.x;

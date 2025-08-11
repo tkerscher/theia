@@ -4,7 +4,7 @@ layout(local_size_x = 32) in;
 
 writeonly buffer OutputBuffer { float outValues[]; };
 
-layout(push_constant) uniform PushConstant {
+layout(scalar, push_constant) uniform PushConstant {
     Table1D table;
     float normalization;
 } push;

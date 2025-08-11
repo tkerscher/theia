@@ -13,7 +13,7 @@ struct Result {
     vec3 normal;
     float contrib;
 };
-layout(scalar) writeonly buffer ResultBuffer { Result r[]; };
+writeonly buffer ResultBuffer { Result r[]; };
 
 void main() {
     uint idx = gl_GlobalInvocationID.x;

@@ -18,10 +18,10 @@ struct Result {
 };
 
 // TODO: Figure out how I can apply readonly here...
-layout(scalar) buffer QueryBuffer{ Query queries[]; };
-layout(scalar) writeonly buffer Results{ Result results[]; };
+buffer QueryBuffer{ Query queries[]; };
+writeonly buffer Results{ Result results[]; };
 
-layout(push_constant) uniform PushConstant {
+layout(scalar, push_constant) uniform PushConstant {
     Medium medium;
 } push;
 

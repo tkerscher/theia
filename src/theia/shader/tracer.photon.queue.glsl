@@ -30,13 +30,13 @@ struct PhotonQueue {
     uint idx[PHOTON_QUEUE_SIZE]; //RNG
 };
 
-layout(scalar) readonly buffer PhotonQueueIn {
+readonly buffer PhotonQueueIn {
     uvec3 groupCount; //used for indirect dispatch
 
     uint count;
     PhotonQueue queue;
 } photonQueueIn;
-layout(scalar) buffer PhotonQueueOut {
+buffer PhotonQueueOut {
     uvec3 groupCount; //used for indirect dispatch
 
     uint count;

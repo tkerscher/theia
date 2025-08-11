@@ -17,7 +17,7 @@ struct Result{
     CameraSample cam;
     CameraRay ray;
 };
-layout(scalar) writeonly buffer ResultBuffer { Result r[]; };
+writeonly buffer ResultBuffer { Result r[]; };
 
 void main() {
     uint idx = gl_GlobalInvocationID.x;

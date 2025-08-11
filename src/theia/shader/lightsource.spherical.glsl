@@ -4,7 +4,7 @@
 #include "math.glsl"
 #include "util.sample.glsl"
 
-layout(scalar) uniform LightParams {
+uniform LightParams {
     vec3 position;
     float contribFwd;
     float contribBwd;

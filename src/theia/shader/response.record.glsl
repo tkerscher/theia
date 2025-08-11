@@ -3,7 +3,7 @@
 
 #include "response.queue.glsl"
 
-layout(scalar) writeonly buffer HitQueueOut {
+writeonly buffer HitQueueOut {
     uint count;
     HitQueue queue;
 } hitQueueOut;

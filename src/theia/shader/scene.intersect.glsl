@@ -6,7 +6,7 @@
 #include "result.glsl"
 #include "scene.types.glsl"
 
-layout(scalar) buffer Geometries{ Geometry geometries[]; };
+buffer Geometries{ Geometry geometries[]; };
 //Top level acceleration structure containing the scene
 uniform accelerationStructureEXT tlas;
 

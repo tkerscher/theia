@@ -30,11 +30,11 @@ layout(local_size_x = BLOCK_SIZE) in;
 #include "tracer.direct.common.glsl"
 #endif
 
-layout(scalar) uniform DispatchParams {
+uniform DispatchParams {
     uint batchSize;
 };
 
-layout(scalar) uniform TraceParams {
+uniform TraceParams {
     uvec2 camMedium;
     PropagateParams propagation;
 } params;

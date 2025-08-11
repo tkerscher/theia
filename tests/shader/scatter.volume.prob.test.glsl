@@ -7,11 +7,11 @@ struct Query{
     vec3 scatterDir;
     uvec2 medium;
 };
-layout(scalar) readonly buffer Input{
+readonly buffer Input{
     Query queries[];
 };
 
-layout(scalar) writeonly buffer Output{
+writeonly buffer Output{
     float p[];
 };
 

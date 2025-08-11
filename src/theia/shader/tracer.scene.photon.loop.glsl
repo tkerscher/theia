@@ -25,7 +25,7 @@ layout(local_size_x = BLOCK_SIZE) in;
 
 #include "callback.util.glsl"
 
-layout(scalar) uniform TraceParams {
+uniform TraceParams {
     int targetId;
     uvec2 sceneMedium;
 

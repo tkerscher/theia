@@ -3,7 +3,7 @@
 
 #include "camera.queue.glsl"
 
-layout(scalar) readonly buffer CameraQueueIn {
+readonly buffer CameraQueueIn {
     CameraQueue queue;
 } cameraQueueIn;
 

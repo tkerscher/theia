@@ -27,7 +27,7 @@ layout(local_size_x = BLOCK_SIZE) in;
 #endif
 
 //input queue
-layout(scalar) readonly buffer HitQueueIn {
+readonly buffer HitQueueIn {
     uint hitCount;
     HitQueue queue;
 };

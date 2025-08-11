@@ -12,7 +12,7 @@ layout(local_size_x = BLOCK_SIZE) in;
 #include "ray.propagate.glsl"
 #include "tracer.photon.queue.glsl"
 
-layout(scalar) uniform DispatchParams {
+uniform DispatchParams {
     uint batchSize;
 };
 

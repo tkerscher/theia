@@ -3,7 +3,7 @@
 
 #include "util.sample.glsl"
 
-layout(scalar) uniform TargetGuideParams {
+uniform TargetGuideParams {
     vec3 position;
     float radius;
     vec3 normal;

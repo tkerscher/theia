@@ -13,11 +13,11 @@
 
 layout(local_size_x = PARALLEL_STREAMS, local_size_y = BATCH_SIZE) in;
 
-layout(scalar) writeonly buffer RngSink {
+writeonly buffer RngSink {
     float u[];
 };
 
-layout(scalar) uniform Params {
+uniform Params {
     uint baseStream;
     uint baseCount;
 

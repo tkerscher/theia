@@ -3,7 +3,7 @@
 
 #include "util.sample.glsl"
 
-layout(scalar) uniform LightTargetParams {
+uniform LightTargetParams {
     vec3 position;
     float radius;
     vec3 normal;

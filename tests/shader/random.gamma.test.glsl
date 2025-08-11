@@ -3,9 +3,9 @@ layout(local_size_x = 32) in;
 #include "random.glsl"
 #include "random.gamma.glsl"
 
-layout(scalar) writeonly buffer Result{ float x[]; };
+writeonly buffer Result{ float x[]; };
 
-layout(push_constant) uniform PushConstant {
+layout(scalar, push_constant) uniform PushConstant {
     float alpha;
     float lambda;
 };

@@ -1,7 +1,7 @@
 #ifndef _INCLUDE_RESPONSE_SAMPLE_VALUE
 #define _INCLUDE_RESPONSE_SAMPLE_VALUE
 
-layout(scalar) writeonly buffer ValueQueueOut { float value[]; } valueQueueOut;
+writeonly buffer ValueQueueOut { float value[]; } valueQueueOut;
 
 void initResponse() {}
 

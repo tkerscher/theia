@@ -1,7 +1,7 @@
 #ifndef _INCLUDE_LIGHTSOURCE_PENCIL
 #define _INCLUDE_LIGHTSOURCE_PENCIL
 
-layout(scalar) uniform LightParams {
+uniform LightParams {
     vec3 position;
     vec3 direction;
     float budget;

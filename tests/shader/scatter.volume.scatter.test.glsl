@@ -7,7 +7,7 @@ struct Query {
     vec3 dir;
     uvec2 medium;
 };
-layout(scalar) readonly buffer Input{
+readonly buffer Input{
     Query queries[];
 };
 
@@ -15,7 +15,7 @@ struct Result{
     vec3 dir;
     float prob;
 };
-layout(scalar) writeonly buffer Output{
+writeonly buffer Output{
     Result results[];
 };
 

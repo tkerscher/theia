@@ -16,7 +16,7 @@ layout(buffer_reference, scalar, buffer_reference_align=4) buffer ParticleTrack 
     TrackVertex vertices[];
 };
 
-layout(scalar) uniform TrackParams {
+uniform TrackParams {
     uvec2 track;
 } trackParams;
 

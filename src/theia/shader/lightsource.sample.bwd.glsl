@@ -14,9 +14,9 @@ struct Result {
     float wavelength;
     SourceRay ray;
 };
-layout(scalar) writeonly buffer ResultBuffer { Result r[]; };
+writeonly buffer ResultBuffer { Result r[]; };
 
-layout(scalar) uniform SamplerParams {
+uniform SamplerParams {
     vec3 observer;
     uvec2 medium;    
 } samplerParams;

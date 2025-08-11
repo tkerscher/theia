@@ -17,8 +17,8 @@ struct Result {
     vec3 ref;
 };
 
-layout(scalar) readonly buffer QueryBuffer{ Query queries[]; };
-layout(scalar) writeonly buffer ResultBuffer{ Result results[]; };
+readonly buffer QueryBuffer{ Query queries[]; };
+writeonly buffer ResultBuffer{ Result results[]; };
 
 void main() {
     uint i = gl_GlobalInvocationID.x;

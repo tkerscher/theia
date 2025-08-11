@@ -3,7 +3,7 @@
 
 #include "math.glsl"
 
-layout(scalar) uniform LightParams {
+uniform LightParams {
     vec3 position;
     vec3 direction;
     float cosOpeningAngle;

@@ -3,7 +3,7 @@
 
 #include "lookup.glsl"
 
-layout(scalar) uniform WavelengthParams {
+uniform WavelengthParams {
     //using a buffer reference allows us to change it without recreating the pipeline
     Table1D table;
     //constant contrib due to importance sampling

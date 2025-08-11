@@ -3,7 +3,7 @@
 
 #include "math.glsl"
 
-layout(scalar) uniform TargetGuideParams {
+uniform TargetGuideParams {
     float width;
     float height;
     vec3 position;

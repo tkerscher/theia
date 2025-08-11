@@ -11,11 +11,11 @@ layout(local_size_x = BLOCK_SIZE) in;
 #include "math.glsl"
 #include "ray.propagate.glsl"
 
-layout(scalar) uniform DispatchParams {
+uniform DispatchParams {
     uint batchSize;
 };
 
-layout(scalar) uniform TraceParams {
+uniform TraceParams {
     uvec2 medium;
     int objectId;
 

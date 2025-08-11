@@ -3,7 +3,7 @@
 
 #include "ray.glsl"
 
-layout(scalar) writeonly buffer TrackBuffer {
+writeonly buffer TrackBuffer {
     uint n[TRACK_COUNT];
     ResultCode code[TRACK_COUNT];
 

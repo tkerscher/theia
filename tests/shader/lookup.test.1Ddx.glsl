@@ -2,10 +2,10 @@
 
 layout(local_size_x = 32) in;
 
-layout(scalar) buffer writeonly ValueOut{ float value[]; };
-layout(scalar) buffer writeonly DerivOut{ float deriv[]; };
+buffer writeonly ValueOut{ float value[]; };
+buffer writeonly DerivOut{ float deriv[]; };
 
-layout(push_constant) uniform Push{
+layout(scalar, push_constant) uniform Push{
     Table1D table;
     float normalization; //i.e. total invocations
 } push;

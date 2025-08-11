@@ -9,10 +9,10 @@ struct Query {
     float wavelength;
 };
 
-layout(scalar) readonly buffer QueryBuffer{ Query q[]; };
-layout(scalar) writeonly buffer ResultBuffer{ vec3 r[]; };
+readonly buffer QueryBuffer{ Query q[]; };
+writeonly buffer ResultBuffer{ vec3 r[]; };
 
-layout(push_constant) uniform Scene {
+layout(scalar, push_constant) uniform Scene {
     uvec2 mat;
 } scene;
 

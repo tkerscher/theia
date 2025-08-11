@@ -3,7 +3,7 @@
 
 #include "wavelengthsource.common.glsl"
 
-layout(scalar) uniform WavelengthParams {
+uniform WavelengthParams {
     float lam_min;
     float lam_max;
     float contrib;

@@ -4,7 +4,7 @@
 #include "math.glsl"
 #include "util.sample.glsl"
 
-layout(scalar) uniform CameraParams {
+uniform CameraParams {
     float width;
     float height; //length
     vec3 offset;

@@ -5,7 +5,7 @@
 
 #define PHILOX_ITERATION 10
 
-layout(scalar) uniform PhiloxParams {
+uniform PhiloxParams {
     uvec2 key;
     uvec4 baseCount;
 } philoxParams;

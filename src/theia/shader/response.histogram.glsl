@@ -4,11 +4,11 @@
 struct Histogram {
     float bins[N_BINS];
 };
-layout(scalar) writeonly buffer HistogramOut {
+writeonly buffer HistogramOut {
     Histogram histsOut[];   
 };
 
-layout(scalar) uniform ResponseParams {
+uniform ResponseParams {
     float t0;
     float binSize;
 } responseParams;

@@ -3,7 +3,7 @@
 
 #include "math.glsl"
 
-layout(scalar) uniform TargetParams {
+uniform TargetParams {
     float width;
     float height; //length
     vec3 offset;

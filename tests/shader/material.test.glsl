@@ -25,9 +25,9 @@ struct Result {
 };
 
 // TODO: Figure out how I can apply readonly here...
-layout(scalar) buffer QueryBuffer{ Query queries[]; };
-layout(scalar) writeonly buffer Results{ Result results[]; };
-layout(scalar) writeonly buffer Flags{ uint32_t flags[]; };
+buffer QueryBuffer{ Query queries[]; };
+writeonly buffer Results{ Result results[]; };
+writeonly buffer Flags{ uint32_t flags[]; };
 
 Result sampleMedium(const Medium medium, float lambda, float theta, float eta) {
     MediumConstants constants = lookUpMedium(medium, lambda);

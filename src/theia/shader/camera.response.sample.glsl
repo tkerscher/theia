@@ -15,7 +15,7 @@ layout(local_size_x = BLOCK_SIZE) in;
 #include "response.glsl"
 
 //output queue
-layout(scalar) writeonly buffer QueueOut {
+writeonly buffer QueueOut {
     float posX[QUEUE_SIZE];
     float posY[QUEUE_SIZE];
     float posZ[QUEUE_SIZE];

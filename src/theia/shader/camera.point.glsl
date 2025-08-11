@@ -4,7 +4,7 @@
 #include "math.glsl"
 #include "util.sample.glsl"
 
-layout(scalar) uniform CameraParams {
+uniform CameraParams {
     vec3 position;
     float timeDelta;
 } cameraParams;

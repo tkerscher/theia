@@ -27,17 +27,17 @@ layout(local_size_x = BATCH_SIZE) in;
 #endif
 
 //output queue
-layout(scalar) writeonly buffer LightQueueOut {
+writeonly buffer LightQueueOut {
     uint sampleCount;
     LightSourceQueue data;
 } lightQueue;
-layout(scalar) writeonly buffer PhotonQueueOut {
+writeonly buffer PhotonQueueOut {
     uint sampleCount;
     WavelengthQueue data;
 } photonQueue;
 
 //sample params
-layout(scalar) uniform SampleParams {
+uniform SampleParams {
     uint count;
     uint baseCount;
 

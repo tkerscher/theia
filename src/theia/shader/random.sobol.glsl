@@ -3,7 +3,7 @@
 
 #include "random.util.glsl"
 
-layout(scalar) uniform SobolParams {
+uniform SobolParams {
     uint seed;
     uint offset;
 } sobolParams;

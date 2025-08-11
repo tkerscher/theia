@@ -4,9 +4,9 @@ layout(local_size_x = 32) in;
 //rng
 #include "rng.glsl"
 
-layout(scalar) writeonly buffer Samples { float x[]; };
+writeonly buffer Samples { float x[]; };
 
-layout(push_constant) uniform PushConstant {
+layout(scalar, push_constant) uniform PushConstant {
     float n;
     float a;
     float b;

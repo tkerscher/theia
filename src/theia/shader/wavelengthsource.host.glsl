@@ -3,7 +3,7 @@
 
 #include "wavelengthsource.queue.glsl"
 
-layout(scalar) readonly buffer WavelengthQueueIn {
+readonly buffer WavelengthQueueIn {
     WavelengthQueue queue;
 } wavelengthQueueIn;
 

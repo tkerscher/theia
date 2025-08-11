@@ -3,7 +3,7 @@
 
 #include "ray.glsl"
 
-layout(scalar) writeonly buffer Statistics {
+writeonly buffer Statistics {
     uint64_t created;
     uint64_t scattered;
     uint64_t hit;

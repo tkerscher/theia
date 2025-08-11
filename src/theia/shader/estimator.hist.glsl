@@ -17,17 +17,17 @@ shared float localHist[N_BINS];
 struct Histogram {
     float bins[N_BINS];
 };
-layout(scalar) writeonly buffer HistogramOut {
+writeonly buffer HistogramOut {
     Histogram histsOut[];
 };
 
-layout(scalar) readonly buffer ValueIn {
+readonly buffer ValueIn {
     uint valueCount;
     float value[VALUE_QUEUE_SIZE];
     float time[VALUE_QUEUE_SIZE];
 };
 
-layout(scalar) uniform Parameters {
+uniform Parameters {
     float t0;
     float binSize;
 };

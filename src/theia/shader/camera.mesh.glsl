@@ -6,7 +6,7 @@
 #include "scene.types.glsl"
 #include "util.sample.glsl"
 
-layout(scalar) uniform CameraParams {
+uniform CameraParams {
     uvec2 verticesAddress;
     uvec2 indicesAddress;
     uint triangleCount;

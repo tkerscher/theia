@@ -1,7 +1,7 @@
 #ifndef _INCLUDE_RESPONSE_STORE_TIME
 #define _INCLUDE_RESPONSE_STORE_TIME
 
-layout(scalar) writeonly buffer ValueQueueOut {
+writeonly buffer ValueQueueOut {
     uint count;
     float time[VALUE_QUEUE_SIZE];
     #ifdef RESPONSE_STORE_OBJECT_ID

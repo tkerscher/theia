@@ -5,7 +5,7 @@ layout(local_size_x = 4, local_size_y = 4) in;
 // let's use a image since it has an easier api
 layout(binding = 0, r32f) uniform writeonly image2D outputImage;
 
-layout(push_constant) uniform PushConstant {
+layout(scalar, push_constant) uniform PushConstant {
     Table2D table;
     float normalization; //i.e. total invocations per dim
 } push;

@@ -11,7 +11,7 @@
  * Parameterization of the light yield from a electro-magnetic or hadronic
  * cascade or shower as described in the paper above.
 */
-layout(scalar) uniform CascadeParams {
+uniform CascadeParams {
     //geometric properties
     vec3 startPosition;
     float startTime;

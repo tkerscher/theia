@@ -54,7 +54,7 @@ struct Result {
     CompressedTargetSample hit;
     bool occluded;
 };
-layout(scalar) writeonly buffer ResultBuffer{ Result r[]; };
+writeonly buffer ResultBuffer{ Result r[]; };
 
 layout(scalar, push_constant) uniform Push {
     vec3 minObserver;

@@ -1,7 +1,7 @@
 #ifndef _INCLUDE_LIGHTSOURCE_TARGET_POINT
 #define _INCLUDE_LIGHTSOURCE_TARGET_POINT
 
-layout(scalar) uniform LightTargetParams {
+uniform LightTargetParams {
     vec3 position;
 } lightTargetParams;
 

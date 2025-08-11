@@ -5,7 +5,7 @@
 #include "math.glsl"
 #include "material.glsl"
 
-layout(scalar) uniform LightParams {
+uniform LightParams {
     vec3 trackStart;
     float startTime;
 

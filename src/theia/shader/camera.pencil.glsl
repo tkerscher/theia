@@ -1,7 +1,7 @@
 #ifndef _INCLUDE_CAMERARAYSOURCE_PENCIL
 #define _INCLUDE_CAMERARAYSOURCE_PENCIL
 
-layout(scalar) uniform CameraParams {
+uniform CameraParams {
     vec3 rayPosition;
     vec3 rayDirection;
     

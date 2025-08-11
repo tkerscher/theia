@@ -4,10 +4,10 @@ layout(local_size_x = 32) in;
 //rng
 #include "rng.glsl"
 
-layout(scalar) writeonly buffer Values { float x[]; };
-layout(scalar) writeonly buffer Contribs { float c[]; };
+writeonly buffer Values { float x[]; };
+writeonly buffer Contribs { float c[]; };
 
-layout(push_constant) uniform PushConstant {
+layout(scalar, push_constant) uniform PushConstant {
     float n;
     float a;
     float b;
