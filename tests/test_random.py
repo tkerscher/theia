@@ -14,6 +14,11 @@ shader = """\
 float random_s(uint stream, uint i) {
     return 10000.0 * stream + i;
 }
+
+vec2 random2D_s(uint stream, uint dim) {
+    float v = 1e4 * stream + dim;
+    return vec2(v, -v);
+}
 """
 
 
@@ -34,12 +39,29 @@ def test_rngSink():
     ret = pl.RetrieveTensorStage(sink.tensor)
     pl.runPipeline([gen, sink, ret])
 
-    samples = ret.view(0)
+    samples = ret.view(0).reshape(sink.shape).squeeze()
     streams = (np.arange(250) + 12) * 10000.0
     counts = np.arange(800) + 316
     expected = streams[:, None] + counts[None:,]
 
-    assert np.all(samples == expected.flatten())
+    assert np.all(samples == expected)
+
+
+def test_rngSink_2D():
+    gen = DebugRNG()
+    sink = theia.random.RNGBufferSink(
+        gen, 250, 800, baseStream=12, baseCount=316, sampleDim=2
+    )
+    retr = pl.RetrieveTensorStage(sink.tensor)
+    pl.runPipeline([gen, sink, retr])
+
+    samples = retr.view(0).reshape(sink.shape)
+    streams = (np.arange(250) + 12) * 10000.0
+    counts = np.arange(800) + 316
+    expected = streams[:, None] + counts[None:,]
+    expected = np.stack((expected, -expected), -1)
+
+    assert np.all(samples == expected)
 
 
 def test_philox():

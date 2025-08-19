@@ -60,6 +60,9 @@ class RNGBufferSink(PipelineStage):
         Index of first stream
     baseCount: int, default=0
         Offset into each stream
+    sampleDim: int, default=1
+        Dimensionality of the drawn samples. Currently only one and two
+        dimensions supported
     blockSize: (float, float, float), default=(32, 4, 16)
         Dimension of a single work group in the shape of
         (STREAMS, BATCHES, DRAWS PER BATCH)
@@ -107,15 +110,20 @@ class RNGBufferSink(PipelineStage):
         *,
         baseStream: int = 0,
         baseCount: int = 0,
+        sampleDim: int = 1,
         blockSize: tuple[int, int, int] = (32, 4, 16),
         code: bytes | None = None,
     ) -> None:
         super().__init__({"Params": self.Params})
+        # check params
+        if not 1 <= sampleDim <= 2:
+            raise ValueError("Unsupported sample dimension requested!")
         # save params
-        capacity = streams * samples
+        capacity = streams * samples * sampleDim
         self._capacity = capacity
         self._generator = generator
         self._blockSize = blockSize
+        self._shape = (streams, samples, sampleDim)
         self.setParams(
             baseStream=baseStream,
             baseCount=baseCount,
@@ -128,6 +136,7 @@ class RNGBufferSink(PipelineStage):
             preamble = createPreamble(
                 BATCH_SIZE=blockSize[1],
                 DRAWS=blockSize[2],
+                SAMPLE_DIM=sampleDim,
                 PARALLEL_STREAMS=blockSize[0],
             )
             headers = {"rng.glsl": generator.sourceCode}
@@ -163,6 +172,11 @@ class RNGBufferSink(PipelineStage):
     def generator(self) -> RNG:
         """The underlying random number generator samples are drawn from"""
         return self._generator
+
+    @property
+    def shape(self) -> tuple[float, float, float]:
+        """Shape of the sample buffer"""
+        return self._shape
 
     @property
     def streams(self) -> int:
