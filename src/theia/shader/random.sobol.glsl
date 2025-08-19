@@ -8,8 +8,6 @@ uniform SobolParams {
     uint offset;
 } sobolParams;
 
-//Implementation by Blender Foundation (2011-2022) licensed under Apache-2.0
-
 /*
  * A shuffled, Owen-scrambled Sobol sampler, implemented with the
  * techniques from the paper "Practical Hash-based Owen Scrambling"
@@ -20,47 +18,60 @@ uniform SobolParams {
  * in Burley's paper.
  */
 
-const uint sobol_burley_table[2][32] = {
-  {
-    0x00000001, 0x00000002, 0x00000004, 0x00000008,
-    0x00000010, 0x00000020, 0x00000040, 0x00000080,
-    0x00000100, 0x00000200, 0x00000400, 0x00000800,
-    0x00001000, 0x00002000, 0x00004000, 0x00008000,
-    0x00010000, 0x00020000, 0x00040000, 0x00080000,
-    0x00100000, 0x00200000, 0x00400000, 0x00800000,
-    0x01000000, 0x02000000, 0x04000000, 0x08000000,
-    0x10000000, 0x20000000, 0x40000000, 0x80000000,
-  },
-  {
-    0x00000001, 0x00000003, 0x00000005, 0x0000000f,
-    0x00000011, 0x00000033, 0x00000055, 0x000000ff,
-    0x00000101, 0x00000303, 0x00000505, 0x00000f0f,
-    0x00001111, 0x00003333, 0x00005555, 0x0000ffff,
-    0x00010001, 0x00030003, 0x00050005, 0x000f000f,
-    0x00110011, 0x00330033, 0x00550055, 0x00ff00ff,
-    0x01010101, 0x03030303, 0x05050505, 0x0f0f0f0f,
-    0x11111111, 0x33333333, 0x55555555, 0xffffffff,
-  }/*,
-  {
-    0x00000001, 0x00000003, 0x00000006, 0x00000009,
-    0x00000017, 0x0000003a, 0x00000071, 0x000000a3,
-    0x00000116, 0x00000339, 0x00000677, 0x000009aa,
-    0x00001601, 0x00003903, 0x00007706, 0x0000aa09,
-    0x00010117, 0x0003033a, 0x00060671, 0x000909a3,
-    0x00171616, 0x003a3939, 0x00717777, 0x00a3aaaa,
-    0x01170001, 0x033a0003, 0x06710006, 0x09a30009,
-    0x16160017, 0x3939003a, 0x77770071, 0xaaaa00a3,
-  },
-  {
-    0x00000001, 0x00000003, 0x00000004, 0x0000000a,
-    0x0000001f, 0x0000002e, 0x00000045, 0x000000c9,
-    0x0000011b, 0x000002a4, 0x0000079a, 0x00000b67,
-    0x0000101e, 0x0000302d, 0x00004041, 0x0000a0c3,
-    0x0001f104, 0x0002e28a, 0x000457df, 0x000c9bae,
-    0x0011a105, 0x002a7289, 0x0079e7db, 0x00b6dba4,
-    0x0100011a, 0x030002a7, 0x0400079e, 0x0a000b6d,
-    0x1f001001, 0x2e003003, 0x45004004, 0xc900a00a,
-  },*/
+ //Based on the implementation by Blender Foundation (2011-2022) licensed under
+ //Apache-2.0 and the supplementary code of the above paper
+
+const uint sobolDirections[2][32] = {
+    {
+        0x80000000, 0x40000000, 0x20000000, 0x10000000,
+        0x08000000, 0x04000000, 0x02000000, 0x01000000,
+        0x00800000, 0x00400000, 0x00200000, 0x00100000,
+        0x00080000, 0x00040000, 0x00020000, 0x00010000,
+        0x00008000, 0x00004000, 0x00002000, 0x00001000,
+        0x00000800, 0x00000400, 0x00000200, 0x00000100,
+        0x00000080, 0x00000040, 0x00000020, 0x00000010,
+        0x00000008, 0x00000004, 0x00000002, 0x00000001
+    },
+    {
+        0x80000000, 0xC0000000, 0xA0000000, 0xF0000000,
+        0x88000000, 0xCC000000, 0xAA000000, 0xFF000000,
+        0x80800000, 0xC0C00000, 0xA0A00000, 0xF0F00000,
+        0x88880000, 0xCCCC0000, 0xAAAA0000, 0xFFFF0000,
+        0x80008000, 0xC000C000, 0xA000A000, 0xF000F000,
+        0x88008800, 0xCC00CC00, 0xAA00AA00, 0xFF00FF00,
+        0x80808080, 0xC0C0C0C0, 0xA0A0A0A0, 0xF0F0F0F0,
+        0x88888888, 0xCCCCCCCC, 0xAAAAAAAA, 0xFFFFFFFF
+    }/*,
+    {
+        0x80000000, 0xC0000000, 0x60000000, 0x90000000,
+        0xE8000000, 0x5C000000, 0x8E000000, 0xC5000000,
+        0x68800000, 0x9CC00000, 0xEE600000, 0x55900000,
+        0x80680000, 0xC09C0000, 0x60EE0000, 0x90550000,
+        0xE8808000, 0x5CC0C000, 0x8E606000, 0xC5909000,
+        0x6868E800, 0x9C9C5C00, 0xEEEE8E00, 0x5555C500,
+        0x8000E880, 0xC0005CC0, 0x60008E60, 0x9000C590,
+        0xE8006868, 0x5C009C9C, 0x8E00EEEE, 0xC5005555
+    },
+    {
+        0x80000000, 0xC0000000, 0x20000000, 0x50000000,
+        0xF8000000, 0x74000000, 0xA2000000, 0x93000000,
+        0xD8800000, 0x25400000, 0x59E00000, 0xE6D00000,
+        0x78080000, 0xB40C0000, 0x82020000, 0xC3050000,
+        0x208F8000, 0x51474000, 0xFBEA2000, 0x75D93000,
+        0xA0858800, 0x914E5400, 0xDBE79E00, 0x25DB6D00,
+        0x58800080, 0xE54000C0, 0x79E00020, 0xB6D00050,
+        0x800800F8, 0xC00C0074, 0x200200A2, 0x50050093
+    },
+    {
+        0x80000000, 0x40000000, 0x20000000, 0xB0000000,
+        0xF8000000, 0xDC000000, 0x7A000000, 0x9D000000,
+        0x5A800000, 0x2FC00000, 0xA1600000, 0xF0B00000,
+        0xDA880000, 0x6FC40000, 0x81620000, 0x40BB0000,
+        0x22878000, 0xB3C9C000, 0xFB65A000, 0xDDB2D000,
+        0x78022800, 0x9C0B3C00, 0x5A0FB600, 0x2D0DDB00,
+        0xA2878080, 0xF3C9C040, 0xDB65A020, 0x6DB2D0B0,
+        0x800228F8, 0x400B3CDC, 0x200FB67A, 0xB00DDB9D
+    }*/
 };
 
 /*
@@ -87,7 +98,7 @@ uint hp_mix32(uint n) {
  * This is essentially the Laine-Karras permutation, but much higher
  * quality.  See https://psychopath.io/post/2021_01_30_building_a_better_lk_hash
  */
-uint reversed_bit_owen(uint n, uint seed) {
+uint lk_hash(uint n, uint seed) {
   n ^= n * 0x3D20ADEA;
   n += seed;
   n *= (seed >> 16) | 1;
@@ -97,154 +108,56 @@ uint reversed_bit_owen(uint n, uint seed) {
   return n;
 }
 
+//hash combine from Boost
+uint combineHash(uint seed, uint v) {
+    return seed ^ (v + 0x9E3779B9 + (seed << 6) + (seed >> 2));
+}
+
 /*
- * Computes a single dimension of a sample from an Owen-scrambled
- * Sobol sequence.  This is used in the main sampling functions,
- * sobol_burley_sample_#D(), below.
- *
- * - rev_bit_index: the sample index, with reversed order bits.
- * - dimension:     the sample dimension.
- * - scramble_seed: the Owen scrambling seed.
- *
- * Note that the seed must be well randomized before being
- * passed to this function.
- */
-float sobol_burley(uint rev_bit_index, uint dimension, uint scramble_seed)
-{
+ * Calculates the Sobol bit pattern for the given dimension and index
+*/
+uint sobolBits(uint index, uint dim) {
+    //fast path for dim 0. Because of padding this will be used most of the time
+    //justifying the branching
+    if (dim == 0) return bitfieldReverse(index);
+    // if (dim > 4) return 0;
+
+    //apply direction vectors
     uint result = 0;
-  
-    if (dimension == 0) {
-        // Fast-path for dimension 0, which is just Van der corput.
-        // This makes a notable difference in performance since we reuse
-        // dimensions for padding, and dimension 0 is reused the most.
-        result = bitfieldReverse(rev_bit_index);
-    } else {
-        uint i = 0;
-        while (rev_bit_index != 0) {
-            uint j = findMSB(rev_bit_index);
-            result ^= sobol_burley_table[dimension][i + j];
-            i += j + 1;
-            
-            // We can't do "<<= j + 1" because that can overflow the shift
-            // operator, which doesn't do what we need on at least x86.
-            rev_bit_index <<= j;
-            rev_bit_index <<= 1;
-        }
+    uint i = 0;
+    while (index != 0) {
+        uint j = findLSB(index); //count trailling zeros
+        result ^= sobolDirections[dim][i + j];
+        i += j + 1;
+        //TODO: Blender source code mentions splitting this in two is necessary
+        //      for x86, but we might do not need it
+        index >>= j;
+        index >>= 1;
     }
-
-    // Apply Owen scrambling.
-    result = bitfieldReverse(reversed_bit_owen(result, scramble_seed));
-
-    return normalizeUint(result);
+    return result;
 }
-
-/*
- * Computes a 1D Owen-scrambled and shuffled Sobol sample.
- *
- * `index` is the index of the sample in the sequence.
- *
- * `dimension` is which dimensions of the sample you want to fetch.  Note
- * that different 1D dimensions are uncorrelated.  For samples with > 1D
- * stratification, use the multi-dimensional sampling methods below.
- *
- * `seed`: different seeds produce statistically independent,
- * uncorrelated sequences.
- */
-float sobol_burley_sample_1D(uint index, uint dimension, uint seed)
-{
-    // Include the dimension in the seed, so we get decorrelated
-    // sequences for different dimensions via shuffling.
-    seed ^= hp_mix32(dimension);
-    
-    // Shuffle.
-    index = reversed_bit_owen(bitfieldReverse(index), seed ^ 0xBFF95BFE);
-    
-    return sobol_burley(index, 0, seed ^ 0x635C77BD);
+//Owen scrambling
+uint nestedScramble(uint x, uint seed) {
+    x = bitfieldReverse(x);
+    x = lk_hash(x, seed);
+    x = bitfieldReverse(x);
+    return x;
 }
-
-/*
- * Computes a 2D Owen-scrambled and shuffled Sobol sample.
- *
- * `dimension_set` is which two dimensions of the sample you want to
- * fetch.  For example, 0 is the first two, 1 is the second two, etc.
- * The dimensions within a single set are stratified, but different sets
- * are uncorrelated.
- *
- * See sobol_burley_sample_1D for further usage details.
- */
-vec2 sobol_burley_sample_2D(uint index, uint dimension_set, uint seed) {
-    // Include the dimension set in the seed, so we get decorrelated
-    // sequences for different dimension sets via shuffling.
-    seed ^= hp_mix32(dimension_set);
-
-    // Shuffle.
-    index = reversed_bit_owen(bitfieldReverse(index), seed ^ 0xF8ADE99A);
-
-    return vec2(
-        sobol_burley(index, 0, seed ^ 0xE0AAAF76),
-        sobol_burley(index, 1, seed ^ 0x94964D4E)
-    );
+float scrambledSobol(uint scrambled_index, uint dim, uint seed) {
+    uint bits = sobolBits(scrambled_index, dim);
+    seed = combineHash(seed, dim);
+    bits = nestedScramble(bits, seed);
+    return normalizeUint(bits);
 }
-
-/*
- * Computes a 3D Owen-scrambled and shuffled Sobol sample.
- *
- * `dimension_set` is which three dimensions of the sample you want to
- * fetch.  For example, 0 is the first three, 1 is the second three, etc.
- * The dimensions within a single set are stratified, but different sets
- * are uncorrelated.
- *
- * See sobol_burley_sample_1D for further usage details.
- */
-// vec3 sobol_burley_sample_3D(uint index, uint dimension_set, uint seed)
-// {
-//     /* Include the dimension set in the seed, so we get decorrelated
-//     * sequences for different dimension sets via shuffling. */
-//     seed ^= hp_mix32(dimension_set);
-
-//     /* Shuffle and mask.  The masking is just for better
-//     * performance at low sample counts. */
-//     index = reversed_bit_owen(reverse_integer_bits(index), seed ^ 0xCAA726AC);
-
-//     return vec3(
-//         sobol_burley(index, 0, seed ^ 0x9E78E391),
-//         sobol_burley(index, 1, seed ^ 0x67C33241),
-//         sobol_burley(index, 2, seed ^ 0x78C395C5)
-//     );
-// }
-
-/*
- * Computes a 4D Owen-scrambled and shuffled Sobol sample.
- *
- * `dimension_set` is which four dimensions of the sample you want to
- * fetch.  For example, 0 is the first four, 1 is the second four, etc.
- * The dimensions within a single set are stratified, but different sets
- * are uncorrelated.
- *
- * See sobol_burley_sample_1D for further usage details.
- */
-// vec4 sobol_burley_sample_4D(uint index, uint dimension_set, uint seed)
-// {
-//     /* Include the dimension set in the seed, so we get decorrelated
-//     * sequences for different dimension sets via shuffling. */
-//     seed ^= hash_hp_uint(dimension_set);
-
-//     /* Shuffle and mask.  The masking is just for better
-//     * performance at low sample counts. */
-//     index = reversed_bit_owen(reverse_integer_bits(index), seed ^ 0xC2C1A055);
-
-//     return vec4(
-//         sobol_burley(index, 0, seed ^ 0x39468210),
-//         sobol_burley(index, 1, seed ^ 0xE9D8A845),
-//         sobol_burley(index, 2, seed ^ 0x5F32B482),
-//         sobol_burley(index, 3, seed ^ 0x1524CC56)
-//     );
-// }
 
 //theia random API
 
 float random_s(uint a, uint dim) {
-    return sobol_burley_sample_1D(a + sobolParams.offset, dim, sobolParams.seed);
+    //creates derivative seed using dimension to decorrelate dimensions
+    uint seed = combineHash(sobolParams.seed, hp_mix32(dim));
+    uint index = nestedScramble(a, seed); //scrambled index into Sobol sequence
+    
+    return scrambledSobol(index, 0, seed);
 }
 float random(uint a, inout uint dim) {
     float result = random_s(a, dim);
@@ -253,7 +166,14 @@ float random(uint a, inout uint dim) {
 }
 
 vec2 random2D_s(uint a, uint dim) {
-    return sobol_burley_sample_2D(a + sobolParams.offset, dim, sobolParams.seed);
+    //creates derivative seed using dimension to decorrelate dimensions
+    uint seed = combineHash(sobolParams.seed, hp_mix32(dim));
+    uint index = nestedScramble(a, seed); //scrambled index into Sobol sequence
+
+    return vec2(
+        scrambledSobol(index, 0, seed),
+        scrambledSobol(index, 1, seed)
+    );
 }
 vec2 random2D(uint a, inout uint dim) {
     vec2 result = random2D_s(a, dim);
