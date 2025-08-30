@@ -42,7 +42,6 @@ __all__ = [
     "Medium",
     "MediumModel",
     "SellmeierEquation",
-    "serializeMedium",
     "WaterBaseModel",
 ]
 
@@ -408,6 +407,7 @@ class Medium:
 
         np.savez(file, **arrays)
 
+    @staticmethod
     def load(file, *, name: str = "unnamed") -> Medium:
         """
         Loads the serialized medium from the given file or path.
