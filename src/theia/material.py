@@ -5,6 +5,7 @@ import warnings
 
 import hephaistos as hp
 import numpy as np
+from scipy.integrate import cumulative_simpson
 from scipy.stats.sampling import NumericalInversePolynomial
 
 from ctypes import Structure, c_float, c_uint32, c_uint64, sizeof
@@ -28,6 +29,7 @@ from typing import Final
 
 
 __all__ = [
+    "checkMedium",
     "loadMaterials",
     "parseMaterialFlags",
     "saveMaterials",
@@ -437,6 +439,104 @@ class Medium:
             setattr(medium, prop, data.get(prop))
 
         return medium
+
+
+def checkMedium(medium: Medium, *, raises: bool = True, rtol=5e-3, atol=1e-5) -> bool:
+    """
+    Runs a series of basic tests on the given medium for physical plausibility
+    and returns `True` if it is successfull. On failure, if `raises` is `True`
+    raises an `AssertionError` or returns `False` otherwise.
+
+    Parameters
+    ----------
+    medium: Medium
+        Medium to check
+    raises: bool, default=True
+        Whether to raise an error on failure
+    rtol: float, default=5e-3
+        Relative tolerance when comparing numerical estimated values to medium
+    atol: float, default=1e-5
+        Absolute tolerance when comparing numerical estimated values to medium
+
+    Note
+    ----
+    If the medium is only sparsely sampled you might need to increase the
+    tolerances. This does not necessarily mean that the model is wrong, but it
+    might be worth to double check.
+    """
+    # bit ugly, but nicer than duplicating the same if/else over and over
+    try:
+        # fmt: off
+        assert medium.lambda_max >= medium.lambda_min
+        if medium.refractive_index is not None:
+            assert medium.group_velocity is not None, "Refractive index was specified but no group velocity!"
+            assert np.ndim(medium.refractive_index) == 1, "Refractive index must be 1D!"
+            assert np.min(medium.refractive_index) >= 1.0, "Refractive index must be at least 1.0!"
+        if medium.group_velocity is not None:
+            assert medium.refractive_index is not None, "Group velocity was specified, but no refractive index!"
+            assert np.ndim(medium.group_velocity) == 1, "Group velocity must be 1D!"
+            # c / vg = n - lambda * (d_n/d_lambda)
+            Nn = np.size(medium.refractive_index)
+            n = medium.refractive_index
+            lam_n = np.linspace(medium.lambda_min, medium.lambda_max, Nn)
+            dl = (medium.lambda_max - medium.lambda_min) / (Nn - 1)
+            dn_dl = np.gradient(n, dl)
+            vg = speed_of_light / (n - lam_n * dn_dl)
+            Ng = np.size(medium.group_velocity)
+            lam_g = np.linspace(medium.lambda_min, medium.lambda_max, Ng)
+            vg = np.interp(lam_g, lam_n, vg)
+            assert np.allclose(vg, medium.group_velocity, rtol=rtol, atol=atol), "Group velocity does not match refractive index!"
+        if medium.absorption_coef is not None:
+            assert np.ndim(medium.absorption_coef) == 1, "Absorption coefficient must be 1D!"
+            assert np.min(medium.absorption_coef) >= 0.0, "Absorption coefficient must not be negative!"
+        if medium.scattering_coef is not None:
+            assert np.ndim(medium.scattering_coef) == 1, "Scattering coefficient must be 1D!"
+            assert np.min(medium.scattering_coef) >= 0.0, "Scattering coefficient must not be negative!"
+        if medium.phase_sampling is not None:
+            assert np.ndim(medium.phase_sampling) == 1, "Phase sampling function must be 1D!"
+            assert medium.log_phase_function is not None, "Phase sampling is provided, but no phase function!"
+            f = medium.phase_sampling
+            assert np.all((f >= -1) & (f <= 1)), "Domain of phase sampling must be in [-1, 1]!"
+        if medium.log_phase_function is not None:
+            assert np.ndim(medium.log_phase_function) == 1, "Phase function must be 1D!"
+            assert medium.phase_sampling is not None, "Phase function is defined, but no sampling!"
+            N = np.size(medium.log_phase_function)
+            y = np.exp(medium.log_phase_function)
+            dx = 2.0 / (N - 1)
+            cdf = 2 * np.pi * cumulative_simpson(y, dx=dx, initial=0)
+            assert np.allclose(cdf[-1], 1.0, rtol=rtol, atol=atol), "Phase function integrate over solid angles to 1!"
+            u = np.linspace(-1, 1, N)
+            quantiles = np.interp(medium.phase_sampling, u, cdf)
+            # sampling is fine in both directions, i.e. both u and 1-u are fine
+            # this will only flip the sign in the difference -> use abs
+            # if the sampling table is correct, the quantiles should be equidistant
+            dq = np.abs(np.diff(quantiles))
+            du = 1 / len(dq)
+            assert np.allclose(dq, du, rtol=rtol, atol=atol), "Phase sampling function does not reproduce phase function!"
+        if medium.phase_m12 is not None:
+            assert np.ndim(medium.phase_m12) == 1, "Phase function m12 must be 1D!"
+            m = medium.phase_m12
+            assert np.all((m >= -1.0) & (m <= 1.0)), "Mueller matrix must be normalized!"
+        if medium.phase_m22 is not None:
+            assert np.ndim(medium.phase_m22) == 1, "Phase function m22 must be 1D!"
+            m = medium.phase_m22
+            assert np.all((m >= -1.0) & (m <= 1.0)), "Mueller matrix must be normalized!"
+        if medium.phase_m33 is not None:
+            assert np.ndim(medium.phase_m33) == 1, "Phase function m33 must be 1D!"
+            m = medium.phase_m33
+            assert np.all((m >= -1.0) & (m <= 1.0)), "Mueller matrix must be normalized!"
+        if medium.phase_m34 is not None:
+            assert np.ndim(medium.phase_m34) == 1, "Phase function m34 must be 1D!"
+            m = medium.phase_m34
+            assert np.all((m >= -1.0) & (m <= 1.0)), "Mueller matrix must be normalized!"
+        # fmt: on
+    except AssertionError as err:
+        if raises:
+            raise err
+        else:
+            return False
+    # No errors
+    return True
 
 
 class MaterialFlags(IntFlag):

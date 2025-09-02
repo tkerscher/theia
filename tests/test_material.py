@@ -8,6 +8,14 @@ import theia.units as u
 import warnings
 from ctypes import Structure, c_uint64, c_float
 from scipy.integrate import quad
+from theia.testing import WaterTestModel
+
+
+def test_checkMedium():
+    medium = WaterTestModel().createMedium()
+    assert theia.material.checkMedium(medium)
+    # TODO: Ideally, we would check if faulty media would trigger this,
+    #       but that's for a later day (maybe)
 
 
 def test_NumericalPhaseSamplingMixin():
