@@ -1,3 +1,5 @@
+import pytest
+
 import numpy as np
 import hephaistos as hp
 import os.path
@@ -6,6 +8,43 @@ import theia.units as u
 import warnings
 from ctypes import Structure, c_uint64, c_float
 from scipy.integrate import quad
+
+
+def test_NumericalPhaseSamplingMixin():
+    # test with a simple model where we know the exact CDF inversion
+    class Model(theia.material.NumericalPhaseSamplingMixin):
+        def phase_function(self, cos_theta):
+            u = np.asarray(cos_theta)
+            return 4 * np.pi / 3 * u**2
+
+        def ppf(self, eta):
+            return np.cbrt(2 * eta - 1)
+
+    x = np.linspace(0, 1, 50)
+    model = Model()
+    assert np.allclose(model.ppf(x), model.phase_sampling(x))
+
+    # Alternatively we can use log_phase_function
+    class LogModel(theia.material.NumericalPhaseSamplingMixin):
+        def log_phase_function(self, cos_theta):
+            # p(x) ~ exp(u)
+            u = np.asarray(cos_theta)
+            norm = 2 * np.pi * (np.e - 1 / np.e)
+            return u - np.log(norm)
+
+        def ppf(self, eta):
+            return np.log(eta * (np.e - 1 / np.e) + 1 / np.e)
+
+    model = LogModel()
+    assert np.allclose(model.ppf(x), model.phase_sampling(x))
+
+    # If we do not provide a phase function, it should throw an error
+    class ErrModel(theia.material.NumericalPhaseSamplingMixin):
+        pass
+
+    with pytest.raises(NotImplementedError):
+        model = ErrModel()
+        model.phase_sampling(x)
 
 
 def test_BK7Model(dataDir, testDataDir):

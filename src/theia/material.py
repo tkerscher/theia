@@ -5,7 +5,7 @@ import warnings
 
 import hephaistos as hp
 import numpy as np
-from scipy.interpolate import CubicSpline
+from scipy.stats.sampling import NumericalInversePolynomial
 
 from ctypes import Structure, c_float, c_uint32, c_uint64, sizeof
 from types import MappingProxyType
@@ -41,6 +41,7 @@ __all__ = [
     "MaterialStore",
     "Medium",
     "MediumModel",
+    "NumericalPhaseSamplingMixin",
     "SellmeierEquation",
     "WaterBaseModel",
 ]
@@ -1256,6 +1257,61 @@ class MediumModel:
         )
 
 
+class NumericalPhaseSamplingMixin:
+    """
+    Mixin class providing a phase sampling function by numerical inversion of
+    either the `phase_function` or `log_phase_function` method. The former takes
+    precedence. Optionally caches the underlying sampler instance. The cache can
+    be invalidated via a call to `_invalidatePhaseSampler`.
+
+    Parameters
+    ----------
+    cache: bool, default=True
+        Whether to cache the phase sampler.
+    """
+
+    class _DistWrapper:
+        """Wraps `phase_function` method for use with scipy"""
+
+        def __init__(self, model) -> None:
+            self._model = model
+
+        def pdf(self, x: float) -> float:
+            return self._model.phase_function(x).item()
+
+    class _LogDistWrapper:
+        """Wraps `log_phase_function` method for use with scipy"""
+
+        def __init__(self, model) -> None:
+            self._model = model
+
+        def logpdf(self, x: float) -> float:
+            return self._model.log_phase_function(x).item()
+
+    def __init__(self, cache: bool = True) -> None:
+        self._cachePhaseSamples = cache
+        self._phaseSampler = None
+
+    def _invalidatePhaseSampler(self) -> None:
+        """Marks the cached phase sampler as invalid"""
+        self._phaseSampler = None
+
+    def phase_sampling(self, eta: ArrayLike) -> NDArray:
+        if self._phaseSampler is not None:
+            sampler = self._phaseSampler
+        else:
+            if "phase_function" in dir(self):
+                dist = NumericalPhaseSamplingMixin._DistWrapper(self)
+            elif "log_phase_function" in dir(self):
+                dist = NumericalPhaseSamplingMixin._LogDistWrapper(self)
+            else:
+                raise NotImplementedError("Model provides no phase function!")
+            sampler = NumericalInversePolynomial(dist, domain=(-1, 1))
+            if self._cachePhaseSamples:
+                self._phaseSampler = sampler
+        return sampler.ppf(eta)
+
+
 class SellmeierEquation:
     """
     The Sellmeier equation is a empirical model of the refractive index as a
@@ -1419,7 +1475,7 @@ class HenyeyGreensteinPhaseFunction:
             ) / (2.0 * self.g)
 
 
-class FournierForandPhaseFunction:
+class FournierForandPhaseFunction(NumericalPhaseSamplingMixin):
     """
     Approximation of scattering in an ensemble of spherical particles with an
     refractive index n following a hyperbolic (Junge) size distribution
@@ -1431,10 +1487,9 @@ class FournierForandPhaseFunction:
     """
 
     def __init__(self, n: float, mu: float) -> None:
+        super().__init__()
         self._n = n
         self._mu = mu
-
-        self._update()
 
     @property
     def n(self) -> float:
@@ -1444,7 +1499,7 @@ class FournierForandPhaseFunction:
     @n.setter
     def n(self, value: float) -> None:
         self._n = value
-        self._update()
+        self._invalidatePhaseSampler()
 
     @property
     def mu(self) -> float:
@@ -1454,13 +1509,13 @@ class FournierForandPhaseFunction:
     @mu.setter
     def mu(self, value: float) -> None:
         self._mu = value
-        self._update()
+        self._invalidatePhaseSampler()
 
     def log_phase_function(self, cos_theta: ArrayLike) -> NDArray:
         """Evaluates the log phase function for the given angles mu = cos(theta)"""
         # phase functions becomes singular at cos_theta = 1.0
         # clip close before (1 float ulp)
-        cos_theta = np.clip(cos_theta, -1.0, 1.0 - 1e-7)
+        cos_theta = np.clip(cos_theta, -1.0, 1.0 - 1e-5)
         # constants
         nu = 0.5 * (3.0 - self.mu)
         d = 2.0 * (1.0 - cos_theta) / (3.0 * (self.n - 1.0) ** 2)
@@ -1474,44 +1529,6 @@ class FournierForandPhaseFunction:
         C = (1 - d_180_nu) * (3 * x**2 - 1)
         D = 16 * np.pi * (d_180 - 1) * d_180_nu
         return np.log(A / B + C / D)
-
-    def phase_sampling(self, eta: ArrayLike) -> NDArray:
-        """
-        Samples the phase function using provided unit random numbers eta.
-        Returns the cosine of the sampled angle.
-        """
-        # we already did the heavy lifting -> just evaluate
-        # note that since the spline extrapolates, it can produce values
-        # outside [-1,1]. We expect the sampler to clamp so this actually helps
-        # to be more accurate during linear interpolating the sampling
-        # Also note that thanks to extrapolation, the divergence at
-        # cos(theta)=1.0 is no longer a problem
-        return self._sample_spline(eta)
-
-    def _update(self) -> None:
-        """Updates internal state after changing properties"""
-        # Unfortunately this phase function is rather complex
-        # While there exist a analytic integral, it's hard to invert so we'll
-        # just evaluate the integral and interpolate the inverse
-
-        # sample phase function integral
-        # note that the phase function diverges for cos(theta) = 1
-        # that's not that big of a problem, since rng never produces exactly 1
-        cos_theta = np.linspace(1.0 - 1e-7, -1.0, 2048)  # TODO: tune number of eval
-        # some constants
-        nu = 0.5 * (3.0 - self.mu)
-        d = 2.0 * (1.0 - cos_theta) / (3.0 * (self.n - 1.0) ** 2)
-        d_nu = np.float_power(d, nu)
-        d_180 = 4.0 / (3.0 * (self.n - 1.0) ** 2)
-        d_180_nu = np.float_power(d_180, nu)
-        # split up formula to be more readable
-        A = ((1 - d_nu * d) - 0.5 * (1 - d_nu) * (1 - cos_theta)) / ((1 - d) * d_nu)
-        B = ((1 - d_180_nu) * (1 - cos_theta) * cos_theta) / (
-            16 * (d_180 - 1) * d_180_nu
-        )
-        cdf = A + B
-        # fill interpolator
-        self._sample_spline = CubicSpline(cdf, cos_theta)
 
 
 class DispersionFreeMedium:
