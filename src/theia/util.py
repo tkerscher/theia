@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import importlib.resources
+import numpy as np
 import hephaistos as hp
+import importlib.resources
 
 from ctypes import Structure, c_uint32
 from hephaistos.glsl import uvec4, uvec2
@@ -9,6 +10,14 @@ from numpy.ctypeslib import as_array
 
 from numpy.typing import NDArray
 from typing import Any
+
+
+def loadCSV(file: str, *, delimiter: str | None = ",", skiprows: int = 1) -> NDArray:
+    return np.loadtxt(
+        str(importlib.resources.files("theia").joinpath(f"data/{file}")),
+        delimiter=delimiter,
+        skiprows=skiprows,
+    )
 
 
 def viewSoA(address: int, item: type[Structure], count: int) -> NDArray:

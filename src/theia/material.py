@@ -12,6 +12,7 @@ from ctypes import Structure, c_float, c_uint32, c_uint64, sizeof
 from types import MappingProxyType
 
 from theia.lookup import Table, getTableSize
+from theia.util import loadCSV
 import theia.units as u
 
 import json
@@ -1482,16 +1483,11 @@ class BK7Model(SellmeierEquation, MediumModel):
         )
         # lazily load data
         if BK7Model.TransmissionTable is None:
-            BK7Model.TransmissionTable = np.loadtxt(
-                importlib.resources.files("theia").joinpath(
-                    "data/bk7_transmission.csv"
-                ),
-                delimiter=",",
-                skiprows=2,
-            )
+            BK7Model.TransmissionTable = loadCSV("bk7_transmission.csv", skiprows=2)
 
     def absorption_coef(self, wavelength: ArrayLike) -> NDArray:
         """Returns the absorption coefficient for the given wavelengths"""
+        assert BK7Model.TransmissionTable is not None
         # we can transform the transmission measurements to absorption
         # coefficients via the Beer-Lambert law. Unfortunately, they two
         # measurements disagree a lot. So we take the average weighted by
@@ -1500,7 +1496,6 @@ class BK7Model(SellmeierEquation, MediumModel):
         # of the absorption lengths, i.e. inf -> 0
         wavelength = np.asarray(wavelength)
 
-        mu = None
         # disable error, since we'll take the log of zero
         with np.errstate(divide="ignore"):
             tau_10mm = -0.010 / np.log(BK7Model.TransmissionTable[:, 1])
