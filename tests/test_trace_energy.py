@@ -32,16 +32,20 @@ class MediumModel(
     theia.material.DispersionFreeMedium,
     theia.material.HenyeyGreensteinPhaseFunction,
     theia.material.KokhanovskyOceanWaterPhaseMatrix,
-    theia.material.MediumModel,
 ):
     def __init__(self, a, s, g, *, n=1.33, ng=1.33) -> None:
-        theia.material.DispersionFreeMedium.__init__(self, n=n, ng=ng, mu_a=a, mu_s=s)
-        theia.material.HenyeyGreensteinPhaseFunction.__init__(self, g)
-        theia.material.KokhanovskyOceanWaterPhaseMatrix.__init__(
-            self, p90=0.66, theta0=0.25, alpha=4.0, xi=25.6
+        super().__init__(
+            n=n,
+            ng=ng,
+            mu_a=a,
+            mu_s=s,
+            g=g,
+            p90=0.66,
+            theta0=0.25,
+            alpha=4.0,
+            xi=25.6,
+            name="homogenous",
         )
-
-    ModelName = "homogenous"
 
 
 @pytest.mark.parametrize(

@@ -34,6 +34,7 @@ def reflectance(cos_i, n_i, n_t):
 def test_surface(shaderUtil, forward: bool, polarized: bool):
     N = 32 * 1024
     lam_min, lam_max = 200.0 * u.nm, 800.0 * u.nm
+    lam_range = (lam_min, lam_max)
     x_nrm, y_nrm, z_nrm = 0.8, 0.36, 0.48
     v_nrm = vec3(x=x_nrm, y=y_nrm, z=z_nrm)
     normal = np.array([x_nrm, y_nrm, z_nrm])
@@ -95,8 +96,8 @@ def test_surface(shaderUtil, forward: bool, polarized: bool):
     # create material
     waterModel = WaterTestModel()
     glassModel = theia.material.BK7Model()
-    water = waterModel.createMedium(lam_min, lam_max)
-    glass = glassModel.createMedium(lam_min, lam_max)
+    water = waterModel.createMedium(wavelengthRange=lam_range)
+    glass = glassModel.createMedium(wavelengthRange=lam_range)
     mat = theia.material.Material("mat", glass, water)
     matStore = theia.material.MaterialStore([mat])
 

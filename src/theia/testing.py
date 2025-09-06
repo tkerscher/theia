@@ -642,15 +642,18 @@ class WaterTestModel(
     WaterBaseModel,
     HenyeyGreensteinPhaseFunction,
     KokhanovskyOceanWaterPhaseMatrix,
-    MediumModel,
 ):
     """Simple water model used for testing"""
 
     def __init__(self) -> None:
-        WaterBaseModel.__init__(self, 5.0, 1000.0, 35.0)
-        HenyeyGreensteinPhaseFunction.__init__(self, 0.6)
-        KokhanovskyOceanWaterPhaseMatrix.__init__(
-            self, p90=0.66, theta0=0.25, alpha=4.0, xi=25.6  # voss measurement fit
+        super().__init__(
+            temperature=5.0,
+            pressure=1000.0,
+            salinity=35.0,
+            g=0.6,
+            p90=0.66,
+            theta0=0.25,
+            alpha=4.0,
+            xi=25.6,
+            name="water",
         )
-
-    ModelName = "water"

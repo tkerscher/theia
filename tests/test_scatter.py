@@ -100,17 +100,12 @@ def reflectance(cos_i, n_i, n_t):
 def test_reflectance(rng, shaderUtil):
     N = 32 * 1024
 
-    # we only need the refractive index so we can skip the phase functions
-    class WaterModel(theia.material.WaterBaseModel, theia.material.MediumModel):
-        def __init__(self) -> None:
-            theia.material.WaterBaseModel.__init__(self, 5.0, 1000.0, 35.0)
-
     inside = theia.material.BK7Model()
-    outside = WaterModel()
+    outside = WaterTestModel()
     material = theia.material.Material(
         "material",
-        inside.createMedium(name="glass"),
-        outside.createMedium(name="water"),
+        inside.createMedium(name="glass", numLambda=4096),
+        outside.createMedium(name="water", numLambda=4096),
     )
     # bake material
     store = theia.material.MaterialStore([material])

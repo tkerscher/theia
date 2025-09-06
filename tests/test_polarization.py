@@ -7,6 +7,7 @@ from hephaistos.glsl import vec3, vec4, stackVector
 
 import theia.material
 import theia.random
+from theia.testing import WaterTestModel
 
 from numpy.lib.recfunctions import structured_to_unstructured
 
@@ -168,23 +169,7 @@ def test_polarizationRotate_dir(rng, shaderUtil):
 def test_phaseMatrix(rng, shaderUtil):
     N = 32 * 1024
 
-    # create medium for look up
-    class WaterModel(
-        theia.material.WaterBaseModel,
-        theia.material.HenyeyGreensteinPhaseFunction,
-        theia.material.KokhanovskyOceanWaterPhaseMatrix,
-        theia.material.MediumModel,
-    ):
-        def __init__(self) -> None:
-            theia.material.WaterBaseModel.__init__(self, 5.0, 1000.0, 35.0)
-            theia.material.HenyeyGreensteinPhaseFunction.__init__(self, 0.6)
-            theia.material.KokhanovskyOceanWaterPhaseMatrix.__init__(
-                self, p90=0.66, theta0=0.25, alpha=4.0, xi=25.6  # voss measurement fit
-            )
-
-        ModelName = "water"
-
-    water_model = WaterModel()
+    water_model = WaterTestModel()
     water = water_model.createMedium()
     store = theia.material.MaterialStore([], media=[water])
 
@@ -230,24 +215,14 @@ def test_phaseMatrix(rng, shaderUtil):
     m33 = zero if (m := water_model.phase_m33(cos_theta)) is None else m
     m34 = zero if (m := water_model.phase_m34(cos_theta)) is None else m
     phase_matrices = np.stack(
+        # fmt: off
         [
-            ones,
-            m12,
-            zero,
-            zero,
-            m12,
-            m22,
-            zero,
-            zero,
-            zero,
-            zero,
-            m33,
-            m34,
-            zero,
-            zero,
-            -m34,
-            m33,
+            ones, m12,  zero, zero,
+            m12,  m22,  zero, zero,
+            zero, zero, m33,  m34,
+            zero, zero, -m34, m33,
         ],
+        # fmt: on
         axis=-1,
     ).reshape((N, 4, 4))
     expected = np.einsum("ijk,ik->ij", phase_matrices, stokes)

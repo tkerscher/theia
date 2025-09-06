@@ -179,18 +179,7 @@ def test_FournierForand(testDataDir, rng):
 def test_MediumShader(shaderUtil, rng):
     N = 32 * 256
 
-    class WaterModel(
-        theia.material.WaterBaseModel,
-        theia.material.HenyeyGreensteinPhaseFunction,
-        theia.material.MediumModel,
-    ):
-        def __init__(self) -> None:
-            theia.material.WaterBaseModel.__init__(self, 5.0, 1000.0, 35.0)
-            theia.material.HenyeyGreensteinPhaseFunction.__init__(self, 0.6)
-
-        ModelName = "water"
-
-    model = WaterModel()
+    model = WaterTestModel()
     water = model.createMedium()
     store = theia.material.MaterialStore([], media=[water])
 
@@ -264,26 +253,10 @@ def test_MediumShader(shaderUtil, rng):
 def test_MaterialShader(shaderUtil, rng):
     N = 32 * 1000  # amount of samples/shader calls
 
-    # we start with building some simple materials
-    class WaterModel(
-        theia.material.WaterBaseModel,
-        theia.material.HenyeyGreensteinPhaseFunction,
-        theia.material.KokhanovskyOceanWaterPhaseMatrix,
-        theia.material.MediumModel,
-    ):
-        def __init__(self) -> None:
-            theia.material.WaterBaseModel.__init__(self, 5.0, 1000.0, 35.0)
-            theia.material.HenyeyGreensteinPhaseFunction.__init__(self, 0.6)
-            theia.material.KokhanovskyOceanWaterPhaseMatrix.__init__(
-                self, p90=0.66, theta0=0.25, alpha=4.0, xi=25.6  # voss measurement fit
-            )
-
-        ModelName = "water"
-
-    water_model = WaterModel()
+    water_model = WaterTestModel()
     water = water_model.createMedium()
     glass_model = theia.material.BK7Model()
-    glass = glass_model.createMedium(name="glass", num_lambda=4096)
+    glass = glass_model.createMedium(name="glass", numLambda=4096)
     mat_water_glass = theia.material.Material("water_glass", water, glass)
     mat_vac_glass = theia.material.Material("vac_glass", None, glass)
     mat_store = theia.material.MaterialStore([mat_water_glass, mat_vac_glass])

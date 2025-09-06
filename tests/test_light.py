@@ -848,7 +848,7 @@ def test_muonTrackLightSource_fwd(applyFrankTamm: bool) -> None:
 
     # load water material
     water = WaterTestModel()
-    store = MaterialStore([], media=[water.createMedium(*lam_range)])
+    store = MaterialStore([], media=[water.createMedium(wavelengthRange=lam_range)])
 
     # create pipeline
     philox = PhiloxRNG(key=0xC0FFEE)
@@ -929,7 +929,7 @@ def test_muonTrackLightSource_bwd(
 
     # load water material
     water = WaterTestModel()
-    store = MaterialStore([], media=[water.createMedium(*lam_range)])
+    store = MaterialStore([], media=[water.createMedium(wavelengthRange=lam_range)])
 
     # create pipeline
     philox = PhiloxRNG(key=0xC0FFEE)
@@ -1006,7 +1006,7 @@ def test_particleCascadeLightSource_fwd(applyFrankTamm: bool, particle: str) -> 
 
     # load water material
     water = WaterTestModel()
-    store = MaterialStore([], media=[water.createMedium(*lam_range)])
+    store = MaterialStore([], media=[water.createMedium(wavelengthRange=lam_range)])
 
     # create pipeline
     philox = PhiloxRNG(key=0xC0FFEE)
@@ -1092,7 +1092,7 @@ def test_particleCascadeLightSource_bwd(
 
     # load water material
     water = WaterTestModel()
-    store = MaterialStore([], media=[water.createMedium(*lam_range)])
+    store = MaterialStore([], media=[water.createMedium(wavelengthRange=lam_range)])
 
     # create pipeline
     philox = PhiloxRNG(key=0xC0FFEE)

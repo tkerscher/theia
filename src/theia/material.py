@@ -1226,10 +1226,84 @@ class MediumModel:
     """
     Base class for models of media. Implements a function for creating a medium
     by sampling functions provided by base classes.
+
+    Parameters
+    ----------
+    name: str, default="noname"
+        Name of the model. Will be used as default name for instanciated media.
+    wavelengthRange: (float, float), default=(0,inf)
+        Range of wavelengths in nm for which the model is valid.
     """
 
-    # To be overwritten in base classes
-    ModelName = "noname"
+    def __init__(
+        self,
+        *args,
+        name: str = "noname",
+        wavelengthRange: tuple[float, float] = (100.0, 1000.0),
+        **kwargs,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.name = name
+        self.wavelengthRange = wavelengthRange
+
+    @property
+    def name(self) -> str:
+        """Name of the model"""
+        return self._name
+
+    @name.setter
+    def name(self, value: str) -> None:
+        self._name = value
+
+    @property
+    def wavelengthRange(self) -> tuple[float, float]:
+        """Wavelength range for which this model is valid"""
+        return self._wavelengthRange
+
+    @wavelengthRange.setter
+    def wavelengthRange(self, value: tuple[float, float]) -> None:
+        lo, hi = value
+        # check using not to propertly handle NaN values
+        if not lo <= hi:
+            raise ValueError("Wavelength range is not ordered!")
+        if not lo >= 0.0:
+            raise ValueError("Wavelength range must be positive!")
+        if not hi < float("inf"):
+            raise ValueError("Wavelength range must be finite!")
+        self._wavelengthRange = value
+
+    def checkWavelength(self, wavelength: ArrayLike) -> NDArray:
+        """
+        Checks whether the given wavelengths fall within the model's allowed
+        range and returns a numpy array if successfull.
+        """
+        array = np.asarray(wavelength)
+        lo, hi = self.wavelengthRange
+        if array.min() < lo or array.max() > hi:
+            raise ValueError(
+                f"Wavelength outside the model's allowed range of ({lo}-{hi})nm!"
+            )
+        return array
+
+    def checkCosTheta(self, cos_theta: ArrayLike) -> NDArray:
+        """
+        Checks whether the given cosines are in the valid range [-1,1] and
+        returns them as numpy array if successfull.
+        """
+        array = np.asarray(cos_theta)
+        if array.min() < -1 or array.max() > 1:
+            raise ValueError("Cosines outside the value range of [-1,1]!")
+        return array
+
+    def checkEta(self, eta: ArrayLike) -> NDArray:
+        """
+        Checks whether the given random numbers are in the valie range [0,1]
+        and returns them as numpy array if successfull.
+        """
+        array = np.asarray(eta)
+        if array.min() < 0 or array.max() > 1:
+            raise ValueError("Eta outside the valid range of [0,1]!")
+        return array
 
     def refractive_index(self, wavelength: ArrayLike) -> NDArray | None:
         """
@@ -1314,37 +1388,35 @@ class MediumModel:
 
     def createMedium(
         self,
-        lambda_min=200.0 * u.nm,
-        lambda_max=800.0 * u.nm,
-        num_lambda=1024,
-        num_theta=1024,
         *,
+        wavelengthRange: tuple[float, float] | None = None,
+        numLambda: int = 1024,
+        numTheta: int = 1024,
         name: str | None = None,
     ) -> Medium:
         """
-        Creates a medium from this model over the given range of wavelengths
-        in nm.
+        Creates a medium using this model by sampling its properties.
 
         Parameters
         ----------
-        lambda_min: float, default=200.0 [nm]
-            Lower limit of the range of wavelengths to be sampled
-        lambda_max: float, default=800.0 [nm]
-            Upper limit of the range of wavelengths to be sampled
-        num_lambda: int, default=256
+        wavelengthRange: (float, float) | None, default=None
+            Range of wavelength to sample. If `None`, uses the model's full
+            valid range.
+        numLambda: int, default=1024
             Number of samples to take from the wavelength range
-        num_theta: int, default=256
+        numTheta: int, default=1024
             Number of samples to take from the phase and its sample function
-        name: str | None, default is model name
-            Explicit name for the new created model
+        name: str | None, default=None
+            Name of the medium. If `None`, uses the model's name.
         """
-        l = np.linspace(lambda_min, lambda_max, num_lambda)
-        t = np.linspace(-1.0, 1.0, num_theta)  # cos(theta)
-        e = np.linspace(0.0, 1.0, num_theta)
+        if wavelengthRange is None:
+            wavelengthRange = self.wavelengthRange
+        l = np.linspace(*wavelengthRange, numLambda)
+        t = np.linspace(-1.0, 1.0, numTheta)  # cos(theta)
+        e = np.linspace(0.0, 1.0, numTheta)
         return Medium(
-            name if name is not None else self.ModelName,
-            lambda_min,
-            lambda_max,
+            name if name is not None else self.name,
+            *wavelengthRange,
             refractive_index=self.refractive_index(l),
             group_velocity=self.group_velocity(l),
             absorption_coef=self.absorption_coef(l),
@@ -1358,7 +1430,7 @@ class MediumModel:
         )
 
 
-class NumericalPhaseSamplingMixin:
+class NumericalPhaseSamplingMixin(MediumModel):
     """
     Mixin class providing a phase sampling function by numerical inversion of
     either the `phase_function` or `log_phase_function` method. The former takes
@@ -1389,8 +1461,9 @@ class NumericalPhaseSamplingMixin:
         def logpdf(self, x: float) -> float:
             return self._model.log_phase_function(x).item()
 
-    def __init__(self, cache: bool = True) -> None:
-        self._cachePhaseSamples = cache
+    def __init__(self, *args, cachePhaseSampler: bool = True, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._cachePhaseSampler = cachePhaseSampler
         self._phaseSampler = None
 
     def _invalidatePhaseSampler(self) -> None:
@@ -1398,22 +1471,23 @@ class NumericalPhaseSamplingMixin:
         self._phaseSampler = None
 
     def phase_sampling(self, eta: ArrayLike) -> NDArray:
+        eta = self.checkEta(eta)
         if self._phaseSampler is not None:
             sampler = self._phaseSampler
         else:
             if "phase_function" in dir(self):
                 dist = NumericalPhaseSamplingMixin._DistWrapper(self)
-            elif "log_phase_function" in dir(self):
+            elif self.log_phase_function(0.0) is not None:
                 dist = NumericalPhaseSamplingMixin._LogDistWrapper(self)
             else:
                 raise NotImplementedError("Model provides no phase function!")
             sampler = NumericalInversePolynomial(dist, domain=(-1, 1))
-            if self._cachePhaseSamples:
+            if self._cachePhaseSampler:
                 self._phaseSampler = sampler
         return sampler.ppf(eta)
 
 
-class SellmeierEquation:
+class SellmeierEquation(MediumModel):
     """
     The Sellmeier equation is a empirical model of the refractive index as a
     function of the wavelength parameterized by a set of 6 constants for some
@@ -1426,8 +1500,17 @@ class SellmeierEquation:
     """
 
     def __init__(
-        self, B1: float, B2: float, B3: float, C1: float, C2: float, C3: float
+        self,
+        B1: float,
+        B2: float,
+        B3: float,
+        C1: float,
+        C2: float,
+        C3: float,
+        *args,
+        **kwargs,
     ) -> None:
+        super().__init__(*args, **kwargs)
         self.B1 = B1
         self.B2 = B2
         self.B3 = B3
@@ -1437,7 +1520,7 @@ class SellmeierEquation:
 
     def refractive_index(self, wavelength: ArrayLike) -> NDArray:
         """Calculates the refractive index for the given wavelengths"""
-        L2 = np.square(u.convert(wavelength, u.nm))
+        L2 = np.square(self.checkWavelength(wavelength))
         # L2 = np.square(wavelength)
         S1 = self.B1 * L2 / (L2 - self.C1)
         S2 = self.B2 * L2 / (L2 - self.C2)
@@ -1448,26 +1531,23 @@ class SellmeierEquation:
         """
         Calculates the group velocity in for the given wavelengths
         """
-        wavelength = np.asarray(wavelength)
-        n = self.refractive_index(wavelength)
-        L = u.convert(wavelength, u.nm)
-        L2 = np.square(wavelength)
+        L = self.checkWavelength(wavelength)
+        n = self.refractive_index(L)
+        L2 = np.square(L)
         S1 = self.B1 * self.C1 * L / np.square(L2 - self.C1)
         S2 = self.B2 * self.C2 * L / np.square(L2 - self.C2)
         S3 = self.B3 * self.C3 * L / np.square(L2 - self.C3)
         grad = -1.0 * (S1 + S2 + S3) / n
-        return 1.0 / (n - wavelength * grad) * u.c
+        return 1.0 / (n - L * grad) * u.c
 
 
-class BK7Model(SellmeierEquation, MediumModel):
+class BK7Model(SellmeierEquation):
     """
     Model for BK7 glass based on the Sellmeier equation for refractive index
     and measurements for the absorption coefficient.
 
     See https://www.schott.com/shop/advanced-optics/en/Optical-Glass/SCHOTT-N-BK7/c/glass-SCHOTT%20N-BK7%C2%AE
     """
-
-    ModelName = "bk7"
 
     # data table will loaded on first model init
     TransmissionTable = None
@@ -1480,6 +1560,8 @@ class BK7Model(SellmeierEquation, MediumModel):
             0.00600069867e6,  # C1 [nm^2]
             0.0200179144e6,  # C2 [nm^2]
             103.5606530e6,  # C3 [nm^2]
+            name="bk7",
+            wavelengthRange=(200.0, 1060.0) * u.nm,
         )
         # lazily load data
         if BK7Model.TransmissionTable is None:
@@ -1494,7 +1576,7 @@ class BK7Model(SellmeierEquation, MediumModel):
         # the probe thickness, as thicker ones should give a better result
         # To avoid taking the average with inf, we actually take the average
         # of the absorption lengths, i.e. inf -> 0
-        wavelength = np.asarray(wavelength)
+        wavelength = self.checkWavelength(wavelength)
 
         # disable error, since we'll take the log of zero
         with np.errstate(divide="ignore"):
@@ -1509,7 +1591,7 @@ class BK7Model(SellmeierEquation, MediumModel):
             return np.reciprocal(tau) / u.m
 
 
-class HenyeyGreensteinPhaseFunction:
+class HenyeyGreensteinPhaseFunction(MediumModel):
     """
     Models the phase function proposed by Henyey and Greenstein [HG41].
 
@@ -1523,7 +1605,8 @@ class HenyeyGreensteinPhaseFunction:
     [HG41] Henyey, L. G., and J. L. Greenstein. 1941. Diffuse radiation in the galaxy. Astrophysical Journal 93, 70-83
     """
 
-    def __init__(self, g: float = 0.0) -> None:
+    def __init__(self, g: float, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
         self.g = g
 
     @property
@@ -1544,7 +1627,7 @@ class HenyeyGreensteinPhaseFunction:
         Evaluates the log phase function for the given angles as cos(theta).
         Normalized with respect to unit sphere.
         """
-        cos_theta = np.asarray(cos_theta)
+        cos_theta = self.checkCosTheta(cos_theta)
         return np.log(
             (1.0 - self.g**2)
             / np.power(1.0 + self.g**2 - 2 * self.g * cos_theta, 1.5)
@@ -1558,7 +1641,7 @@ class HenyeyGreensteinPhaseFunction:
 
         See Zhang, J.: On Sampling of Scattering Phase Functions, 2019
         """
-        eta = np.asarray(eta)
+        eta = self.checkEta(eta)
         if abs(self.g) < 1e-7:
             # prevent division by zero: g=0 -> uniform
             return 1.0 - 2.0 * eta
@@ -1581,8 +1664,8 @@ class FournierForandPhaseFunction(NumericalPhaseSamplingMixin):
         SPIE Vol. 3761, G. Gilbert [ed], 62-77 (with corrections)
     """
 
-    def __init__(self, n: float, mu: float) -> None:
-        super().__init__()
+    def __init__(self, n: float, mu: float, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
         self._n = n
         self._mu = mu
 
@@ -1610,6 +1693,7 @@ class FournierForandPhaseFunction(NumericalPhaseSamplingMixin):
         """Evaluates the log phase function for the given angles mu = cos(theta)"""
         # phase functions becomes singular at cos_theta = 1.0
         # clip close before (1 float ulp)
+        cos_theta = self.checkCosTheta(cos_theta)
         cos_theta = np.clip(cos_theta, -1.0, 1.0 - 1e-5)
         # constants
         nu = 0.5 * (3.0 - self.mu)
@@ -1626,7 +1710,7 @@ class FournierForandPhaseFunction(NumericalPhaseSamplingMixin):
         return np.log(A / B + C / D)
 
 
-class DispersionFreeMedium:
+class DispersionFreeMedium(MediumModel):
     """
     Idealized medium showing constant optical properties regardless of
     wavelength. Primarily intended for debugging purposes.
@@ -1641,16 +1725,27 @@ class DispersionFreeMedium:
         Absorption coefficient.
     mu_s: float, default=0.0
         Scattering coefficient.
+    name: str, default="constant"
+        Name of the model
     """
 
     def __init__(
         self,
-        *,
+        *args,
         n: float = 1.0,
         ng: float = 1.0,
         mu_a: float = 0.0,
         mu_s: float = 0.0,
+        name: str = "constant",
+        wavelengthRange: tuple[float, float] = (100.0, 1000.0) * u.nm,
+        **kwargs,
     ) -> None:
+        super().__init__(
+            *args,
+            name=name,
+            wavelengthRange=wavelengthRange,
+            **kwargs,
+        )
         self.n = n
         self.ng = ng
         self.mu_a = mu_a
@@ -1692,20 +1787,28 @@ class DispersionFreeMedium:
     def mu_s(self, value: float) -> None:
         self._mu_s = value
 
-    def refractive_index(self, wavelength: ArrayLike) -> NDArray | None:
+    def refractive_index(self, wavelength: ArrayLike) -> NDArray:
+        if not np.min(wavelength) >= 0.0:
+            raise ValueError("wavelength must be positive!")
         return np.ones_like(wavelength) * self.n
 
-    def group_velocity(self, wavelength: ArrayLike) -> NDArray | None:
+    def group_velocity(self, wavelength: ArrayLike) -> NDArray:
+        if not np.min(wavelength) >= 0.0:
+            raise ValueError("wavelength must be positive!")
         return np.ones_like(wavelength) / self.ng * u.c
 
-    def absorption_coef(self, wavelength: ArrayLike) -> NDArray | None:
+    def absorption_coef(self, wavelength: ArrayLike) -> NDArray:
+        if not np.min(wavelength) >= 0.0:
+            raise ValueError("wavelength must be positive!")
         return np.ones_like(wavelength) * self.mu_a
 
-    def scattering_coef(self, wavelength: ArrayLike) -> NDArray | None:
+    def scattering_coef(self, wavelength: ArrayLike) -> NDArray:
+        if not np.min(wavelength) >= 0.0:
+            raise ValueError("wavelength must be positive!")
         return np.ones_like(wavelength) * self.mu_s
 
 
-class WaterBaseModel:
+class WaterBaseModel(MediumModel):
     """
     Base model for calculating the optical properties of (sea) water laking the
     phase function. Calculations of the refractive index follows [MS90], which
@@ -1754,17 +1857,27 @@ class WaterBaseModel:
     PTS = 5.7311268e-11
     PT2S = -1.5460458e-12
 
-    def __init__(self, temperature: float, pressure: float, salinity: float) -> None:
+    def __init__(
+        self,
+        temperature: float,
+        pressure: float,
+        salinity: float,
+        *args,
+        name: str = "water",
+        **kwargs,
+    ) -> None:
+        super().__init__(
+            *args,
+            name=name,
+            wavelengthRange=(200.0, 800.0) * u.nm,
+            **kwargs,
+        )
         self.temperature = temperature
         self.pressure = pressure
         self.salinity = salinity
         # check if we need to load the data
         if WaterBaseModel.DataTable is None:
-            WaterBaseModel.DataTable = np.loadtxt(
-                importlib.resources.files("theia").joinpath("data/water_smith81.csv"),
-                delimiter=",",
-                skiprows=1,
-            )
+            WaterBaseModel.DataTable = loadCSV("water_smith81.csv")
 
     @property
     def temperature(self) -> float:
@@ -1810,7 +1923,7 @@ class WaterBaseModel:
     def refractive_index(self, wavelength: ArrayLike) -> NDArray:
         """Calculates the refractive index for the given wavelengths"""
         # formula expects wavelengths in micrometers -> convert
-        L = u.convert(wavelength, u.um)
+        L = u.convert(self.checkWavelength(wavelength), u.um)
         T = self.temperature
         p = self.pressure
         S = self.salinity
@@ -1853,7 +1966,7 @@ class WaterBaseModel:
         Calculates the group velocity for the given wavelengths
         """
         # formula expects wavelengths in micrometers -> convert
-        L = u.convert(wavelength, u.um)
+        L = u.convert(self.checkWavelength(wavelength), u.um)
         T = self.temperature
         p = self.pressure
         S = self.salinity
@@ -1879,9 +1992,10 @@ class WaterBaseModel:
         """
         Returns the absorption coefficient for the given wavelengths
         """
+        assert WaterBaseModel.DataTable is not None
         return (
             np.interp(
-                u.convert(wavelength, u.nm),
+                self.checkWavelength(wavelength),
                 WaterBaseModel.DataTable[:, 0],
                 WaterBaseModel.DataTable[:, 1],
             )
@@ -1892,9 +2006,10 @@ class WaterBaseModel:
         """
         Returns the scattering coefficient for the given wavelengths
         """
+        assert WaterBaseModel.DataTable is not None
         return (
             np.interp(
-                u.convert(wavelength, u.nm),
+                self.checkWavelength(wavelength),
                 WaterBaseModel.DataTable[:, 0],
                 WaterBaseModel.DataTable[:, 2],
             )
@@ -1902,7 +2017,7 @@ class WaterBaseModel:
         )
 
 
-class KokhanovskyOceanWaterPhaseMatrix:
+class KokhanovskyOceanWaterPhaseMatrix(MediumModel):
     """
     Empirical model for the phase matrix of ocean water as described by
     Kokhanovsky[1].
@@ -1925,7 +2040,10 @@ class KokhanovskyOceanWaterPhaseMatrix:
         doi:10.1029/2001JC001222, 2003
     """
 
-    def __init__(self, p90, theta0, alpha, xi) -> None:
+    def __init__(
+        self, p90: float, theta0: float, alpha: float, xi: float, *args, **kwargs
+    ) -> None:
+        super().__init__(*args, **kwargs)
         self.p90 = p90
         self.theta0 = theta0
         self.alpha = alpha
@@ -1969,12 +2087,14 @@ class KokhanovskyOceanWaterPhaseMatrix:
 
     def phase_m12(self, cos_theta: ArrayLike) -> NDArray:
         """m12 element of the phase matrix"""
+        cos_theta = self.checkCosTheta(cos_theta)
         cos_theta_sq = np.square(cos_theta)
         sin_theta_sq = 1.0 - cos_theta_sq
         return -self.p90 * sin_theta_sq / (1.0 + self.p90 * cos_theta_sq)
 
     def phase_m22(self, cos_theta: ArrayLike) -> NDArray:
         """m22 element of the phase matrix"""
+        cos_theta = self.checkCosTheta(cos_theta)
         theta = np.arccos(cos_theta)
         z = theta - self.theta0
         cos_z_sq = np.square(np.cos(z))
@@ -1983,6 +2103,7 @@ class KokhanovskyOceanWaterPhaseMatrix:
 
     def phase_m33(self, cos_theta: ArrayLike) -> NDArray:
         """m33 element of the phase matrix"""
+        cos_theta = self.checkCosTheta(cos_theta)
         cos_theta = np.asarray(cos_theta)
         theta = np.arccos(cos_theta)
         ct_sq = np.square(cos_theta)
