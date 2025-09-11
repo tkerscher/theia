@@ -6,7 +6,7 @@ from theia.light import LightSource, WavelengthSource
 from theia.material import (
     HenyeyGreensteinPhaseFunction,
     KokhanovskyOceanWaterPhaseMatrix,
-    MediumModel,
+    SmithNaturalWaterMeasurements,
     WaterBaseModel,
 )
 from theia.random import RNG
@@ -640,6 +640,7 @@ class TargetSampler(PipelineStage):
 
 class WaterTestModel(
     WaterBaseModel,
+    SmithNaturalWaterMeasurements,
     HenyeyGreensteinPhaseFunction,
     KokhanovskyOceanWaterPhaseMatrix,
 ):

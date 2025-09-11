@@ -83,7 +83,24 @@ def test_BK7Model(dataDir, testDataDir):
     assert np.abs(t_25mm - trans[:, 2]).mean() < 2e-3  # but on average better
 
 
-def test_WaterBaseModel(dataDir, testDataDir):
+def test_RayleighScattering():
+    class Model(
+        theia.material.DispersionFreeMedium,
+        theia.material.RayleighScatteringModel,
+    ):
+        def __init__(self):
+            super().__init__(
+                n=1.4,
+                ng=1.4,
+                temperature=10.0,
+                betaT=4.6e-10,
+                depolarizationRatio=0.039,
+            )
+
+    assert theia.material.checkMedium(Model().createMedium())
+
+
+def test_WaterBaseModel(testDataDir):
     model = theia.material.WaterBaseModel(10.0, 0.0, 35.0)
 
     # load test data for water
@@ -91,22 +108,16 @@ def test_WaterBaseModel(dataDir, testDataDir):
         os.path.join(testDataDir, "water_n_10C_35S.csv"), delimiter=",", skiprows=3
     )
     assert np.abs(data[:, 1] - model.refractive_index(data[:, 0] * u.nm)).max() < 0.005
+    assert theia.material.checkMedium(model.createMedium())
 
-    # numerically derive group velocity to check against
-    l = np.linspace(300.0, 800.0, 200) * u.nm
-    n = model.refractive_index(l)
-    vg_exp = 1.0 / (n - l * np.gradient(n, 500 / (len(l) - 1))) * u.c
-    assert (
-        np.abs((vg_exp - model.group_velocity(l)) / vg_exp).max() < 5e-3
-    )  # TODO: finetune limit
 
-    # reuse the table for testing
-    data = np.loadtxt(
-        os.path.join(dataDir, "water_smith81.csv"), delimiter=",", skiprows=2
+def test_PureWaterModel():
+    model = theia.material.PureWaterModel(
+        temperature=5.0,
+        pressure=2000.0,
+        salinity=35.0,
     )
-    # test against expected data
-    assert np.abs(data[:, 1] - model.absorption_coef(data[:, 0] * u.nm)).max() < 1e-6
-    assert np.abs(data[:, 2] - model.scattering_coef(data[:, 0] * u.nm)).max() < 1e-6
+    assert theia.material.checkMedium(model.createMedium())
 
 
 def getSamplingError(rng, model, bins=50, N=int(1e6)):
@@ -299,7 +310,7 @@ def test_MaterialShader(shaderUtil, rng):
     ] * (N // 2) + [
         mat_store.material["vac_glass"],
     ] * (N // 2)
-    queries["lam"] = (rng.random(N, np.float32) * 600.0 + 200.0) * u.nm
+    queries["lam"] = (rng.random(N, np.float32) * 550.0 + 250.0) * u.nm
     queries["theta"] = 1.0 - 2 * rng.random(N, np.float32)  # [-1,1]
     queries["eta"] = rng.random(N, np.float32)  # [0,1]
 

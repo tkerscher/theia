@@ -1,18 +1,19 @@
 from __future__ import annotations
 
-import importlib.resources
 import warnings
 
 import hephaistos as hp
 import numpy as np
+import scipy.constants
 from scipy.integrate import cumulative_simpson
+from scipy.interpolate import CubicSpline
 from scipy.stats.sampling import NumericalInversePolynomial
 
 from ctypes import Structure, c_float, c_uint32, c_uint64, sizeof
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 
 from theia.lookup import Table, getTableSize
-from theia.util import loadCSV
+from theia.util import loadCSV, intersectRange
 import theia.units as u
 
 import json
@@ -45,7 +46,11 @@ __all__ = [
     "Medium",
     "MediumModel",
     "NumericalPhaseSamplingMixin",
+    "PureWaterModel",
+    "RayleighScatteringModel",
+    "RayleighScatteringPhaseFunction",
     "SellmeierEquation",
+    "SmithNaturalWaterMeasurements",
     "WaterBaseModel",
 ]
 
@@ -505,7 +510,7 @@ def checkMedium(medium: Medium, *, raises: bool = True, rtol=5e-3, atol=1e-5) ->
             y = np.exp(medium.log_phase_function)
             dx = 2.0 / (N - 1)
             cdf = 2 * np.pi * cumulative_simpson(y, dx=dx, initial=0)
-            assert np.allclose(cdf[-1], 1.0, rtol=rtol, atol=atol), "Phase function integrate over solid angles to 1!"
+            assert np.allclose(cdf[-1], 1.0, rtol=rtol, atol=atol), "Phase function must integrate over solid angles to 1!"
             u = np.linspace(-1, 1, N)
             quantiles = np.interp(medium.phase_sampling, u, cdf)
             # sampling is fine in both directions, i.e. both u and 1-u are fine
@@ -1239,7 +1244,7 @@ class MediumModel:
         self,
         *args,
         name: str = "noname",
-        wavelengthRange: tuple[float, float] = (100.0, 1000.0),
+        wavelengthRange: tuple[float, float] = (100.0, 1500.0),
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -1271,6 +1276,14 @@ class MediumModel:
         if not hi < float("inf"):
             raise ValueError("Wavelength range must be finite!")
         self._wavelengthRange = value
+
+    def restrictWavelengthRange(self, range: tuple[float, float]) -> None:
+        """
+        Restricts the current wavelength range by the given one, that is the new
+        range will be the intersection of both. Raises an error if the
+        intersection is empty.
+        """
+        self.wavelengthRange = intersectRange(self.wavelengthRange, range)
 
     def checkWavelength(self, wavelength: ArrayLike) -> NDArray:
         """
@@ -1561,8 +1574,8 @@ class BK7Model(SellmeierEquation):
             0.0200179144e6,  # C2 [nm^2]
             103.5606530e6,  # C3 [nm^2]
             name="bk7",
-            wavelengthRange=(200.0, 1060.0) * u.nm,
         )
+        self.restrictWavelengthRange((200.0, 1060.0) * u.nm)
         # lazily load data
         if BK7Model.TransmissionTable is None:
             BK7Model.TransmissionTable = loadCSV("bk7_transmission.csv", skiprows=2)
@@ -1589,6 +1602,151 @@ class BK7Model(SellmeierEquation):
             )
             # convert back to coefficients
             return np.reciprocal(tau) / u.m
+
+
+class RayleighScatteringPhaseFunction(NumericalPhaseSamplingMixin, MediumModel):
+    """
+    Models the phase function and Mueller matrix elements according to Rayleigh
+    scattering as shown in [ZH21] and [ZH19]. Lacks the model for the scattering
+    coefficient, which can be found in `RayleighScatteringModel`.
+
+    Parameters
+    ----------
+    depolarizationRatio: float, default=0.0
+        Depolarization ratio of the scattering medium, defined as the ratio
+        between horizontally and vertically polarized components of the
+        scattered light at 90 degrees from an unpolarized incident light source.
+
+    References
+    ----------
+    [ZH21] X. Zhang, and L. Hi, "Light Scattering by Pure Water and Seawater: Recent Development", Journal of Remote Sensing, 2021
+    [ZH19] X. Zhang, et al., "Light scattering py pure water and seawater: the depolarization ratio and its variation with salinity", Applied Optics Vol. 58 No. 4, 2019
+    """
+
+    def __init__(self, *args, depolarizationRatio: float = 0.0, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._delta = depolarizationRatio
+
+    @property
+    def depolarizationRatio(self) -> float:
+        """Depolarization ratio of the medium"""
+        return self._delta
+
+    @depolarizationRatio.setter
+    def depolarizationRatio(self, value: float) -> None:
+        self._delta = value
+
+    def phase_function(self, cos_theta: ArrayLike) -> NDArray:
+        #                    1 - delta
+        # beta(theta) ~ 1 + ----------- cos^2(theta)
+        #                    1 + delta
+        cos_theta = self.checkCosTheta(cos_theta)
+        delta = self.depolarizationRatio
+        phase = 1 + (1 - delta) / (1 + delta) * cos_theta**2
+        I = 8 * np.pi / 3 * (2 + delta) / (1 + delta)  # integral phase from -1 to 1
+        return phase / I
+
+    def log_phase_function(self, cos_theta: ArrayLike) -> NDArray:
+        return np.log(self.phase_function(cos_theta))
+
+    def phase_m12(self, cos_theta: ArrayLike) -> NDArray:
+        # M_11 = beta_90 * 1 + (1-d)/(1+d)cos^2
+        # M_12 = beta_90 * -(1-d)/(1+d)sin^2
+        #            M_12       -(1-d) sin^2
+        # -> m_12 = ------ = ------------------
+        #            M_11     1+d + (1-d)cos^2
+        d = self.depolarizationRatio
+        u = self.checkCosTheta(cos_theta)
+        return -(1 - d) * (1 - u**2) / (1 + d + (1 - d) * u**2)
+
+    def phase_m22(self, cos_theta: ArrayLike) -> NDArray:
+        # M_22 = M_11 -> m_22 = 1
+        return np.ones_like(cos_theta)
+
+    def phase_m33(self, cos_theta: ArrayLike) -> NDArray:
+        # M_11 = beta_90 * 1 + (1-d)/(1+d)cos^2
+        # M_33 = beta_90 * 2(1-d)/(1+d)cos
+        #            M_33        2(1-d)cos
+        # -> m_33 = ------ = ------------------
+        #            M_11     1+d + (1-d)cos^2
+        d = self.depolarizationRatio
+        u = self.checkCosTheta(cos_theta)
+        return 2 * (1 - d) * u / (1 + d + (1 - d) * u**2)
+
+
+class RayleighScatteringModel(RayleighScatteringPhaseFunction):
+    """
+    Models the typical scattering coefficient used with Rayleigh scattering
+    caused by thermodynamic fluctuations following the Einstein-Smoluchowski
+    theory including correction factor for the depolarization ratio.
+
+    Parameters
+    ----------
+    temperature: float [°C]
+        Temperature of the scattering medium
+    betaT: float [m^3/J]
+        Isothermal compressibility of the media
+    depolarizationRatio: float
+        Ratio of horizontally to vertically polarized light scattered at 90
+        degrees for unpolarized incident light
+
+    See
+    ---
+    RayleighScatteringPhaseFunction
+    """
+
+    def __init__(
+        self,
+        *args,
+        temperature: float,
+        betaT: float,
+        depolarizationRatio: float = 0.0,
+        **kwargs,
+    ) -> None:
+        super().__init__(*args, depolarizationRatio=depolarizationRatio, **kwargs)
+        self._temp = temperature
+        self._betaT = betaT
+
+    @property
+    def temperature(self) -> float:
+        """Temperature of the media in °C"""
+        return self._temp
+
+    @temperature.setter
+    def temperature(self, value: float) -> None:
+        self._temp = value
+
+    @property
+    def betaT(self) -> float:
+        """Isothermal compressibility of the medium in m^3/J"""
+        return self._betaT
+
+    @betaT.setter
+    def betaT(self, value: float) -> None:
+        self._betaT = value
+
+    def scattering_coef(self, wavelength: ArrayLike) -> NDArray:
+        #      4pi^3 * k_B*T * beta_T                  2 + delta
+        # b = ------------------------ * LL^2 * f_C * -----------
+        #            2 * lam^4                         1 + delta
+        lam = u.convert(self.checkWavelength(wavelength), u.m)
+        T = self.temperature
+        betaT = self.betaT
+        delta = self.depolarizationRatio
+        E = scipy.constants.Boltzmann * (T + 273.15)
+        # Cabannes factor; See [ZH21] Eq. 4
+        fc = (6 + 6 * delta) / (6 - 7 * delta)
+        fc *= (2 + delta) / (1 + delta)  # from integration
+        # Lorentz-Lorenz; See [ZH21] Eq. 9
+        n = self.refractive_index(wavelength)
+        if n is None:
+            raise RuntimeError(
+                "Rayleigh scattering requires refractive index to be defined!"
+            )
+        n2 = n**2
+        ll = (n2 - 1) * (1 + 2 / 3 * (n2 + 2.0) * ((n2 - 1) / (3 * n)) ** 2)
+
+        return 4 * np.pi**3 / 3 * E * betaT / lam**4 * ll**2 * fc
 
 
 class HenyeyGreensteinPhaseFunction(MediumModel):
@@ -1737,13 +1895,11 @@ class DispersionFreeMedium(MediumModel):
         mu_a: float = 0.0,
         mu_s: float = 0.0,
         name: str = "constant",
-        wavelengthRange: tuple[float, float] = (100.0, 1000.0) * u.nm,
         **kwargs,
     ) -> None:
         super().__init__(
             *args,
             name=name,
-            wavelengthRange=wavelengthRange,
             **kwargs,
         )
         self.n = n
@@ -1810,52 +1966,63 @@ class DispersionFreeMedium(MediumModel):
 
 class WaterBaseModel(MediumModel):
     """
-    Base model for calculating the optical properties of (sea) water laking the
-    phase function. Calculations of the refractive index follows [MS90], which
-    proposed a fit on empiric data. The absorption and scattering model is
-    based on empiric data from [Smith81].
+    Models refractive index and group velocity of pure (sea) water only
+    implementing the algorithm presented in [MS90]
 
     Parameters
     ----------
-    temperature: float, [°C]
-        water temperature
-    pressure: float, [dbar]
-        water pressure in dbar
-    salinity: float, [PSU]
-        water salinity in practical salinity units (PSU)
+    temperature: float [°C]
+        Water temperature. Must be in the range [-12, 80] °C
+    pressure: float [dbar]
+        Water pressure in dbar. Must be in the range [-0.5, 10000] dbar
+    salinity: float [g/kg]
+        Water salinity in gram per kilogram. Must be in the range [0, 120] g/kg
+
+    Note
+    ----
+    [MS90] only claims correct results over a much smaller range, but it is
+    still reasonable correct for values outside that range (See e.g. [ZH21]
+    fig. 4)
+
+    References
+    ----------
+    [MS90] R. C. Millard, and G. Seaer, "An index of refraction algorithm for
+           seawater over temperature, pressure, salinity, density and
+           wavelength", Deep Sea Research Vol. 37, 1909-1926 (1990)
+    [ZH21] X. Zhang, L. Hu, "Light Scattering by Pure Water and Seawater:
+           Recent Development", J Remote Sens. 2021, (2021)
     """
 
-    # lazily loaded data table
-    DataTable = None
-
-    # constants
-    A0 = 1.3280657
-    L2 = -0.0045536802
-    LM2 = 0.0025471707
-    LM4 = 0.000007501966
-    LM6 = 0.000002802632
-    T1 = -0.0000052883907
-    T2 = -0.0000030738272
-    T3 = 0.000000030124687
-    T4 = -2.0863178e-10
-    TL = 0.000010508621
-    T2L = 0.00000021282248
-    T3L = -0.000000001705881
-    S0 = 0.00019029121
-    S1LM2 = 0.0000024239607
-    S1T = -0.00000073960297
-    S1T2 = 0.0000000089818478
-    S1T3 = 1.2078804e-10
-    STL = -0.0000003589495
-    P1 = 0.0000015868363
-    P2 = -1.574074e-11
-    PLM2 = 0.000000010712063
-    PT = -0.0000000094634486
-    PT2 = 1.0100326e-10
-    P2T2 = 5.8085198e-15
-    P1S = -0.0000000011177517
-    PTS = 5.7311268e-11
-    PT2S = -1.5460458e-12
+    # shared constants for Millard Seaer model
+    _MS_CONSTS = SimpleNamespace(
+        A0=1.3280657,
+        L2=-0.0045536802,
+        LM2=0.0025471707,
+        LM4=0.000007501966,
+        LM6=0.000002802632,
+        T1=-0.0000052883907,
+        T2=-0.0000030738272,
+        T3=0.000000030124687,
+        T4=-2.0863178e-10,
+        TL=0.000010508621,
+        T2L=0.00000021282248,
+        T3L=-0.000000001705881,
+        S0=0.00019029121,
+        S1LM2=0.0000024239607,
+        S1T=-0.00000073960297,
+        S1T2=0.0000000089818478,
+        S1T3=1.2078804e-10,
+        STL=-0.0000003589495,
+        P1=0.0000015868363,
+        P2=-1.574074e-11,
+        PLM2=0.000000010712063,
+        PT=-0.0000000094634486,
+        PT2=1.0100326e-10,
+        P2T2=5.8085198e-15,
+        P1S=-0.0000000011177517,
+        PTS=5.7311268e-11,
+        PT2S=-1.5460458e-12,
+    )
 
     def __init__(
         self,
@@ -1869,152 +2036,373 @@ class WaterBaseModel(MediumModel):
         super().__init__(
             *args,
             name=name,
-            wavelengthRange=(200.0, 800.0) * u.nm,
             **kwargs,
         )
+        self.restrictWavelengthRange((250.0, 1100.0) * u.nm)
+        # set props as they will do the range check
         self.temperature = temperature
         self.pressure = pressure
         self.salinity = salinity
-        # check if we need to load the data
-        if WaterBaseModel.DataTable is None:
-            WaterBaseModel.DataTable = loadCSV("water_smith81.csv")
 
     @property
     def temperature(self) -> float:
-        """Water temperature in °C"""
-        return self._T
+        return self._temperature
 
     @temperature.setter
     def temperature(self, value: float) -> None:
-        self._T = value
-        if not 0.0 <= value <= 30.0:
-            warnings.warn(
-                "Temperature is outside the models valid range of 0°-30°C",
-                RuntimeWarning,
-            )
+        if not -12 <= value <= 80:
+            raise ValueError("Temperature must be in the range [-12,80]°C!")
+        self._temperature = value
 
     @property
     def pressure(self) -> float:
         """Water pressure in dbar"""
-        return self._p
+        return self._pressure
 
     @pressure.setter
     def pressure(self, value: float) -> None:
-        self._p = value
-        if not 0.0 <= value <= 11_000:
-            warnings.warn(
-                "Pressure is outside the models valid range of 0-11.000 dbar",
-                RuntimeWarning,
-            )
+        if not -0.5 <= value <= 10000:
+            raise ValueError("Pressure must be in the range [-0.5,10000]dbar!")
+        self._pressure = value
 
     @property
     def salinity(self) -> float:
-        """Salinity measured in practical salinity units (PSU)"""
-        return self._S
+        """Water salinity in g/kg"""
+        return self._salinity
 
     @salinity.setter
     def salinity(self, value: float) -> None:
-        self._S = value
-        if not 0.0 <= value <= 40.0:
-            warnings.warn(
-                "Salinity is outside the models valid range of 0-40 psu", RuntimeWarning
-            )
+        if not 0 <= value <= 120:
+            raise ValueError("Salinity must be in the range [0,120]g/kg!")
+        self._salinity = value
 
     def refractive_index(self, wavelength: ArrayLike) -> NDArray:
-        """Calculates the refractive index for the given wavelengths"""
         # formula expects wavelengths in micrometers -> convert
         L = u.convert(self.checkWavelength(wavelength), u.um)
         T = self.temperature
         p = self.pressure
-        S = self.salinity
-        # following naming convention from paper
+        S = self.salinity / (35.16504 / 35)  # convert ppt -> PSU
+        C = self._MS_CONSTS
+        # following naming scheme from paper
         N1 = (
-            self.A0
-            + self.L2 * (L**2)
-            + self.LM2 / (L**2)
-            + self.LM4 / (L**4)
-            + self.LM6 / (L**6)
-            + self.T1 * T
-            + self.T2 * (T**2)
-            + self.T3 * (T**3)
-            + self.T4 * (T**4)
-            + self.TL * T * L
-            + self.T2L * (T**2) * L
-            + self.T3L * (T**3) * L
+            C.A0
+            + C.L2 * (L**2)
+            + C.LM2 / (L**2)
+            + C.LM4 / (L**4)
+            + C.LM6 / (L**6)
+            + C.T1 * T
+            + C.T2 * (T**2)
+            + C.T3 * (T**3)
+            + C.T4 * (T**4)
+            + C.TL * T * L
+            + C.T2L * (T**2) * L
+            + C.T3L * (T**3) * L
         )
         N2 = (
-            self.S0 * S
-            + self.S1LM2 * S / (L**2)
-            + self.S1T * S * T
-            + self.S1T2 * S * (T**2)
-            + self.S1T3 * S * (T**3)
-            + self.STL * S * T * L
+            C.S0 * S
+            + C.S1LM2 * S / (L**2)
+            + C.S1T * S * T
+            + C.S1T2 * S * (T**2)
+            + C.S1T3 * S * (T**3)
+            + C.STL * S * T * L
         )
         N3 = (
-            self.P1 * p
-            + self.P2 * (p**2)
-            + self.PLM2 * p / (L**2)
-            + self.PT * p * T
-            + self.PT2 * p * (T**2)
-            + self.P2T2 * (p**2) * (T**2)
+            C.P1 * p
+            + C.P2 * (p**2)
+            + C.PLM2 * p / (L**2)
+            + C.PT * p * T
+            + C.PT2 * p * (T**2)
+            + C.P2T2 * (p**2) * (T**2)
         )
-        N4 = self.P1S * p * S + self.PTS * p * T * S + self.PT2S * p * (T**2) * S
+        N4 = C.P1S * p * S + C.PTS * p * T * S + C.PT2S * p * (T**2) * S
         return N1 + N2 + N3 + N4
 
     def group_velocity(self, wavelength: ArrayLike) -> NDArray:
-        """
-        Calculates the group velocity for the given wavelengths
-        """
         # formula expects wavelengths in micrometers -> convert
         L = u.convert(self.checkWavelength(wavelength), u.um)
         T = self.temperature
         p = self.pressure
-        S = self.salinity
+        S = self.salinity / (35.16504 / 35)  # convert ppt -> PSU
+        C = self._MS_CONSTS
         # G_i = dN_i/dL
         G1 = (
-            2.0 * self.L2 * L
-            - 2.0 * self.LM2 / (L**3)
-            - 4.0 * self.LM4 / (L**5)
-            - 6.0 * self.LM6 / (L**7)
-            + self.TL * T
-            + self.T2L * (T**2)
-            + self.T3L * (T**3)
+            2.0 * C.L2 * L
+            - 2.0 * C.LM2 / (L**3)
+            - 4.0 * C.LM4 / (L**5)
+            - 6.0 * C.LM6 / (L**7)
+            + C.TL * T
+            + C.T2L * (T**2)
+            + C.T3L * (T**3)
         )
-        G2 = -2.0 * self.S1LM2 * S / (L**3) + self.STL * S * T
-        G3 = -2.0 * self.PLM2 * p / (L**3)
+        G2 = -2.0 * C.S1LM2 * S / (L**3) + C.STL * S * T
+        G3 = -2.0 * C.PLM2 * p / (L**3)
         G4 = 0.0
         G = G1 + G2 + G3 + G4
         # vg = c / (n - L*dn/dL)
         n = self.refractive_index(wavelength)
         return 1.0 / (n - L * G) * u.c
 
-    def absorption_coef(self, wavelength: ArrayLike) -> NDArray:
-        """
-        Returns the absorption coefficient for the given wavelengths
-        """
-        assert WaterBaseModel.DataTable is not None
-        return (
-            np.interp(
-                self.checkWavelength(wavelength),
-                WaterBaseModel.DataTable[:, 0],
-                WaterBaseModel.DataTable[:, 1],
-            )
-            / u.m
+
+class PureWaterModel(WaterBaseModel, RayleighScatteringPhaseFunction):
+    """
+    Model of the optical properties of pure (sea) water combining several
+    numerical models and measurements: Refractive index and scattering
+    coefficient are implemented according to [MS90] and [ZH21] respectively.
+    Scattering distribution is assumed to follow Rayleigh. Absorption
+    coefficients are interpolated using the data from [MCF16] in the range of
+    (250-550)nm and [BHD94] for (550-800)nm. Correction for the temperature and
+    salinity dependency of the absorption are not included.
+
+    Parameters
+    ----------
+    temperature: float [°C]
+        Water temperature. Must be in the range [-12, 80] °C
+    pressure: float, [dbar]
+        Water pressure in dbar. Must be in the range [-0.5, 10'000] dbar
+    salinity: float, [g/kg]
+        Water salinity in gram per kilogram. Must be in the range [0, 120] g/kg
+
+    Note
+    ----
+    Optical properties of natural waters are heavily dependent on their
+    constituents and thus are likely to be poorly modeled by this model.
+
+    References
+    ----------
+    [BHD94] H. Buiteveld and J. M. H. Hakvoort and M. Donze, "The optical
+            properties of pure water," in SPIE Proceedings on Ocean Optics XII,
+            edited by J. S. Jaffe, 2258, 174--183, (1994).
+    [MCF16] John D. Mason, Michael T. Cone, and Edward S. Fry, "Ultraviolet
+            (250-550 nm) absorption spectrum of pure water," Appl. Opt. 55,
+            7163-7172 (2016)
+    [MS90] R. C. Millard, and G. Seaer, "An index of refraction algorithm for
+           seawater over temperature, pressure, salinity, density and
+           wavelength", Deep Sea Research Vol. 37, 1909-1926 (1990)
+    [ZH21] X. Zhang, L. Hu, "Light Scattering by Pure Water and Seawater:
+           Recent Development", J Remote Sens. 2021, (2021)
+
+    See
+    ---
+    RayleighScatteringPhaseFunction
+    """
+
+    # lazily load data tables
+    _MU_A_SPLINE = None
+
+    def __init__(
+        self,
+        *args,
+        temperature: float = 15.0,
+        pressure: float = 0.0,
+        salinity: float = 0.0,
+        name: str = "water",
+        **kwargs,
+    ) -> None:
+        super().__init__(
+            *args,
+            temperature=temperature,
+            pressure=pressure,
+            salinity=salinity,
+            depolarizationRatio=0.039,
+            name=name,
+            **kwargs,
         )
+        self.restrictWavelengthRange((250.0, 800.0) * u.nm)
+        # lazily load interpolation table
+        if PureWaterModel._MU_A_SPLINE is None:
+            mcf = loadCSV("water_mcf16.csv")
+            bhd = loadCSV("water_bhd94.csv")
+            lam_cut = mcf[-1, 0]
+            bhd_cut = bhd[bhd[:, 0] > lam_cut]
+            table = np.concatenate((mcf, bhd_cut), 0)
+            PureWaterModel._MU_A_SPLINE = CubicSpline(table[:, 0], table[:, 1])
+
+    def absorption_coef(self, wavelength: ArrayLike) -> NDArray:
+        # linear interpolate table
+        L = self.checkWavelength(wavelength)
+        assert PureWaterModel._MU_A_SPLINE is not None  # make the linter happy...
+        return PureWaterModel._MU_A_SPLINE(L)
+
+    def _dg_dp(self) -> float:
+        """partial derivative of Gibbs function w.r.t pressure"""
+        # Code based on matlab code from [ZH21]
+        x2 = 0.0248826675584615 * self.salinity
+        x = np.sqrt(x2)
+        y = self.temperature * 0.025
+        z = self.pressure * 1e-4
+
+        # fmt: off
+        g03 = 100015.695367145 + z*(-5089.1530840726 + \
+            z*(853.5533353388611 + z*(-133.2587017014444 + (21.0131554401542 - 3.278571068826234*z)*z))) + \
+            y*(-270.983805184062 + z*(1552.307223226202 + \
+            z*(-589.53765264366 + (115.91861051767 - 10.664504175916349*z)*z)) + \
+            y*(1455.0364540468 + z*(-1513.116771538718 + \
+            z*(820.438986970584 + z*(-222.2416255268872 + 21.72103359585985*z))) + \
+            y*(-672.50778314507 + z*(998.720781638304 + \
+            z*(-718.6359919632359 + (195.2050074375488 - 8.31535531044525*z)*z)) + \
+            y*(397.968445406972 + z*(-603.630761243752 + (456.589115201523 - 105.4993508931208*z)*z) + \
+            y*(-194.618310617595 + y*(63.5113936641785 - 9.63108119393062*y + \
+            z*(-44.5794634280918 + 24.511816254543362*z)) + \
+            z*(241.04130980405 + z*(-165.8169157020456 + 25.92762672308884*z)))))))        
+        
+        g08 = x2*(-3310.49154044839 + z*(769.588305957198 + \
+            z*(-289.5972960322374 + (63.3632691067296 - 13.1240078295496*z)*z)) + \
+            x*(199.459603073901 + x*(-54.7919133532887 + 36.0284195611086*x - 22.6683558512829*y + \
+            (-8.16387957824522 - 90.52653359134831*z)*z) + \
+            z*(-104.588181856267 + (204.1334828179377 - 13.65007729765128*z)*z) + \
+            y*(-175.292041186547 + (166.3847855603638 - 88.449193048287*z)*z + \
+            y*(383.058066002476 + y*(-460.319931801257 + 234.565187611355*y) + \
+            z*(-108.3834525034224 + 76.9195462169742*z)))) + \
+            y*(729.116529735046 + z*(-687.913805923122 + \
+            z*(374.063013348744 + z*(-126.627857544292 + 35.23294016577245*z))) + \
+            y*(-860.764303783977 + y*(694.244814133268 + \
+            y*(-297.728741987187 + (149.452282277512 - 109.46187570047641*z)*z) + \
+            z*(-409.779283929806 + (340.685093521782 - 44.5130937305652*z)*z)) + \
+            z*(674.819060538734 + z*(-534.943668622914 + (176.8161433232 - 39.600077360584095*z)*z)))))
+        # fmt: on
+
+        # Note. This pressure derivative of the gibbs function is in units of (J/kg) (Pa^-1) = m^3/kg
+        return (g03 + g08) * 1e-8
+
+    def _dg_dp2(self) -> float:
+        """second partial derivative of Gibbs function w.r.t. pressure"""
+        # Code based on matlab code from [ZH21]
+        x2 = 0.0248826675584615 * self.salinity
+        x = np.sqrt(x2)
+        y = self.temperature * 0.025
+        z = self.pressure * 1e-4
+
+        # fmt: off
+        g03 = -5089.1530840726 + z*(1707.1066706777221 + \
+            z*(-399.7761051043332 + (84.0526217606168 - 16.39285534413117*z)*z)) + \
+            y*(1552.307223226202 + z*(-1179.07530528732 + (347.75583155301 - 42.658016703665396*z)*z) + \
+            y*(-1513.116771538718 + z*(1640.877973941168 + z*(-666.7248765806615 + 86.8841343834394*z)) + \
+            y*(998.720781638304 + z*(-1437.2719839264719 + (585.6150223126464 - 33.261421241781*z)*z) + \
+            y*(-603.630761243752 + (913.178230403046 - 316.49805267936244*z)*z + \
+            y*(241.04130980405 + y*(-44.5794634280918 + 49.023632509086724*z) + \
+            z*(-331.6338314040912 + 77.78288016926652*z))))))
+        
+        g08 = x2*(769.588305957198 + z*(-579.1945920644748 + (190.08980732018878 - 52.4960313181984*z)*z) + \
+            x*(-104.588181856267 + x*(-8.16387957824522 - 181.05306718269662*z) + \
+            (408.2669656358754 - 40.95023189295384*z)*z + \
+            y*(166.3847855603638 - 176.898386096574*z + y*(-108.3834525034224 + 153.8390924339484*z))) + \
+            y*(-687.913805923122 + z*(748.126026697488 + z*(-379.883572632876 + 140.9317606630898*z)) + \
+            y*(674.819060538734 + z*(-1069.887337245828 + (530.4484299696 - 158.40030944233638*z)*z) + \
+            y*(-409.779283929806 + y*(149.452282277512 - 218.92375140095282*z) + \
+            (681.370187043564 - 133.5392811916956*z)*z))))
+        # fmt: on
+
+        # Note. This is the second derivative of the Gibbs function with respect to
+        # pressure, measured in Pa.  This derivative has units of (J/kg) (Pa^-2).
+        return (g03 + g08) * 1e-16
+
+    def _dg_ds2(self) -> float:
+        """second partial derivative of Gibbs function w.r.t. salinity"""
+        # Code based on matlab code from [ZH21]
+        sfac = 0.0248826675584615
+        x2 = sfac * self.salinity
+        x = np.sqrt(x2)
+        y = self.temperature * 0.025
+        z = self.pressure * 1e-4
+
+        # fmt: off
+        g08 = 5812.814566267320 + 851.2267349467060*y + x*(-3648.219935726910 \
+            + x*(8103.204624147880 + x*(-8187.513078222526 + x*(4495.214854534080 \
+            - 850.3093707944657*x))) + y*(-740.1112652125230 + x*(2175.341332000392 \
+            + x*(-1470.212300173320 + 441.0859475949660*x)) + y*(-64.59970139670629 \
+            - 274.2290036817964*x + y*(-15.03410562928125 + 197.4670779425016*x \
+            + y*(1.313400992713418 - 68.55903096791521*x + 9.987880382780312*x*y)))) \
+            + z*(299.1894046108515 + x*(-219.1676534131548 + 270.2131467083145*x) \
+            + y*(-262.9380617798205 - 90.67342340513160*x + y*(+ 574.5870990037140 \
+            + y*(-690.4798977018854 + 351.8477814170325*y))) + z*(-78.44113639220025 \
+            - 16.32775915649044*x + y*(124.7885891702729 - 81.28758937756680*y) \
+            + z*(102.0667414089689 - 120.7020447884644*x + y*(-44.22459652414350 \
+            + 38.45977310848710*y) - 5.118778986619230*z))))
+        # fmt: on
+
+        if g08 > 0:
+            g08 /= x2
+        if g08 == 0:
+            g08 = float("NaN")
+
+        return 0.5 * sfac * sfac * g08
+
+    def _dn_dS(self, wavelength: ArrayLike) -> NDArray:
+        C = WaterBaseModel._MS_CONSTS
+        L = u.convert(np.asarray(wavelength), u.um)
+        P = self.pressure
+        Tc = self.temperature
+        sal_con = 35.16504 / 35  # conversion, SA = sal_con x PSU
+        return (
+            C.S0
+            + C.S1LM2 / L**2
+            + C.S1T * Tc
+            + C.S1T2 * Tc**2
+            + C.S1T3 * Tc**3
+            + C.STL * Tc * L
+            + P * (C.P1S + C.PTS * Tc + C.PT2S * Tc**2)
+        ) / sal_con
 
     def scattering_coef(self, wavelength: ArrayLike) -> NDArray:
-        """
-        Returns the scattering coefficient for the given wavelengths
-        """
-        assert WaterBaseModel.DataTable is not None
-        return (
-            np.interp(
-                self.checkWavelength(wavelength),
-                WaterBaseModel.DataTable[:, 0],
-                WaterBaseModel.DataTable[:, 2],
-            )
-            / u.m
-        )
+        # Code based on matlab code from [ZH21]
+        Kbz = 1.3806503e-23  #  Boltzmann constant
+        Tk = self.temperature + 273.15  #  Absolute temperature
+        lam = self.checkWavelength(wavelength)
+        delta = self.depolarizationRatio
+        nsw = self.refractive_index(wavelength)
+        dnswds = self._dn_dS(wavelength)
+        nsw2 = nsw**2
+        DFRI = (nsw2 - 1) * (1 + 2 / 3 * (nsw2 + 2) * (nsw / 3 - 1 / 3 / nsw) ** 2)
+        SFRI = 2 * nsw * dnswds
+        gp = self._dg_dp()
+        gpp = self._dg_dp2()
+        beta90 = np.pi**2 * Kbz / 2 * ((lam * 1e-9) ** (-4)) * Tk
+        beta90 *= (6 + 6 * delta) / (6 - 7 * delta)  # cabannes factor
+        if self.salinity > 0:
+            gss = self._dg_ds2()
+            beta90 *= DFRI**2 * (-gpp / gp) + SFRI**2 * (gp / gss)
+        else:
+            beta90 *= DFRI**2.0 * (-gpp / gp)
+        beta = 8 * np.pi / 3 * beta90 * (2 + delta) / (1 + delta)
+        return beta
+
+
+class SmithNaturalWaterMeasurements(MediumModel):
+    """
+    Interpolates Smith's measurements of absorption and scattering coefficients
+    for clean natural water. Only valid between 200nm and 800nm.
+
+    References
+    ----------
+    Raymond C. Smith and Karen S. Baker, "Optical properties of the clearest
+    natural waters (200-800 nm)," Appl. Opt. 20, 177-184 (1981)
+    """
+
+    # lazily load table
+    _TABLE = None
+
+    def __init__(
+        self,
+        *args,
+        **kwargs,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.restrictWavelengthRange((200.0, 800.0) * u.nm)
+        # load table if necessary
+        if SmithNaturalWaterMeasurements._TABLE is None:
+            SmithNaturalWaterMeasurements._TABLE = loadCSV("water_smith81.csv")
+
+    def absorption_coef(self, wavelength: ArrayLike) -> NDArray:
+        lam = self.checkWavelength(wavelength)
+        table = SmithNaturalWaterMeasurements._TABLE
+        assert table is not None
+        return np.interp(lam, table[:, 0], table[:, 1])
+
+    def scattering_coef(self, wavelength: ArrayLike) -> NDArray:
+        lam = self.checkWavelength(wavelength)
+        table = SmithNaturalWaterMeasurements._TABLE
+        assert table is not None
+        return np.interp(lam, table[:, 0], table[:, 2])
 
 
 class KokhanovskyOceanWaterPhaseMatrix(MediumModel):

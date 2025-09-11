@@ -12,6 +12,22 @@ from numpy.typing import NDArray
 from typing import Any
 
 
+def intersectRange(
+    a: tuple[float, float] | None,
+    b: tuple[float, float] | None,
+    /,
+) -> tuple[float, float]:
+    """Returns the intersection of two ranges"""
+    if a is None and b is None:
+        raise ValueError("Can not combine `None` and `None`!")
+    a_min, a_max = (float("-inf"), float("inf")) if a is None else a
+    b_min, b_max = (float("-inf"), float("inf")) if b is None else b
+    c_min, c_max = max(a_min, b_min), min(a_max, b_max)
+    if not c_min <= c_max:  # this way we handle NaNs
+        raise ValueError("Ranges do not overlap!")
+    return (c_min, c_max)
+
+
 def loadCSV(file: str, *, delimiter: str | None = ",", skiprows: int = 1) -> NDArray:
     return np.loadtxt(
         str(importlib.resources.files("theia").joinpath(f"data/{file}")),
