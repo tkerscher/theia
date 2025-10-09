@@ -11,20 +11,83 @@ from scipy.interpolate import (
 import hephaistos as hp
 from ctypes import memmove
 
-from typing import Final, Literal
+from abc import ABC, abstractmethod
+from enum import IntEnum
+from typing import Final, Literal, Type
 
 __all__ = [
-    "evalTable",
+    "createInterpolator",
+    "createTableFromFunction",
     "getTableSize",
+    "interpolate",
     "sampleTable1D",
     "sampleTable2D",
     "uploadTables",
+    "CubicInterpolator",
+    "InterpolationMethod",
+    "Interpolator",
+    "LinearInterpolator",
+    "SteffenInterpolator",
     "Table",
 ]
 
 
 def __dir__():
     return __all__
+
+
+class InterpolationMethod(IntEnum):
+    """Enumeration of available interpolation methods"""
+
+    LINEAR = 1
+    CUBIC = 2
+    STEFFEN = 3
+
+
+Interpolation = InterpolationMethod | Literal["linear", "cubic", "steffen"]
+
+
+def _toMethod(i: Interpolation) -> InterpolationMethod:
+    """util function converting Interpolation to InterpolationMethod"""
+    if type(i) is InterpolationMethod:
+        return i
+    else:
+        return InterpolationMethod[str(i).upper()]
+
+
+def _padTable(data: ArrayLike) -> NDArray:
+    """
+    Pads the given table with the appropriate values dictated by the boundary
+    conditions of cubic convolution interpolation.
+    """
+    # allocate array
+    result = np.pad(data, 1)
+    # calculate padding for each dimension
+    # view gives mask to select idx at given axis
+    view = lambda axis, idx: (*[slice(None)] * axis, idx, ...)
+    for i, s in enumerate(result.shape):
+        if s == 3:
+            # constant extrapolate
+            result[*view(i, (0, 2))] = result[*view(i, 1)]
+        elif s == 4:
+            # linear extrapolate
+            delta = result[*view(i, 1)] - result[*view(i, 2)]
+            result[*view(i, 0)] = result[*view(i, 1)] - delta
+            result[*view(i, -1)] = result[*view(i, -1)] + delta
+        elif s > 4:
+            # cubic extrapolate
+            result[*view(i, 0)] = (
+                3.0 * result[*view(i, 1)]
+                - 3.0 * result[*view(i, 2)]
+                + result[*view(i, 3)]
+            )
+            result[*view(i, -1)] = (
+                3.0 * result[*view(i, -2)]
+                - 3.0 * result[*view(i, -3)]
+                + result[*view(i, -4)]
+            )
+    # done
+    return result
 
 
 class Table:
@@ -34,11 +97,16 @@ class Table:
     fetches during interpolation, expects the data as the values at equidistant
     sampling points.
 
+    Memory layout of the data follows the C style, i.e. it is contiguous in the
+    last axis.
+
     Parameters
     ----------
     data: ArrayLike
         Values of the equidistant sampling points used for interpolation.
         Will be converted to floats.
+    interpolation: Interpolation, default="linear"
+        Interpolation method to apply
 
     Note
     ----
@@ -47,10 +115,23 @@ class Table:
 
     ALIGNMENT: Final[int] = 4
     """Memory alignment requirement on the GPU"""
+    PADDING: Final[int] = 1
+    """Amount of entries padded at both ends of each axis"""
 
-    def __init__(self, data: ArrayLike) -> None:
-        self._data = np.ascontiguousarray(data, dtype=np.float32)
-        self._header = np.array(self._data.shape, dtype=np.int32)
+    def __init__(
+        self,
+        data: ArrayLike,
+        *,
+        interpolation: Interpolation = "linear",
+    ) -> None:
+        self._data = np.ascontiguousarray(_padTable(data), dtype=np.float32)
+        self._shape = np.array(self._data.shape, dtype=np.int32)
+        # subtract padding
+        self._shape -= 2 * Table.PADDING
+        self._interpolation = _toMethod(interpolation)
+        # ideally Table wouldn't need to know this, but for now we do the test here
+        if self.interpolation is InterpolationMethod.STEFFEN and self._data.ndim != 1:
+            raise ValueError("Steffen interpolation is only defined for 1D data!")
 
     @property
     def data(self) -> NDArray[np.float32]:
@@ -58,17 +139,39 @@ class Table:
         return self._data
 
     @property
+    def interpolation(self) -> InterpolationMethod:
+        """Method used to interpolate values"""
+        return self._interpolation
+
+    @property
+    def shape(self) -> NDArray[np.int32]:
+        """Header of the table containing sample sizes for each dimension"""
+        return self._shape
+
+    @property
     def nbytes(self) -> int:
         """Required amount of bytes to store the table"""
-        return self._data.nbytes + self._header.nbytes
+        return self._data.nbytes + self._shape.nbytes + 4
+
+    @property
+    def ndim(self) -> int:
+        """Number of dimension in this table"""
+        return len(self.shape)
+
+    @property
+    def samples(self) -> NDArray[np.float32]:
+        """The actual sampled data, i.e. `data` without the padding."""
+        mask = [slice(Table.PADDING, -Table.PADDING)] * self.ndim
+        return self.data[*mask]
 
     def copy(self, ptr) -> int:
         """
         Copies the table to the given memory address and returns the amount of
         copied bytes.
         """
-        memmove(ptr, self._header.ctypes.data, self._header.nbytes)
-        ptr = ptr + self._header.nbytes  # dont alter initial ptr
+        header = np.append(np.int32(self.interpolation), self.shape)
+        memmove(ptr, header.ctypes.data, header.nbytes)
+        ptr = ptr + header.nbytes  # dont alter initial ptr
         memmove(ptr, self._data.ctypes.data, self._data.nbytes)
         return self.nbytes
 
@@ -92,8 +195,8 @@ def getTableSize(a: ArrayLike | tuple[int, ...] | None) -> int:
         a = np.shape(a)
     if len(a) == 0:
         raise RuntimeError("table cannot have zero shape!")
-    # header + data
-    return (len(a) + sum(a)) * 4  # 4 bytes per float
+    # header + padding + data
+    return (1 + len(a) + 2 * Table.PADDING * len(a) + sum(a)) * 4  # 4 bytes per item
 
 
 def uploadTables(data: list[NDArray]) -> tuple[hp.Tensor, list[int]]:
@@ -142,6 +245,44 @@ def _parseBoundary(data, boundary, n):
         return np.linspace(boundary[0], boundary[1], n)
     else:
         raise RuntimeError("Cant parse given boundaries!")
+
+
+def createTableFromFunction(
+    f,
+    *xi,
+    interpolation: Interpolation = "linear",
+) -> Table:
+    """
+    Creates a table by sampling the given function on a regular grid with the
+    given dimension.
+
+    Parameters
+    ----------
+    f: Callable (x1,x2,...,xn) -> float
+        Function to be repeatedly evaluated to create data points
+    x1,x2,...,xn: int | (float, float, int)
+        Specify the number of samples per dimension and optionally the boundary
+        for each axis in the form (min, max, n_samples)
+    interpolation: Interpolation, default="linear"
+        Interpolation method of the produced table
+
+    Returns
+    -------
+        Table in suitable format for GPU interpolation.
+    """
+
+    def createAxis(spec: int | tuple[float, float, int]) -> NDArray:
+        if type(spec) == int:
+            return np.linspace(0.0, 1.0, spec)
+        elif type(spec) == tuple and len(spec) == 3:
+            return np.linspace(*spec)
+        else:
+            raise ValueError(f"Cannot parse dimension spec: {spec}")
+
+    axes = [createAxis(x) for x in xi]
+    grid = np.meshgrid(*axes, indexing="ij")
+    values = f(*grid)
+    return Table(values, interpolation=interpolation)
 
 
 def sampleTable1D(
@@ -238,40 +379,275 @@ def sampleTable2D(
     return Table(values)
 
 
-def evalTable(f, *ai):
+class Interpolator(ABC):
     """
-    Creates a table by sampling the given function on a regular grid.
-    It can process both one and two dimensional functions.
-    The result has the correct format to be uploaded to the GPU.
+    Base class for algorithms interpolating values stored in a `Table`.
+
+    Parameter
+    ---------
+    table: Table
+        Table containing the values to be interpolated
+    bounds: tuple[(float, float), ...] | None, default=None
+        Boundaries of each dimension specified as (min, max). If `None`,
+        assumes (0, 1) for every dimension.
+    """
+
+    def __init__(
+        self,
+        table: Table,
+        *,
+        bounds: tuple[tuple[float, float], ...] | None = None,
+    ) -> None:
+        self._table = table
+        self._bounds = bounds
+
+    @property
+    def bounds(self) -> tuple[tuple[float, float], ...] | None:
+        """
+        Boundaries of each dimesion used for interpolation.
+        If `None`, assumes (0,1) for every dimensions.
+        """
+        return self._bounds
+
+    @property
+    def table(self) -> Table:
+        """Underlying table containing values for interpolation"""
+        return self._table
+
+    def _toGridCoords(self, xi: ArrayLike) -> tuple[NDArray, NDArray]:
+        """
+        Converts the given coordinates to grid coordinates using the specified
+        bounds. Evaluates for each coordinate x_i the range x_k <= x_i <= x_k+1
+        returning both k and u = (x_i - x_k) / (x_k+1 - x_k)
+        """
+        # we demote to 32bit float to mimic the GPU more closely
+        xi = np.asarray(xi, dtype=np.float32, copy=True)
+        if xi.ndim == 1:
+            xi = xi.reshape((-1, 1))
+        elif xi.ndim >= 3 or xi.shape[1] != self.table.ndim:
+            raise ValueError(f"xi has wrong shape! Expected (...,{self.table.ndim})!")
+        # convert xi -> (0,1)
+        if self.bounds is not None:
+            for i, (a, b) in enumerate(self.bounds):
+                xi[:, i] = (xi[:, i] - a) / (b - a)
+        # convert to grid coords
+        np.clip(xi, 0.0, 1.0, out=xi)
+        for i, n in enumerate(self.table.shape):
+            xi[:, i] *= n - 1
+        # split in integer and fractional part
+        k = np.floor(xi).astype(np.int32)
+        for i, n in enumerate(self.table.shape):
+            # to prevent out of bounds access, ensure k is not the last element
+            np.clip(k[:, i], 0, n - 2, out=k[:, i])
+        u = xi - k
+        # add padding
+        k += Table.PADDING
+        return k, u
+
+    @abstractmethod
+    def __call__(self, xi: ArrayLike) -> NDArray:
+        """
+        Interpolates the underlying table at the given positions.
+
+        Parameters
+        ----------
+        xi: NDArray of shape (..., ndim)
+            Positions to evaluate the interpolation at
+        """
+        ...
+
+
+def _step(x: NDArray, axis: int, delta: int) -> NDArray:
+    """util function adding `delta` along axis"""
+    x = x.copy()
+    x[:, axis] += delta
+    return x
+
+
+class LinearInterpolator(Interpolator):
+    """
+    Linear interpolation of `Table`.
+
+    Parameter
+    ---------
+    table: Table
+        Table containing the values to be interpolated
+    bounds: tuple[(float, float), ...] | None, default=None
+        Boundaries of each dimension specified as (min, max). If `None`,
+        assumes (0, 1) for every dimension.
+    """
+
+    def __init__(
+        self,
+        table: Table,
+        *,
+        bounds: tuple[tuple[float, float], ...] | None = None,
+    ) -> None:
+        super().__init__(table, bounds=bounds)
+
+    def _interp(self, k: NDArray, u: NDArray, axis: int) -> NDArray:
+        if axis >= self.table.ndim:
+            return self.table.data[*k.T]
+        else:
+            a = self._interp(k, u, axis + 1)
+            b = self._interp(_step(k, axis, 1), u, axis + 1)
+            return a * (1.0 - u[:, axis]) + b * u[:, axis]
+
+    def __call__(self, xi: ArrayLike) -> NDArray:
+        k, u = self._toGridCoords(xi)
+        return self._interp(k, u, 0)
+
+
+class CubicInterpolator(Interpolator):
+    """
+    Cubic interpolation based on the unique solution presented in:
+    R.G. Keys: "Cubic Convolution Interpolation for Digital Image Processing" (1981)
+
+    Parameter
+    ---------
+    table: Table
+        Table containing the values to be interpolated
+    bounds: tuple[(float, float), ...] | None, default=None
+        Boundaries of each dimension specified as (min, max). If `None`,
+        assumes (0, 1) for every dimension.
+    """
+
+    def __init__(
+        self,
+        table: Table,
+        *,
+        bounds: tuple[tuple[float, float], ...] | None = None,
+    ) -> None:
+        super().__init__(table, bounds=bounds)
+
+    def _interp(self, k: NDArray, u: NDArray, axis: int) -> NDArray:
+        if axis >= self.table.ndim:
+            return self.table.data[*k.T]
+        else:
+            a = self._interp(_step(k, axis, -1), u, axis + 1)
+            b = self._interp(k, u, axis + 1)
+            c = self._interp(_step(k, axis, 1), u, axis + 1)
+            d = self._interp(_step(k, axis, 2), u, axis + 1)
+
+            s = u[:, axis]
+            sa = -(s**3) + 2.0 * s**2 - s
+            sb = 3.0 * s**3 - 5.0 * s**2 + 2.0
+            sc = -3.0 * s**3 + 4.0 * s**2 + s
+            sd = s**3 - s**2
+
+            return 0.5 * (sa * a + sb * b + sc * c + sd * d)
+
+    def __call__(self, xi: ArrayLike) -> NDArray:
+        k, u = self._toGridCoords(xi)
+        return self._interp(k, u, 0)
+
+
+class SteffenInterpolator(Interpolator):
+    """
+    Local monotone cubic hermite interpolation in one dimension based on the
+    paper by M. Steffen:
+    M. Steffen: A simple method for monotonic inerpolation in one dimension (1990)
 
     Parameters
     ----------
-    f: Callable accepting as many floats as specified dims
-        Function to be repeatedly called to create data points
-    a1,a2,...,an: n_samples or (min, max, n_samples)
-        Specify the number of samples per dimension and optionally the boundary
-        for each axis
-
-    Returns
-    -------
-        Table in suitable format for GPU interpolation
+    table: Table
+        Table containing the values to be interpolated
+    bounds: tuple[(float, float), ...] | None, default=None
+        Boundaries of each dimension specified as (min, max). If `None`,
+        assumes (0, 1) for every dimension.
     """
 
-    # create sample points
-    def createAxis(spec):
-        if type(spec) == int:
-            return np.linspace(0.0, 1.0, spec)
-        elif type(spec) == tuple and len(spec) == 3:
-            return np.linspace(*spec)
-        raise RuntimeError(f"Cannot parse dimension: {spec}")
+    def __init__(
+        self,
+        table: Table,
+        *,
+        bounds: tuple[tuple[float, float], ...] | None = None,
+    ) -> None:
+        if table.ndim != 1:
+            raise ValueError("Steffen interpolation is only defined for 1D data!")
+        super().__init__(table, bounds=bounds)
+        # pre calc slopes to declutter notation later on
+        y = table.data
+        s = np.diff(table.data)
+        dy = np.stack([np.abs(s[:-1]), np.abs(s[1:]), 0.25 * np.abs(y[2:] - y[:-2])])
+        dy = (np.sign(s[1:]) + np.sign(s[:-1])) * np.min(dy, 0)
+        self._s, self._dy = s, dy
 
-    axes = [createAxis(a) for a in ai]
-    grid = np.meshgrid(*axes)
+    def __call__(self, xi: ArrayLike) -> NDArray:
+        k, u = self._toGridCoords(xi)
+        k, u = k.squeeze(), u.squeeze()
 
-    # sample function
-    values = f(*grid)
-    axes.push(values)
-    data = np.stack(axes, axis=-1)
+        y1 = self._table.data[k]
+        s1 = self._s[k]
+        dy1 = self._dy[k - 1]
+        dy2 = self._dy[k]
 
-    # create table and return
-    return Table(data)
+        a = dy1 + dy2 - 2.0 * s1
+        b = 3.0 * s1 - 2.0 * dy1 - dy2
+        return ((a * u + b) * u + dy1) * u + y1
+
+
+_interpolatorDict: dict[InterpolationMethod, Type[Interpolator]] = {
+    InterpolationMethod.LINEAR: LinearInterpolator,
+    InterpolationMethod.CUBIC: CubicInterpolator,
+    InterpolationMethod.STEFFEN: SteffenInterpolator,
+}
+
+
+def createInterpolator(
+    data: ArrayLike | Table,
+    *,
+    method: Interpolation | None = None,
+    bounds: tuple[tuple[float, float], ...] | None = None,
+) -> Interpolator:
+    """
+    Creates an interpolator of given method using the specified data.
+
+    Parameters
+    ----------
+    data: ArrayLike | Table
+        Sampled data used to build the underlying table
+    method: Interpolation | None, default=None
+        Interpolation method to use. If `None`, uses the one defined by the
+        table.
+    bounds: tuple[(float, float), ...] | None, default=None
+        Boundaries of each dimension specified as (min, max). If `None`,
+        assumes (0, 1) for every dimension.
+    """
+    table = data if type(data) is Table else Table(data)
+    if method is None:
+        method = table.interpolation
+    else:
+        method = _toMethod(method)
+
+    if method in _interpolatorDict:
+        return _interpolatorDict[method](table, bounds=bounds)
+    else:
+        raise ValueError("Unknown interpolation method!")
+
+
+def interpolate(
+    data: ArrayLike | Table,
+    xi: ArrayLike,
+    *,
+    method: Interpolation | None = None,
+    bounds: tuple[tuple[float, float], ...] | None = None,
+) -> NDArray:
+    """
+    Interpolates the given data using the specified method. Thin wrapper
+    function around the corresponding interpolation classes.
+
+    Parameters
+    ----------
+    data: ArrayLike | Table
+        Sampled data used to build the underlying table
+    xi: ArrayLike
+        Coordinates at which to evaluate the interpolation
+    method: Interpolation | None, default=None
+        Interpolation method to use. If `None`, uses the one defined by the
+        table.
+    bounds: tuple[(float, float), ...] | None, default=None
+        Boundaries of each dimension specified as (min, max). If `None`,
+        assumes (0, 1) for every dimension.
+    """
+    return createInterpolator(data, method=method, bounds=bounds)(xi)
