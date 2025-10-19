@@ -6,7 +6,8 @@
 #include "result.glsl"
 #include "scene.types.glsl"
 
-buffer Geometries{ Geometry geometries[]; };
+//list of material used by each instanced geometry
+readonly buffer MaterialMap { Material materialMap[]; };
 //Top level acceleration structure containing the scene
 uniform accelerationStructureEXT tlas;
 
@@ -15,10 +16,9 @@ uniform accelerationStructureEXT tlas;
  * normal in both world and object space. Returns true, if successfull, false
  * otherwise.
  *
- * Note: Normals always points outwards.
- *
- * Note: This version does not interpolate normals, but use it to determine the
- *       orientation of the material (inward/outward).
+ * Note: Orientation of a triangle is determined based on its winding order.
+ *       If viewed from the outside, a triangle must have counter-clockwise
+ *       winding order, and vice versa.
 */
 ResultCode processRayQuery(
     const RayState ray,     ///< Current propagation state
@@ -34,30 +34,26 @@ ResultCode processRayQuery(
         return RESULT_CODE_RAY_MISSED;
       
     //fetch info about intersection
-    int instanceId = rayQueryGetIntersectionInstanceIdEXT(rayQuery, true);
-    int triangleId = rayQueryGetIntersectionPrimitiveIndexEXT(rayQuery, true);
+    vec3 positions[3];
+    rayQueryGetIntersectionTriangleVertexPositionsEXT(rayQuery, true, positions);
     vec2 barys = rayQueryGetIntersectionBarycentricsEXT(rayQuery, true);
     hit.customId = rayQueryGetIntersectionInstanceCustomIndexEXT(rayQuery, true);
     //reconstruct hit triangle
-    Geometry geom = geometries[instanceId];
-    ivec3 index = geom.indices[triangleId].idx;
-    Vertex v0 = geom.vertices[index.x];
-    Vertex v1 = geom.vertices[index.y];
-    Vertex v2 = geom.vertices[index.z];
-    precise vec3 e1 = v1.position - v0.position;
-    precise vec3 e2 = v2.position - v0.position;
-    hit.objPos = v0.position + fma(vec3(barys.x), e1, barys.y * e2);
-    hit.objNrm = cross(e1, e2);
-    //interpolate normal
-    precise vec3 n1 = v1.normal - v0.normal;
-    precise vec3 n2 = v2.normal - v0.normal;
-    vec3 intNrm = v0.normal + fma(vec3(barys.x), n1, barys.y * n2);
-
-    //model might have a different winding order than we expect
-    // -> match sign of objNrm and intNrm
-    hit.objNrm *= signBit(dot(hit.objNrm, intNrm));
-    //normalize objNrm
-    hit.objNrm = normalize(hit.objNrm);
+    precise vec3 e1 = positions[1] - positions[0];
+    precise vec3 e2 = positions[2] - positions[0];
+    hit.objPos = positions[0] + fma(vec3(barys.x), e1, barys.y * e2);
+    //we can distinguish the sides of an triangle by the order of its vertices.
+    //this is known as "winding order". By default we follow the standard used
+    //in e.g. Blender or OpenGL and define the outward facing side to be
+    //counter-clockwise
+    #ifndef OUTWARD_FACE_CLOCK_WISE
+    //default
+    hit.objNrm = normalize(cross(e1, e2));
+    #else
+    //however, if for any reason we want the opposite behavior, we can just flip
+    //the normal by flipping the cross product
+    hit.objNrm = normalize(cross(e2, e1));
+    #endif
 
     //translate from world to object space
     mat4x3 world2Obj = rayQueryGetIntersectionWorldToObjectEXT(rayQuery, true);
@@ -68,7 +64,8 @@ ResultCode processRayQuery(
     hit.inward = dot(hit.objDir, hit.objNrm) <= 0.0;
 
     //fetch object material
-    hit.material = geom.material;
+    int instanceId = rayQueryGetIntersectionInstanceIdEXT(rayQuery, true);
+    hit.material = materialMap[instanceId];
     //fetch material flags
     hit.flags = hit.inward ? hit.material.flagsInwards : hit.material.flagsOutwards;
     //light models are generally unaware of the scene's geometry and might have

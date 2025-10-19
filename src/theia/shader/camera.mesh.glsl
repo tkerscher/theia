@@ -3,8 +3,22 @@
 
 #include "math.glsl"
 #include "ray.surface.glsl"
-#include "scene.types.glsl"
 #include "util.sample.glsl"
+
+layout(buffer_reference, scalar, buffer_reference_align=4) readonly buffer Vertex {
+    vec3 position;
+    vec3 normal;
+};
+// Indices of a triangle
+layout(buffer_reference, scalar, buffer_reference_align=4) readonly buffer Index {
+    ivec3 idx;
+};
+
+struct Geometry{
+    Vertex vertices;    // &vertices[0]
+    Index indices;      // &indices[0]
+    Material material;
+};
 
 uniform CameraParams {
     uvec2 verticesAddress;
@@ -36,11 +50,11 @@ CameraSample sampleCamera(float wavelength, uint idx, inout uint dim) {
     vec3 e1 = v1.position - v0.position;
     vec3 e2 = v2.position - v0.position;
     vec3 localPos = v0.position + fma(vec3(barys.x), e1, barys.y * e2);
-    vec3 n1 = v1.normal - v0.normal;
-    vec3 n2 = v2.normal - v0.normal;
+    #ifndef OUTWARD_FACE_CLOCK_WISE
     vec3 localNrm = normalize(cross(e1, e2));
-    vec3 intNrm = v0.normal + fma(vec3(barys.x), n1, barys.y * n2);
-    localNrm *= signBit(dot(localNrm, intNrm)); //align geometric and interpolated normal
+    #else
+    vec3 localNrm = normalize(cross(e2, e2));
+    #endif
     localNrm *= cameraParams.outward; //flip sign dependent on direction
 
     //transform from local to world

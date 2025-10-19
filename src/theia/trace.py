@@ -1247,7 +1247,7 @@ class SceneForwardTracer(Tracer):
         # create program
         self._program = hp.Program(self._code)
         # bind scene
-        self._program.bindParams(Geometries=scene.geometries, tlas=scene.tlas)
+        scene.bindParams(self._program)
 
     @property
     def callback(self) -> TraceEventCallback:
@@ -1523,7 +1523,7 @@ class SceneBackwardTracer(Tracer):
         # create program
         self._program = hp.Program(self._code)
         # bind scene
-        self._program.bindParams(Geometries=scene.geometries, tlas=scene.tlas)
+        scene.bindParams(self._program)
 
     @property
     def callback(self) -> TraceEventCallback:
@@ -1796,7 +1796,7 @@ class SceneBackwardTargetTracer(Tracer):
         # create program
         self._program = hp.Program(self._code)
         # bind scene
-        self._program.bindParams(Geometries=scene.geometries, tlas=scene.tlas)
+        scene.bindParams(self._program)
 
     @property
     def callback(self) -> TraceEventCallback:
@@ -2036,7 +2036,7 @@ class DirectLightTracer(Tracer):
         self._program = hp.Program(self._code)
         # bind scene if present
         if scene is not None:
-            self._program.bindParams(tlas=scene.tlas)
+            scene.bindParams(self._program)
 
     @property
     def callback(self) -> TraceEventCallback:
@@ -2283,7 +2283,7 @@ class BidirectionalPathTracer(Tracer):
         # create program
         self._program = hp.Program(self._code)
         # bind scene
-        self._program.bindParams(Geometries=scene.geometries, tlas=scene.tlas)
+        scene.bindParams(self._program)
 
     @property
     def callback(self) -> TraceEventCallback:
@@ -2553,8 +2553,8 @@ class ScenePhotonTracer(Tracer):
         self._init = hp.Program(code_init)
         self._loop = hp.Program(code_loop)
         # bind scene
-        self._init.bindParams(Geometries=scene.geometries, tlas=scene.tlas)
-        self._loop.bindParams(Geometries=scene.geometries, tlas=scene.tlas)
+        scene.bindParams(self._init)
+        scene.bindParams(self._loop)
 
     @property
     def callback(self) -> TraceEventCallback:

@@ -648,20 +648,19 @@ class Scene:
         # fetch materials from store if needed
         if isinstance(materials, MaterialStore):
             materials = materials.material
-        # collect geometries
-        geometries = hp.ArrayBuffer(Scene.GLSLGeometry, len(instances))
+        # build materials map
+        materialMap = hp.UnsignedLongBuffer(len(instances))
+        materialMapArray = materialMap.numpy()
         for i, inst in enumerate(instances):
-            geometries[i].vertices = inst.vertices
-            geometries[i].indices = inst.indices
             if inst.material is not None:
                 if inst.material not in materials:
                     raise ValueError(f'Unknown material "{inst.material}"')
-                geometries[i].material = materials.get(inst.material)
+                materialMapArray[i] = materials.get(inst.material)
             else:
-                geometries[i].material = 0
-        # upload geometries to gpu
-        self._geometries = hp.ArrayTensor(Scene.GLSLGeometry, len(instances))
-        hp.execute(hp.updateTensor(geometries, self._geometries))
+                materialMapArray[i] = 0
+        # upload map to GPU
+        self._materialMap = hp.UnsignedLongTensor(len(instances))
+        hp.execute(hp.updateTensor(materialMap, self._materialMap))
 
         # in order to pass to hephaistos.AccelerationStructure, we need to
         # extract the hephaistos.GeometryInstance from the MeshInstance
@@ -684,9 +683,12 @@ class Scene:
         self._bbox = value
 
     @property
-    def geometries(self) -> hp.Tensor:
-        """The tensor holding the array of geometries in the scene"""
-        return self._geometries
+    def materialMap(self) -> hp.Tensor:
+        """
+        Tensor containing the mapping from geometry instances to their assigned
+        material
+        """
+        return self._materialMap
 
     @property
     def medium(self) -> int:
@@ -707,7 +709,7 @@ class Scene:
 
     def bindParams(self, program: hp.Program) -> None:
         """Binds the parameters describing the scene in the given program"""
-        program.bindParams(tlas=self.tlas, Geometries=self.geometries)
+        program.bindParams(tlas=self.tlas, MaterialMap=self.materialMap)
 
 
 class SceneTemplate:
