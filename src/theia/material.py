@@ -1,42 +1,54 @@
 from __future__ import annotations
 
-import warnings
-
+import re
 import hephaistos as hp
 import numpy as np
 import scipy.constants
 from scipy.integrate import cumulative_simpson
 from scipy.interpolate import CubicSpline
 from scipy.stats.sampling import NumericalInversePolynomial
+import warnings
 
-from ctypes import Structure, c_float, c_uint32, c_uint64, sizeof
-from types import MappingProxyType, SimpleNamespace
+from dataclasses import dataclass, field
+from enum import Enum, IntFlag
+from itertools import chain
+from pathlib import Path
+from struct import pack, unpack
+from types import SimpleNamespace
+from zipfile import ZipFile, Path as ZipPath
 
-from theia.lookup import Table, getTableSize
-from theia.util import loadCSV, intersectRange
+from theia.lookup import createTableFromFunction, Interpolation
+from theia.property import (
+    FloatProperty,
+    Property,
+    PropertyTable,
+    PropertyTableEntry,
+    TableProperty,
+    createSlotMacros,
+    loadTable,
+    loadTableEntry,
+    saveTable,
+    saveTableEntry,
+)
+from theia.util import classproperty, createPreamble, intersectRange, loadCSV
 import theia.units as u
 
-import json
-import re
-from jsonschema import validate
-from pathlib import Path
-from zipfile import Path as ZipPath, ZipFile, is_zipfile
-
-from collections.abc import Iterable
-from enum import IntFlag
-from io import TextIOBase
-from os import PathLike
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from numpy.typing import ArrayLike, NDArray
-from typing import Final
+from typing import Any, Final, Generic, TypeVar, overload
+from typing_extensions import Self
 
 
 __all__ = [
-    "checkMedium",
+    "getPropertySamples",
     "loadMaterials",
-    "parseMaterialFlags",
+    "medium_property",
     "saveMaterials",
     "speed_of_light",
     "BK7Model",
+    "DefaultMaterialSlots",
+    "DefaultMediaSlots",
+    "DispersionFreeMedium",
     "FournierForandPhaseFunction",
     "HenyeyGreensteinPhaseFunction",
     "KokhanovskyOceanWaterPhaseMatrix",
@@ -46,11 +58,13 @@ __all__ = [
     "Medium",
     "MediumModel",
     "NumericalPhaseSamplingMixin",
+    "OpticalProperties",
+    "parseMaterialFlags",
     "PureWaterModel",
     "RayleighScatteringModel",
-    "RayleighScatteringPhaseFunction",
     "SellmeierEquation",
     "SmithNaturalWaterMeasurements",
+    "VACUUM_IDX",
     "WaterBaseModel",
 ]
 
@@ -66,392 +80,55 @@ speed_of_light: Final[float] = 1.0 * u.c
 """speed of light in internal units"""
 
 
+@dataclass
 class Medium:
     """
-    Class to describe a named medium by storing the physical properties as
-    tables each containing values of its respective property sampled at
-    equidistant positions on a specified range of wavelengths.
-
-    Parameters
-    ----------
-    name: str
-        Unique name of the medium. Can later be used to fetch the address of
-        the medium in gpu local memory.
-    lambda_min: float
-        Lower limit of the range of wavelengths the tables are defined
-    lambda_max: float
-        Upper limit of the range of wavelengths the tables are defined
-    refractive_index: ArrayLike | None, default = None
-        Table of refractive index as function of wavelength.
-        None defaults to a constant value of 1.0.
-    group_velocity: ArrayLike | None, default = None
-        Table of group velocity as function of wavelength.
-        None defaults to a constant value of `c`.
-    absorption_coef: ArrayLike | None, default = None
-        Table of absorption coefficient as function of wavelength.
-        None defaults to a constant value of 0.0.
-    scattering_coef: ArrayLike | None, default = None
-        Table of scattering coefficient as function of wavelength.
-        None defaults to a constant value of 0.0.
-    log_phase_function: ArrayLike | None, default = None
-        Table of logarithmic scattering phase function as a function of the
-        cosine of the angle between incoming and outgoing ray in radians over
-        the range [0,1].
-        None defaults to a constant value of 1, i.e. uniform scattering.
-    phase_sampling: ArrayLike | None, default = None
-        Table containing values of the inverse cumulative density function of
-        the phase function used for importance sampling.
-        If None, sampling happens uniform random.
-    phase_m12: ArrayLike | None, default = None
-        Table of normalized m12 element of the phase matrix as function of cos
-        theta. Constant zero if None.
-    phase_m22: ArrayLike | None, default = None
-        Table of normalized m22 element of the phase matrix as function of cos
-        theta. Constant zero if None.
-    phase_m33: ArrayLike | None, default = None
-        Table of normalized m33 element of the phase matrix as function of cos
-        theta. Constant zero if None.
-    phase_m34: ArrayLike | None, default = None
-        Table of normalized m34 element of the phase matrix as function of cos
-        theta. Constant zero if None.
-
-    Note
-    ----
-    The phase matrix and its elements m12, m33, m34 govern how polarization as
-    described by the Stokes' vector changes after volumetric scattering. We
-    assume some symmetry in the medium causing the matrix to be of the following
-    form (note it's normalized to the volume scattering function)
-        /  1  m12  0   0  \\  \n
-        | m12 m22  0   0  |   \n
-        |  0   0  m33 m34 |   \n
-       \\  0   0 -m34 m33 /   \n
+    Describes a named medium by its physical properties stored as `Property`.
+    This allows for an arbitrary set of physical properties consisting of
+    various data types such as constants or look up tables.
     """
 
-    class GLSL(Structure):
-        """The corresponding structure used in shaders"""
-
-        _fields_ = [
-            ("lambda_min", c_float),
-            ("lambda_max", c_float),
-            ("n", c_uint64),  # Table1D
-            ("vg", c_uint64),  # Table1D
-            ("mu_a", c_uint64),  # Table1D
-            ("mu_s", c_uint64),  # Table1D
-            ("log_phase", c_uint64),  # Table1D
-            ("phase_sampling", c_uint64),  # Table1D
-            ("phase_m12", c_uint64),  # Table1D
-            ("phase_m22", c_uint64),  # Table1D
-            ("phase_m33", c_uint64),  # Table1D
-            ("phase_m34", c_uint64),  # Table1D
-        ]
-
-    ALIGNMENT: Final[int] = 8
-    """Alignment of the GLSL structure in device memory"""
-
-    def __init__(
-        self,
-        name: str,
-        lambda_min: float,
-        lambda_max: float,
-        *,
-        refractive_index: ArrayLike | None = None,
-        group_velocity: ArrayLike | None = None,
-        absorption_coef: ArrayLike | None = None,
-        scattering_coef: ArrayLike | None = None,
-        log_phase_function: ArrayLike | None = None,
-        phase_sampling: ArrayLike | None = None,
-        phase_m12: ArrayLike | None = None,
-        phase_m22: ArrayLike | None = None,
-        phase_m33: ArrayLike | None = None,
-        phase_m34: ArrayLike | None = None,
-    ) -> None:
-        # store properties
-        self.name = name
-        self.lambda_min = lambda_min
-        self.lambda_max = lambda_max
-        self.refractive_index = refractive_index
-        self.group_velocity = group_velocity
-        self.absorption_coef = absorption_coef
-        self.scattering_coef = scattering_coef
-        self.log_phase_function = log_phase_function
-        self.phase_sampling = phase_sampling
-        self.phase_m12 = phase_m12
-        self.phase_m22 = phase_m22
-        self.phase_m33 = phase_m33
-        self.phase_m34 = phase_m34
-
-    @property
-    def name(self) -> str:
-        """
-        Name of this medium. Can later be used to fetch the address of the
-        medium in gpu local memory.
-        """
-        return self._name
-
-    @name.setter
-    def name(self, value: str) -> None:
-        self._name = value
-
-    @property
-    def lambda_min(self) -> float:
-        """Minimum wavelength for which the optical properties are defined"""
-        return self._lambda_min
-
-    @lambda_min.setter
-    def lambda_min(self, value: float) -> None:
-        self._lambda_min = value
-
-    @property
-    def lambda_max(self) -> float:
-        """Maximum wavelength for which the optical properties are defined"""
-        return self._lambda_max
-
-    @lambda_max.setter
-    def lambda_max(self, value: float) -> None:
-        self._lambda_max = value
-
-    @property
-    def refractive_index(self) -> ArrayLike | None:
-        """
-        Table containing values of the refractive as a function of wavelength
-        sampled at equidistant points on the range defined by lambda min/max.
-        If None, a constant value of 1.0 is assumed.
-        """
-        return self._refractive_index
-
-    @refractive_index.setter
-    def refractive_index(self, value: ArrayLike | None) -> None:
-        self._refractive_index = value
-
-    @refractive_index.deleter
-    def refractive_index(self) -> None:
-        self._refractive_index = None
-
-    @property
-    def group_velocity(self) -> ArrayLike | None:
-        """
-        Table containing values of the group velocity as a function of
-        wavelength sampled at equidistant points on the range defined by lambda
-        min/max.
-        If None, a constant value of `c` is assumed.
-        """
-        return self._group_velocity
-
-    @group_velocity.setter
-    def group_velocity(self, value: ArrayLike | None) -> None:
-        self._group_velocity = value
-
-    @group_velocity.deleter
-    def group_velocity(self) -> None:
-        self._group_velocity = None
-
-    @property
-    def absorption_coef(self) -> ArrayLike | None:
-        """
-        Table containing values of the absorption coefficient as a function of
-        wavelength sampled at equidistant points on the range defined by lambda
-        min/max.
-        If None, a constant value of 0.0 is assumed.
-        """
-        return self._absorption_coef
-
-    @absorption_coef.setter
-    def absorption_coef(self, value: ArrayLike | None) -> None:
-        self._absorption_coef = value
-
-    @absorption_coef.deleter
-    def absorption_coef(self) -> None:
-        self._absorption_coef = None
-
-    @property
-    def scattering_coef(self) -> ArrayLike | None:
-        """
-        Table containing values of the scattering coefficient as a function of
-        wavelength sampled at equidistant points on the range defined by lambda
-        min/max.
-        If None, a constant value of 0.0 is assumed.
-        """
-        return self._scattering_coef
-
-    @scattering_coef.setter
-    def scattering_coef(self, value: ArrayLike | None) -> None:
-        self._scattering_coef = value
-
-    @scattering_coef.deleter
-    def scattering_coef(self) -> None:
-        self._scattering_coef = None
-
-    @property
-    def log_phase_function(self) -> ArrayLike | None:
-        """
-        Table of logarithmic scattering phase function as a function of the
-        cosine of the angle between incoming and outgoing ray in radians over
-        the range [0,1].
-        None defaults to a constant value of 1, i.e. uniform scattering.
-        """
-        return self._phase_function
-
-    @log_phase_function.setter
-    def log_phase_function(self, value: ArrayLike | None) -> None:
-        self._phase_function = value
-
-    @log_phase_function.deleter
-    def log_phase_function(self) -> None:
-        self._phase_function = None
-
-    @property
-    def phase_sampling(self) -> ArrayLike | None:
-        """
-        Table containing values of the inverse cumulative density function of
-        the phase function used for importance sampling.
-        If None, sampling happens uniform random.
-        """
-        return self._phase_sampling
-
-    @phase_sampling.setter
-    def phase_sampling(self, value: ArrayLike | None) -> None:
-        self._phase_sampling = value
-
-    @phase_sampling.deleter
-    def phase_sampling(self) -> None:
-        self._phase_sampling = None
-
-    @property
-    def phase_m12(self) -> ArrayLike | None:
-        """
-        Table of normalized m12 element of the phase matrix as function of cos
-        theta. Constant zero if None.
-        """
-        return self._phase_m12
-
-    @phase_m12.setter
-    def phase_m12(self, value: ArrayLike | None) -> None:
-        self._phase_m12 = value
-
-    @phase_m12.deleter
-    def phase_m12(self) -> None:
-        self._phase_m12 = None
-
-    @property
-    def phase_m22(self) -> ArrayLike | None:
-        """
-        Table of normalized m22 element of the phase matrix as function of cos
-        theta. Constant zero if None.
-        """
-        return self._phase_m22
-
-    @phase_m22.setter
-    def phase_m22(self, value: ArrayLike | None) -> None:
-        self._phase_m22 = value
-
-    @phase_m22.deleter
-    def phase_m22(self) -> None:
-        self._phase_m22 = None
-
-    @property
-    def phase_m33(self) -> ArrayLike | None:
-        """
-        Table of normalized m33 element of the phase matrix as function of cos
-        theta. Constant zero if None.
-        """
-        return self._phase_m33
-
-    @phase_m33.setter
-    def phase_m33(self, value: ArrayLike | None) -> None:
-        self._phase_m33 = value
-
-    @phase_m33.deleter
-    def phase_m33(self) -> None:
-        self._phase_m33 = None
-
-    @property
-    def phase_m34(self) -> ArrayLike | None:
-        """
-        Table of normalized m34 element of the phase matrix as function of cos
-        theta. Constant zero if None.
-        """
-        return self._phase_m34
-
-    @phase_m34.setter
-    def phase_m34(self, value: ArrayLike | None) -> None:
-        self._phase_m34 = value
-
-    @phase_m34.deleter
-    def phase_m34(self) -> None:
-        self._phase_m34 = None
-
-    # list containing names of arrays/properties used by serialization
-    _PROPS = [
-        "refractive_index",
-        "group_velocity",
-        "absorption_coef",
-        "scattering_coef",
-        "log_phase_function",
-        "phase_sampling",
-        "phase_m12",
-        "phase_m22",
-        "phase_m33",
-        "phase_m34",
-    ]
-
-    def save(self, file) -> None:
-        """
-        Serializes the medium and saves it at the given location.
-        Produces a file in numpy's `.npz` format.
-
-        Parameters
-        ----------
-        file: str or file
-            Path or open file where the data will be saved.
-        """
-        # decline files opened in text mode
-        if isinstance(file, TextIOBase):
-            raise ValueError("file must be opened in binary mode!")
-        # collect all non empty arrays
-        arrays = {
-            p: getattr(self, p) for p in self._PROPS if getattr(self, p) is not None
-        }
-        # add lambda range
-        arrays["lambda_range"] = np.array([self.lambda_min, self.lambda_max])
-
-        np.savez(file, **arrays)
-
-    @staticmethod
-    def load(file, *, name: str = "unnamed") -> Medium:
-        """
-        Loads the serialized medium from the given file or path.
-
-        Parameters
-        ----------
-        file: str or file
-            Path or open file where the data is stored.
-        name: str, default="unnamed"
-            Name of the loaded medium.
-
-        Returns
-        -------
-        Deserialized medium loaded from the given file or path.
-        """
-        # decline files opened in text mode
-        if isinstance(file, TextIOBase):
-            raise ValueError("file must be opened in binary mode!")
-        data = np.load(file)
-        lam = data.get("lambda_range")
-        if lam is None or lam.shape != (2,):
-            raise ValueError("File does not contain valid lambda range!")
-
-        medium = Medium(name, lam[0], lam[1])
-        for prop in Medium._PROPS:
-            setattr(medium, prop, data.get(prop))
-
-        return medium
+    name: str
+    """Name of the medium"""
+    wavelengthRange: tuple[float, float]
+    """Wavelength range for which the optical properties are defined"""
+    properties: dict[str, Property] = field(default_factory=dict)
+    """Optical properties describing the medium"""
 
 
-def checkMedium(medium: Medium, *, raises: bool = True, rtol=5e-3, atol=1e-5) -> bool:
+def _createTableEntryFromMedium(medium: Medium) -> PropertyTableEntry:
+    """util function converting Medium to a property table entry"""
+    props: dict[str, Property]
+    props = {"wavelength_range": FloatProperty(medium.wavelengthRange)}
+    props.update(medium.properties)
+    return props
+
+
+class OpticalProperties(str, Enum):
+    """Enumeration of known optical properties"""
+
+    ABSORPTION_COEF = "absorption_coef"
+    GROUP_VELOCITY = "group_velocity"
+    LOG_PHASE_FUNC = "log_phase_function"
+    PHASE_SAMPLING = "phase_sampling"
+    REFRACTIVE_INDEX = "refractive_index"
+    SCATTERING_COEF = "scattering_coef"
+    # polarization
+    PHASE_M12 = "phase_m12"
+    PHASE_M22 = "phase_m22"
+    PHASE_M33 = "phase_m33"
+    PHASE_M34 = "phase_m34"
+
+
+def checkMedium(
+    medium: Medium, *, raises: bool = True, rtol: float = 5e-3, atol: float = 1e-5
+) -> bool:
     """
     Runs a series of basic tests on the given medium for physical plausibility
     and returns `True` if it is successfull. On failure, if `raises` is `True`
-    raises an `AssertionError` or returns `False` otherwise.
+    raises an `AssertionError` or returns `False` otherwise. Note, that only
+    known properties will be checked, but `medium` may contain additional ones.
+    See `OpticalProperties` for an enumeration of known optical properties.
 
     Parameters
     ----------
@@ -470,72 +147,74 @@ def checkMedium(medium: Medium, *, raises: bool = True, rtol=5e-3, atol=1e-5) ->
     tolerances. This does not necessarily mean that the model is wrong, but it
     might be worth to double check.
     """
+
+    # common logic checking for table properties and fetching samples
+    def getTableData(name: str) -> NDArray | None:
+        if name not in medium.properties:
+            return None
+        prop = medium.properties[name]
+        assert isinstance(
+            prop, TableProperty
+        ), f'Expected property "{name}" to be a table!'
+        if prop.table is None:
+            return None
+        data = prop.table.samples
+        assert data.ndim == 1, f'Expected data of property "{name}" to be 1D!'
+        return data
+
     # bit ugly, but nicer than duplicating the same if/else over and over
     try:
         # fmt: off
-        assert medium.lambda_max >= medium.lambda_min
-        if medium.refractive_index is not None:
-            assert medium.group_velocity is not None, "Refractive index was specified but no group velocity!"
-            assert np.ndim(medium.refractive_index) == 1, "Refractive index must be 1D!"
-            assert np.min(medium.refractive_index) >= 1.0, "Refractive index must be at least 1.0!"
-        if medium.group_velocity is not None:
-            assert medium.refractive_index is not None, "Group velocity was specified, but no refractive index!"
-            assert np.ndim(medium.group_velocity) == 1, "Group velocity must be 1D!"
+        lamMin, lamMax = medium.wavelengthRange
+        assert lamMax >= lamMax
+        if (n := getTableData("refractive_index")) is not None:
+            assert "group_velocity" in medium.properties, "Refractive index was specified, but no group velocity!"
+            assert np.min(n) >= 1.0, "Refractive index must be at least 1.0!"
+        if (vg := getTableData("group_velocity")) is not None:
+            assert "refractive_index" in medium.properties, "Group velocity was specified, but no refractive index!"
+            n = getTableData("refractive_index")
+            assert n is not None
             # c / vg = n - lambda * (d_n/d_lambda)
-            Nn = np.size(medium.refractive_index)
-            n = medium.refractive_index
-            lam_n = np.linspace(medium.lambda_min, medium.lambda_max, Nn)
-            dl = (medium.lambda_max - medium.lambda_min) / (Nn - 1)
+            Nn, Ng = np.size(n), np.size(vg)
+            lam_n = np.linspace(lamMin, lamMax, Nn)
+            lam_g = np.linspace(lamMin, lamMax, Ng)
+            dl = (lamMax - lamMin) / (Nn - 1)
             dn_dl = np.gradient(n, dl)
-            vg = speed_of_light / (n - lam_n * dn_dl)
-            Ng = np.size(medium.group_velocity)
-            lam_g = np.linspace(medium.lambda_min, medium.lambda_max, Ng)
-            vg = np.interp(lam_g, lam_n, vg)
-            assert np.allclose(vg, medium.group_velocity, rtol=rtol, atol=atol), "Group velocity does not match refractive index!"
-        if medium.absorption_coef is not None:
-            assert np.ndim(medium.absorption_coef) == 1, "Absorption coefficient must be 1D!"
-            assert np.min(medium.absorption_coef) >= 0.0, "Absorption coefficient must not be negative!"
-        if medium.scattering_coef is not None:
-            assert np.ndim(medium.scattering_coef) == 1, "Scattering coefficient must be 1D!"
-            assert np.min(medium.scattering_coef) >= 0.0, "Scattering coefficient must not be negative!"
-        if medium.phase_sampling is not None:
-            assert np.ndim(medium.phase_sampling) == 1, "Phase sampling function must be 1D!"
-            assert medium.log_phase_function is not None, "Phase sampling is provided, but no phase function!"
-            f = medium.phase_sampling
-            assert np.all((f >= -1) & (f <= 1)), "Domain of phase sampling must be in [-1, 1]!"
-        if medium.log_phase_function is not None:
-            assert np.ndim(medium.log_phase_function) == 1, "Phase function must be 1D!"
-            assert medium.phase_sampling is not None, "Phase function is defined, but no sampling!"
-            N = np.size(medium.log_phase_function)
-            y = np.exp(medium.log_phase_function)
+            vg_exp = speed_of_light / (n - lam_n * dn_dl)
+            vg_exp = np.interp(lam_g, lam_n, vg)
+            assert np.allclose(vg, vg_exp, rtol=rtol, atol=atol), "Group velocity does not match refractive index!"
+        if (mu_a := getTableData("absorption_coef")) is not None:
+            assert np.min(mu_a) >= 0.0, "Absorption coefficient must be non-negative!"
+        if (mu_s := getTableData("scattering_coef")) is not None:
+            assert np.min(mu_s) >= 0.0, "Scattering coefficient must be non-negative!"
+        if (beta := getTableData("phase_sampling")) is not None:
+            assert "log_phase_function" in medium.properties, "Phase sampling is provided, but no phase function!"
+            assert np.all((beta >= -1.0) & (beta <= 1.0)), "Domain of phase sampling must be in [-1, 1]!"
+        if (beta := getTableData("log_phase_function")) is not None:
+            beta_s = getTableData("phase_sampling")
+            assert beta_s is not None, "Phase function is defined, but no sampling!"
+            N = np.size(beta)
+            y = np.exp(beta)
             dx = 2.0 / (N - 1)
             cdf = 2 * np.pi * cumulative_simpson(y, dx=dx, initial=0)
             assert np.allclose(cdf[-1], 1.0, rtol=rtol, atol=atol), "Phase function must integrate over solid angles to 1!"
             u = np.linspace(-1, 1, N)
-            quantiles = np.interp(medium.phase_sampling, u, cdf)
+            quantiles = np.interp(beta_s, u, cdf)
             # sampling is fine in both directions, i.e. both u and 1-u are fine
             # this will only flip the sign in the difference -> use abs
             # if the sampling table is correct, the quantiles should be equidistant
             dq = np.abs(np.diff(quantiles))
             du = 1 / len(dq)
             assert np.allclose(dq, du, rtol=rtol, atol=atol), "Phase sampling function does not reproduce phase function!"
-        if medium.phase_m12 is not None:
-            assert np.ndim(medium.phase_m12) == 1, "Phase function m12 must be 1D!"
-            m = medium.phase_m12
-            assert np.all((m >= -1.0) & (m <= 1.0)), "Mueller matrix must be normalized!"
-        if medium.phase_m22 is not None:
-            assert np.ndim(medium.phase_m22) == 1, "Phase function m22 must be 1D!"
-            m = medium.phase_m22
-            assert np.all((m >= -1.0) & (m <= 1.0)), "Mueller matrix must be normalized!"
-        if medium.phase_m33 is not None:
-            assert np.ndim(medium.phase_m33) == 1, "Phase function m33 must be 1D!"
-            m = medium.phase_m33
-            assert np.all((m >= -1.0) & (m <= 1.0)), "Mueller matrix must be normalized!"
-        if medium.phase_m34 is not None:
-            assert np.ndim(medium.phase_m34) == 1, "Phase function m34 must be 1D!"
-            m = medium.phase_m34
-            assert np.all((m >= -1.0) & (m <= 1.0)), "Mueller matrix must be normalized!"
-        # fmt: on
+        if( m12 := getTableData("phase_m12")) is not None:
+            assert np.all((m12 >= -1.0) & (m12 <= 1.0)), "Mueller matrix must be normalized!"
+        if (m22 := getTableData("phase_m22")) is not None:
+            assert np.all((m22 >= -1.0) & (m22 <= 1.0)), "Mueller matrix must be normalized!"
+        if (m33 := getTableData("phase_m33")) is not None:
+            assert np.all((m33 >= -1.0) & (m33 <= 1.0)), "Mueller matrix must be normalized!"
+        if (m34 := getTableData("phase_m34")) is not None:
+            assert np.all((m34 >= -1.0) & (m34 <= 1.0)), "Mueller matrix must be normalized!"
+
     except AssertionError as err:
         if raises:
             raise err
@@ -664,45 +343,59 @@ def parseMaterialFlags(flags: str) -> MaterialFlags:
     return result
 
 
+class MaterialFlagsParsingDescriptor:
+    """Descriptor parsing material flags on demand"""
+
+    # See: https://docs.python.org/3/library/dataclasses.html#descriptor-typed-fields
+
+    def __set_name__(self, owner, name) -> None:
+        self._name = "_" + name
+
+    def __get__(self, obj, type) -> MaterialFlags:
+        if obj is None:
+            # dataclass probing for default value
+            return MaterialFlags(0)
+        return getattr(obj, self._name, MaterialFlags(0))
+
+    def __set__(self, obj, value: MaterialFlags | str):
+        if isinstance(value, str):
+            value = parseMaterialFlags(value)
+        setattr(obj, self._name, value)
+
+    def __delete__(self, obj) -> None:
+        setattr(obj, self._name, MaterialFlags(0))
+
+
+@dataclass
 class Material:
     """
-    Class holding information about the material of a geometry. In general a
-    geometry separates space into an "inside" and an "outside" defined by their
-    normal vectors pointing outwards. Materials assign a Medium to each of them.
+    Holds information about the material of a geometry. In general a geometry
+    separates space into an "inside" and an "outside" defined by the winding
+    order of its triangles, where outwards facing triangles have their vertices
+    defined counter-clockwise. Materials assign a `Medium` to each of them,
+    alongside additional properties.
 
     Parameters
     ----------
     name: str
-        Name of this Material. Can later be used to fetch the address of
-        the material in gpu local memory.
-    inside: Medium, str, None
-        Medium in the inside of a geometry. Can also be specified by its name
+        Name of this material. Can later be used to fetch the index of the
+        material in the corresponding table.
+    inside: Medium | str | None
+        Medium in the inside of a geometry. Can also be specified by its name,
         which will get resolved during baking/serialization.
-        None defaults to vacuum.
-    outside: Medium, str, None
-        Medium in the outside of a geometry. Can also be specified by its name
+        `None` defaults to vacuum.
+    outside: Medium | str | None
+        Medium in the outside of a geometry. Can also be specified by its name,
         which will get resolved during baking/serialization.
-        None defaults to vacuum.
     flags: (MaterialFlags|str,MaterialFlags|str)|MaterialFlags|str, default=0
         `MaterialFlags` applied to the material. In a tuple the first element
         applies to the inward direction, the second to the outward one.
         Otherwise the flags are applied to both directions. See
         `parseMaterialFlags` for a description on how to specify material flags
         with a string.
+    properties: Iterable[Property] | None, default=None
+        Optional additional properties assigned to the material.
     """
-
-    class GLSL(Structure):
-        """The corresponding structure used in shaders"""
-
-        _fields_ = [
-            ("inside", c_uint64),  # buffer reference
-            ("outside", c_uint64),  # buffer reference
-            ("flagsInwards", c_uint32),
-            ("flagsOutwards", c_uint32),
-        ]
-
-    ALIGNMENT: Final[int] = 8
-    """Alignment of the GLSL structure in device memory"""
 
     def __init__(
         self,
@@ -713,114 +406,49 @@ class Material:
         flags: (
             tuple[MaterialFlags | str, MaterialFlags | str] | MaterialFlags | str
         ) = MaterialFlags(0),
+        properties: Mapping[str, Property] | None = None,
     ) -> None:
-        # store properties
         self.name = name
         self.inside = inside
         self.outside = outside
-        if type(flags) == tuple:
+        if isinstance(flags, tuple):
             self.flagsInward = flags[0]
             self.flagsOutward = flags[1]
         else:
             self.flagsInward = flags
             self.flagsOutward = flags
+        self.properties = {} if properties is None else dict(properties)
 
-    @property
-    def name(self) -> str:
-        """
-        Name of this Material. Can later be used to fetch the address of
-        the material in gpu local memory.
-        """
-        return self._name
-
-    @name.setter
-    def name(self, value: str) -> None:
-        self._name = value
-
-    @property
-    def inside(self) -> Medium | str | None:
-        """
-        Medium in the inside of a geometry. Can also be specified by its name
-        which will get resolved during baking/serialization.
-        None defaults to vacuum.
-        """
-        return self._inside
-
-    @inside.setter
-    def inside(self, value: Medium | str | None) -> None:
-        self._inside = value
-
-    @property
-    def outside(self) -> Medium | str | None:
-        """
-        Medium in the outside of a geometry. Can also be specified by its name
-        which will get resolved during baking/serialization.
-        None defaults to vacuum.
-        """
-        return self._outside
-
-    @outside.setter
-    def outside(self, value: Medium | str | None) -> None:
-        self._outside = value
-
-    @property
-    def flagsOutward(self) -> MaterialFlags:
-        """
-        Material flags specifying the behavior of rays hitting the material from
-        the `inside` medium
-        """
-        return self._flagsOutward
-
-    @flagsOutward.setter
-    def flagsOutward(self, value: MaterialFlags | str) -> None:
-        if type(value) != MaterialFlags:
-            value = parseMaterialFlags(value)
-        self._flagsOutward = value
-
-    @flagsOutward.deleter
-    def flagsOutward(self) -> None:
-        self._flagsOutward = MaterialFlags(0)
-
-    @property
-    def flagsInward(self) -> MaterialFlags:
-        """
-        Material flags specifying the behavior of rays hitting the material from
-        the `inside` medium
-        """
-        return self._flagsInward
-
-    @flagsInward.setter
-    def flagsInward(self, value: MaterialFlags | str) -> None:
-        if type(value) != MaterialFlags:
-            value = parseMaterialFlags(value)
-        self._flagsInward = value
-
-    @flagsInward.deleter
-    def flagsInward(self) -> None:
-        self._flagsInward = MaterialFlags(0)
-
-
-# fmt: off
-_materialJsonSchema = {
-    "type": "array",
-    "items": {
-        "type": "object",
-        "properties": {
-            "name": {"type": "string"},
-            "inside": {"type": ["string", "null"]},
-            "outside": {"type": ["string", "null"]},
-            "flagsInward": {"type": "number", "minimum": 0},
-            "flagsOutward": {"type": "number", "minimum": 0},            
-        },
-        "required": ["name", "inside", "outside", "flagsInward", "flagsOutward"],
-        "additionalProperties": False,
-    },
-}
-# fmt: on
+    name: str
+    """Name of the material"""
+    inside: Medium | str | None
+    """
+    Medium in the inside of the geometry. Either stored directly or referenced
+    by its name. A value of `None` corresponds to vacuum.
+    """
+    outside: Medium | str | None
+    """
+    Medium in the outside of the geometry. Either stored directly or referenced
+    by its name. A value of `None` corresponds to vacuum.
+    """
+    flagsOutward: MaterialFlagsParsingDescriptor = MaterialFlagsParsingDescriptor()
+    """
+    Material flags specifying the behavior of rays hitting the material from
+    the `inside` medium
+    """
+    flagsInward: MaterialFlagsParsingDescriptor = MaterialFlagsParsingDescriptor()
+    """
+    Material flags specifying the behavior of rays hitting the material from
+    the `inside` medium
+    """
+    properties: dict[str, Property] = field(default_factory=dict)
+    """
+    Optional additional properties associated with this material.
+    """
 
 
 def saveMaterials(
-    path: str | bytes | PathLike,
+    file: str | Path | ZipFile | ZipPath,
     material: Iterable[Material],
     *,
     media: Iterable[Medium] = [],
@@ -840,69 +468,55 @@ def saveMaterials(
         List of extra media to store. Also used to lookup media referenced in
         materials by name.
     """
-    # convert to path to make things easier
-    if not isinstance(path, (Path, ZipPath)):
-        return saveMaterials(Path(path), material, media=media)
-    # create a zip archive if path does not exist
-    if not path.is_dir() and not path.exists():
-        with ZipFile(path, "w") as zip:
-            return saveMaterials(ZipPath(zip), material, media=media)
-    # at this point we expect path to point to a directory (either real or zip)
-    if not path.is_dir():
-        raise ValueError("Invalid path!")
+    # massage things until we end up with a ZipPath to make things simpler
+    if isinstance(file, str):
+        file = Path(file)
+    if isinstance(file, Path):
+        with ZipFile(file, "w") as zipFile:
+            return saveMaterials(zipFile, material, media=media)
+    if isinstance(file, ZipFile):
+        file = ZipPath(file)
 
     # collect all media
-    mediaDict = {m.name: m for m in media}
-    # first pass: collect all referenced media in material
+    media_dict = {m.name: m for m in media}
     for mat in material:
-        if isinstance(mat.inside, Medium) and mat.inside.name not in mediaDict:
-            mediaDict[mat.inside.name] = mat.inside
-        if isinstance(mat.outside, Medium) and mat.outside.name not in mediaDict:
-            mediaDict[mat.outside.name] = mat.outside
-    # second pass: check if all name references are met
+        if isinstance(mat.inside, Medium) and mat.inside.name not in media_dict:
+            media_dict[mat.inside.name] = mat.inside
+        if isinstance(mat.outside, Medium) and mat.outside.name not in media_dict:
+            media_dict[mat.outside.name] = mat.outside
     for mat in material:
-        if type(mat.inside) is str and mat.inside not in mediaDict:
-            raise ValueError(
-                f"Material '{mat.name}' references an unknown medium '{mat.inside}'!"
+        if isinstance(mat.inside, str) and mat.inside not in media_dict:
+            warnings.warn(
+                f'Material "{mat.name}" has unknown inside medium "{mat.inside}"'
             )
-        if type(mat.outside) is str and mat.outside not in mediaDict:
-            raise ValueError(
-                f"Material '{mat.name}' references an unknown medium '{mat.outside}'!"
+        if isinstance(mat.outside, str) and mat.outside not in media_dict:
+            warnings.warn(
+                f'Material "{mat.name}" has unknown outside medium "{mat.outside}"'
             )
 
-    # first save all media
-    mediaDir = path.joinpath("media/")
-    if not isinstance(mediaDir, ZipPath):
-        mediaDir.mkdir(exist_ok=True)
-    for name, medium in mediaDict.items():
-        with mediaDir.joinpath(name).open("wb") as file:
-            medium.save(file)
+    # save all media
+    map = _createTableEntryFromMedium
+    media_props = {name: map(m) for name, m in media_dict.items()}
+    saveTable(file.joinpath("media/"), media_props)
 
-    # build representation of materials suitable for serialization
-    def serializeMedium(med: Medium | str | None):
-        if isinstance(med, Medium):
-            return med.name
-        else:
-            return med
-
-    def serializeMaterial(mat: Material):
-        return {
-            "name": mat.name,
-            "inside": serializeMedium(mat.inside),
-            "outside": serializeMedium(mat.outside),
-            "flagsInward": int(mat.flagsInward),
-            "flagsOutward": int(mat.flagsOutward),
-        }
-
-    matList = [serializeMaterial(mat) for mat in material]
-    # save material descriptions
-    matFile = path.joinpath("material.json")
-    with matFile.open("w") as file:
-        json.dump(matList, file)
+    # save all material
+    file = file.joinpath("material/")
+    getName = lambda m: m.name if isinstance(m, Medium) else m
+    printName = lambda m: m if (m := getName(m)) is not None else ""
+    for mat in material:
+        mat_path = file.joinpath(f"{mat.name}/")
+        # write material description
+        with mat_path.joinpath("material").open("w") as mat_file:
+            name_inside = printName(mat.inside)
+            name_outside = printName(mat.outside)
+            mat_file.write(f"{str(int(mat.flagsInward))},{name_inside}\n")
+            mat_file.write(f"{str(int(mat.flagsOutward))},{name_outside}\n")
+        # optionally, write additional properties
+        saveTableEntry(mat_path.joinpath("properties/"), mat.properties)
 
 
 def loadMaterials(
-    path: str | bytes | PathLike, *, skipValidation: bool = False
+    path: str | Path | ZipFile | ZipPath,
 ) -> tuple[dict[str, Material], dict[str, Medium]]:
     """
     Loads and returns the materials and media from the given path.
@@ -919,82 +533,173 @@ def loadMaterials(
     media: dict[str, Medium]
         Dictionary indexing all loaded media by their names
     """
-    # convert to path to make things easier
-    if not isinstance(path, (Path, ZipPath)):
-        return loadMaterials(Path(path))
-    # check if path points to a zip file
-    if path.is_file():
-        if is_zipfile(path):
-            # open zip file and try again
-            with ZipFile(path) as arc:
-                return loadMaterials(ZipPath(arc))
-        else:
-            raise ValueError("Unexpected file format!")
-    # at this point we expect path to point to a directory (or zip root)
-    if not path.is_dir():
-        raise ValueError("Incompatible path!")
+    # massage things until we end up with a ZipPath
+    if isinstance(path, str):
+        path = Path(path)
+    if isinstance(path, Path):
+        with ZipFile(path, "r") as zipFile:
+            return loadMaterials(zipFile)
+    if isinstance(path, ZipFile):
+        path = ZipPath(path)
 
-    # begin with loading all media stored in the subdirectory "media"
-    mediaDir = path.joinpath("media")
-    if not mediaDir.exists() or not mediaDir.is_dir():
-        raise ValueError('Subdirectory "media" is missing!')
-    mediaDict = {}
-    for file in mediaDir.iterdir():
-        # encapsulate loading media in try/catch for better error message
-        try:
-            with file.open("rb") as f:
-                mediaDict[file.stem] = Medium.load(f, name=file.stem)
-        except Exception as ex:
-            # needs to a bit funky to handle zip paths correct
-            absPath = Path.cwd() / str(file)
-            raise ValueError(f"Failed to load media file: {absPath}")
+    # load media
+    def convert(name: str, media: PropertyTableEntry) -> Medium:
+        properties = dict(media)
+        wavelength_range = properties.pop("wavelength_range")
+        if not isinstance(wavelength_range, FloatProperty):
+            raise ValueError(
+                f'Property "wavelength_range" of media "{name}" has wrong type!'
+            )
+        return Medium(name, wavelength_range.value, properties)
 
-    # next load the material description
-    matFile = path.joinpath("material.json")
-    if not matFile.is_file():
-        raise ValueError('Missing file: "material.json"!')
-    # try to load material file
-    materialJson = None
-    with matFile.open() as file:
-        try:
-            materialJson = json.load(file)
-        except Exception as ex:
-            raise ValueError('Invalid material description file: "material.json"!')
-    if not skipValidation:
-        validate(materialJson, _materialJsonSchema)
-    # parse material descriptions
-    matDict = {}
+    mediaTable = loadTable(path.joinpath("media/"))
+    media_dict = {name: convert(name, med) for name, med in mediaTable.items()}
 
-    def getMedium(mat: str, med: str | None) -> Medium | None:
-        if med is None:
-            return None
-        if med not in mediaDict:
-            raise ValueError(f"Material '{mat}' references unknown medium: '{med}'!")
-        else:
-            return mediaDict[med]
+    # load material
+    def parseLine(line: str):
+        flags, med = line.split(",", 1)
+        flags = MaterialFlags(int(flags))
+        med = med[:-1] or None  # remove new line and replace empty with None
+        if med in media_dict:
+            med = media_dict[med]
+        return (flags, med)
 
-    for mat in materialJson:
-        name = mat["name"]
-        if name in matDict:
-            raise ValueError(f"Duplicate material '{name}'!")
-        inside = getMedium(name, mat["inside"])
-        outside = getMedium(name, mat["outside"])
-        flagsInward = MaterialFlags(mat["flagsInward"])
-        flagsOutward = MaterialFlags(mat["flagsOutward"])
-        flags = (flagsInward, flagsOutward)
-        matDict[name] = Material(name, inside, outside, flags=flags)
+    mat_dict = {}
+    for mat_path in path.joinpath("material/").iterdir():
+        if not mat_path.is_dir():
+            raise ValueError(f'Unexpected file "{mat_path}"')
+        # load material description file
+        with mat_path.joinpath("material").open("r") as file:
+            flagsIn, medIn = parseLine(file.readline())
+            flagsOut, medOut = parseLine(file.readline())
+        name = mat_path.name
+        flags = (flagsIn, flagsOut)
+        # load optional additional properties
+        props = loadTableEntry(mat_path.joinpath("properties/"))
+        mat_dict[name] = Material(name, medIn, medOut, flags=flags, properties=props)
 
-    # Done
-    return matDict, mediaDict
+    # done
+    return (mat_dict, media_dict)
+
+
+def getPropertySamples(src: Medium | Material, name: str) -> NDArray | None:
+    """
+    Fetches the property specified by name from the given medium or material
+    and returns the corresponding samples if it is a `TableProperty`. If the
+    property is not present or of different type, returns `None`.
+    """
+    prop = src.properties[name]
+    if isinstance(prop, TableProperty) and prop.table is not None:
+        return prop.table.samples
+    return None
+
+
+VACUUM_IDX: Final[int] = 0xFFFFFFFF
+"""Special value for indexing the medium table indicating vacuum"""
+
+
+class MaterialInterfaceProperty(Property, ext="mat"):
+    """
+    Combines material flags and the index of the medium on the other side.
+    Stores them internally as a tuple of two 32 bit integers, the first being
+    the index of the medium in the media table and the other the material flags.
+    """
+
+    def __init__(self, mediumIdx: int | None, flags: MaterialFlags) -> None:
+        super().__init__()
+        self.mediumIdx = mediumIdx
+        self.flags = flags
+
+    @property
+    def flags(self) -> MaterialFlags:
+        """Flags specifying the behavior of the tracer encountering this surface"""
+        # only use self.data as single source of truth
+        return MaterialFlags(unpack("<II", pack("<Q", self.data))[1])
+
+    @flags.setter
+    def flags(self, value: MaterialFlags) -> None:
+        idx, _ = unpack("<II", pack("<Q", self.data))  # property may return None
+        self.data = unpack("<Q", pack("<II", idx, int(value)))[0]
+
+    @property
+    def mediumIdx(self) -> int | None:
+        """Index in the media table of the medium on the other side"""
+        # only use self.data as single source of truth
+        idx = unpack("<II", pack("<Q", self.data))[0]
+        return idx if idx != VACUUM_IDX else None
+
+    @mediumIdx.setter
+    def mediumIdx(self, value: int | None) -> None:
+        if value is None:
+            value = VACUUM_IDX  # use max value to indicate None
+        self.data = unpack("<Q", pack("<II", value, self.flags))[0]
+
+
+def _createTableEntryFromMaterial(
+    material: Material,
+    mediaTable: PropertyTable,
+) -> PropertyTableEntry:
+    """Util function converting material to a property table entry"""
+    # fetch media names
+    getMedium = lambda m: m.name if isinstance(m, Medium) else m
+    inside: str | None = getMedium(material.inside)
+    outside: str | None = getMedium(material.outside)
+    # check if media is present
+    for m in (inside, outside):
+        if m is not None and m not in mediaTable:
+            raise ValueError(f"Material {material.name} references unknown medium {m}")
+    # look up media indices
+    getIdx = lambda m: m if m is None else mediaTable[m]
+    props: dict[str, Property] = {
+        "inwards": MaterialInterfaceProperty(getIdx(inside), material.flagsInward),
+        "outwards": MaterialInterfaceProperty(getIdx(outside), material.flagsOutward),
+    }
+    # add additional material properties
+    props.update(material.properties)
+    return props
+
+
+DefaultMediaSlots: Final[list[str]]
+"""Order of default media properties used by material store"""
+DefaultMediaSlots = [
+    "wavelength_range",
+    OpticalProperties.REFRACTIVE_INDEX,
+    OpticalProperties.GROUP_VELOCITY,
+    OpticalProperties.ABSORPTION_COEF,
+    OpticalProperties.SCATTERING_COEF,
+    OpticalProperties.LOG_PHASE_FUNC,
+    OpticalProperties.PHASE_SAMPLING,
+    OpticalProperties.PHASE_M12,
+    OpticalProperties.PHASE_M22,
+    OpticalProperties.PHASE_M33,
+    OpticalProperties.PHASE_M34,
+]
+
+DefaultMaterialSlots: Final[list[str]] = ["inwards", "outwards"]
+"""Order of default material properties used by material store"""
 
 
 class MaterialStore:
     """
-    Manages the upload and lifetime of media and material on the device, while
-    providing an easy interface for querying their device addresses.
-    Optionally allows to update existing material and media as long as no
-    entirely new data is added, e.g. populating a previously empty property or
-    increasing the sample count of an existing table.
+    Manages the upload and lifetime of media and material on the device.
+
+    Parameters
+    ----------
+    material: Iterable[Material]
+        Materials to be uploaded to the GPU
+    media: Iterable[Medium], default=[]
+        Additional media to be uploaded to the GPU. Media that are referenced by
+        materials directly (i.e. not by their name, but stored as variable) will
+        be included automatically and do not need to be listed here again.
+    mediaSlots: Iterable[str] | None, default=DefaultMediaSlots
+        List of property slots to be defined in the shader. If any media defines
+        additional properties, these will be added to the end of list. If
+        `None`, only the ones specified by the media will be included and
+        certain ones might be missing if none of the media specify them. Order
+        of the specified slots will be preserved. This can thus be used to force
+        a specific order to make compiled shader code compatible.
+    materialSlots: Iterable[str] | None, default=DefaultMaterialSlots
+        Same as `mediaSlots`, but used for material properties.
     """
 
     def __init__(
@@ -1002,263 +707,248 @@ class MaterialStore:
         material: Iterable[Material],
         *,
         media: Iterable[Medium] = [],
-        freeze: bool = True,
+        mediaSlots: Iterable[str] | None = DefaultMediaSlots,
+        materialSlots: Iterable[str] | None = DefaultMaterialSlots,
     ) -> None:
-        # during initial construction, it's always unfrozen
-        self._frozen = False
+        # collect all media
+        mediaDict = {m.name: _createTableEntryFromMedium(m) for m in media}
+        for med in chain.from_iterable((m.inside, m.outside) for m in material):
+            if isinstance(med, Medium) and med.name not in mediaDict:
+                mediaDict[med.name] = _createTableEntryFromMedium(med)
+        # create media table
+        self._mediaTable = PropertyTable(mediaDict, requiredSlots=mediaSlots)
 
-        # start by virtually allocating everything (i.e. store offsets)
-        size = 0
-
-        def alloc(n: int, alignment: int) -> int:
-            nonlocal size
-            if size % alignment != 0:
-                size += alignment - (size % alignment)
-            ptr = size
-            size += n
-            return ptr
-
-        # alloc methods
-        self._table_ptr: dict[str, tuple[int, int]] = {}  # (ptr, size)
-        self._media_ptr: dict[str, int] = {}
-        self._mat_ptr: dict[str, int] = {}
-
-        def allocTable(name: str, data):
-            # assume we only add new tables
-            if data is not None:
-                size = getTableSize(data)
-                self._table_ptr[name] = (alloc(size, Table.ALIGNMENT), size)
-
-        def allocMedium(medium: Medium | str | None):
-            if medium is None:
-                return
-            name = medium.name if type(medium) == Medium else str(medium)
-            if name in self._media_ptr:
-                return
-            self._media_ptr[name] = alloc(sizeof(Medium.GLSL), Medium.ALIGNMENT)
-            allocTable(f"{name}_n", medium.refractive_index)
-            allocTable(f"{name}_vg", medium.group_velocity)
-            allocTable(f"{name}_mua", medium.absorption_coef)
-            allocTable(f"{name}_mus", medium.scattering_coef)
-            allocTable(f"{name}_lpf", medium.log_phase_function)
-            allocTable(f"{name}_ps", medium.phase_sampling)
-            allocTable(f"{name}_m12", medium.phase_m12)
-            allocTable(f"{name}_m22", medium.phase_m22)
-            allocTable(f"{name}_m33", medium.phase_m33)
-            allocTable(f"{name}_m34", medium.phase_m34)
-
-        def allocMaterial(mat: Material):
-            if mat.name in self._mat_ptr:
-                return
-            self._mat_ptr[mat.name] = alloc(sizeof(Material.GLSL), Material.ALIGNMENT)
-            allocMedium(mat.inside)
-            allocMedium(mat.outside)
-
-        # virtually allocate everything
-        for medium in media:
-            allocMedium(medium)
-        for mat in material:
-            allocMaterial(mat)
-
-        # allocate actual memory
-        self._tensor = hp.Tensor(size, mapped=(not freeze))
-        self._buffer = hp.Buffer(size)
-        # calculate device addresses
-        adr = self._tensor.address
-        self._table_adr = {t: adr + d for t, (d, _) in self._table_ptr.items()}
-        self._media_adr = {m: adr + offset for m, offset in self._media_ptr.items()}
-        self._mat_adr = {mat: adr + offset for mat, offset in self._mat_ptr.items()}
-        # promote offsets to pointers into staging buffer
-        ptr = self._buffer.address
-        self._table_ptr = {t: (ptr + d, s) for t, (d, s) in self._table_ptr.items()}
-        self._media_ptr = {m: ptr + offset for m, offset in self._media_ptr.items()}
-        self._mat_ptr = {mat: ptr + offset for mat, offset in self._mat_ptr.items()}
-
-        # create read only proxy on device addresses
-        self._media = MappingProxyType(self._media_adr)
-        self._mat = MappingProxyType(self._mat_adr)
-
-        # finally, write some actual data
-        processed_media: set[str] = set()
-
-        def procMedium(medium: Medium | None):
-            if isinstance(medium, Medium) and medium.name not in processed_media:
-                self.updateMedium(medium)
-                processed_media.add(medium.name)
-
-        for medium in media:
-            procMedium(medium)
-        for mat in material:
-            self.updateMaterial(mat, updateMedia=False)
-            procMedium(mat.inside)
-            procMedium(mat.outside)
-
-        # upload data to tensor
-        if freeze:
-            # tensor is not mapped if we're going to freeze it
-            # -> let Vulkan copy it
-            hp.execute(hp.updateTensor(self._buffer, self._tensor, unsafe=True))
-        else:
-            self.flush()
-        # freeze if necessary
-        self._frozen = freeze
+        # create all materials
+        _map = _createTableEntryFromMaterial
+        materialDict = {m.name: _map(m, self._mediaTable) for m in material}
+        self._materialTable = PropertyTable(materialDict, requiredSlots=materialSlots)
 
     @property
-    def frozen(self) -> bool:
-        """Wether this MaterialStore is frozen, i.e. does not support updates"""
-        return self._frozen
+    def header(self) -> dict[str, str]:
+        """Creates the header defining the slots as expected by the shader code"""
+        return {"slots.glsl": createPreamble(**self.slotMacros)}
 
     @property
-    def material(self) -> MappingProxyType[str, int]:
-        """
-        Read only map of all registered material returning their device address
-        as used by programs by their name.
-        """
-        return self._mat
+    def media(self) -> PropertyTable:
+        """Table containing the media properties"""
+        return self._mediaTable
 
     @property
-    def media(self) -> MappingProxyType[str, int]:
-        """
-        Read only map of all registered media returning their device address as
-        used by programs by their name.
-        """
-        return self._media
+    def materials(self) -> PropertyTable:
+        """Table containting the material properties"""
+        return self._materialTable
 
-    def flush(self) -> None:
-        """
-        Flushes local updates to the device.
-        Does nothing if the store is frozen.
-        """
-        if not self.frozen:
-            self._tensor.update(self._buffer.address, self._buffer.size_bytes)
+    @property
+    def slotMacros(self) -> dict[str, int]:
+        """Dictionary containing the slot names to be used in shaders"""
+        mediaSlots = createSlotMacros(self.media, "MEDIA_SLOT")
+        materialSlots = createSlotMacros(self.materials, "MATERIAL_SLOT")
+        return mediaSlots | materialSlots
 
-    def _updateTable(self, name: str, data) -> int:
-        """Internal fn for updating tables"""
-        if data is None:
-            return 0
-        if name not in self._table_ptr:
-            raise ValueError(f"Table {name} has not been previously allocated")
-        ptr, size = self._table_ptr[name]
-        data_size = getTableSize(data)
-        if data_size > size:
-            raise ValueError(f"Table {name} does not fit in previous allocation")
-        table = Table(data)
-        table.copy(ptr)
-        return self._table_adr[name]
+    def bindParams(self, program: hp.Program) -> None:
+        program.bindParams(
+            MediaTable=self.media.tensor,
+            MaterialTable=self.materials.tensor,
+        )
 
-    def updateMedium(self, medium: Medium) -> None:
-        """
-        Updates the internal representation of the given medium with new data.
-        Call flush() to upload changes to the device. Fails if the store is
-        frozen.
-        """
-        if self.frozen:
-            raise RuntimeError("Cannot update frozen MaterialStore")
-        if medium.name not in self._media_ptr:
-            raise ValueError(f"Medium {medium.name} has not been previously allocated")
-        # save header
-        glsl = Medium.GLSL.from_address(self._media_ptr[medium.name])
-        glsl.lambda_min = medium.lambda_min
-        glsl.lambda_max = medium.lambda_max
-        # save tables
-        name = medium.name
-        glsl.n = self._updateTable(f"{name}_n", medium.refractive_index)
-        glsl.vg = self._updateTable(f"{name}_vg", medium.group_velocity)
-        glsl.mu_a = self._updateTable(f"{name}_mua", medium.absorption_coef)
-        glsl.mu_s = self._updateTable(f"{name}_mus", medium.scattering_coef)
-        glsl.log_phase = self._updateTable(f"{name}_lpf", medium.log_phase_function)
-        glsl.phase_sampling = self._updateTable(f"{name}_ps", medium.phase_sampling)
-        glsl.phase_m12 = self._updateTable(f"{name}_m12", medium.phase_m12)
-        glsl.phase_m22 = self._updateTable(f"{name}_m22", medium.phase_m22)
-        glsl.phase_m33 = self._updateTable(f"{name}_m33", medium.phase_m33)
-        glsl.phase_m34 = self._updateTable(f"{name}_m34", medium.phase_m34)
+    def __len__(self) -> int:
+        return len(self.materials)
 
-    def updateMaterial(self, material: Material, *, updateMedia: bool = False) -> None:
-        """
-        Updates the internal representation of the given material with new data.
-        Call flush() to upload changes to the device. Fails if the store is
-        frozen.
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.materials)
 
-        Parameters
-        ----------
-        material: Material
-            Material to be updated containing new data
-        updateMedia: bool, default=False
-            Wether to also update referenced media. Media referenced by name
-            will be ignored.
-        """
-        if self.frozen:
-            raise RuntimeError("Cannot update frozen MaterialStore")
-        if material.name not in self._mat_ptr:
-            raise ValueError(
-                f"Material {material.name} has not been previously allocated"
-            )
+    def __contains__(self, material: str) -> bool:
+        """Checks whether a material of the given name exists in this store"""
+        return material in self.materials
 
-        # fetch names of references media
-        inside, outside = material.inside, material.outside
-        if isinstance(inside, Medium):
-            inside = inside.name
-        if isinstance(outside, Medium):
-            outside = outside.name
-
-        if inside is not None and inside not in self.media:
-            raise ValueError(
-                f"Material {material.name} references unknown medium {inside}"
-            )
-        if outside is not None and outside not in self.media:
-            raise ValueError(
-                f"Material {material.name} references unknown medium {outside}"
-            )
-        # fetch header
-        glsl = Material.GLSL.from_address(self._mat_ptr[material.name])
-        glsl.inside = 0 if inside is None else self.media[inside]
-        glsl.outside = 0 if outside is None else self.media[outside]
-        glsl.flagsInwards = material.flagsInward
-        glsl.flagsOutwards = material.flagsOutward
-
-        # update medium if specified
-        if updateMedia:
-            if isinstance(material.inside, Medium):
-                self.updateMedium(material.inside)
-            if isinstance(material.outside, Medium):
-                self.updateMedium(material.outside)
+    def __getitem__(self, material: str) -> int:
+        """Returns the index of the material with the given name."""
+        return self.materials[material]
 
 
 #################################### MODELS ####################################
 
 
+_R = TypeVar("_R")
+
+
+class _range_checked_call(Generic[_R]):
+    """util class for performing range checks before passing values to function"""
+
+    def __init__(self, fn, obj, range) -> None:
+        self.fn = fn
+        self.obj = obj
+        self.range = range
+
+    def __call__(self, *xi) -> _R:
+        xi = [np.asarray(x) for x in xi]
+        for i, (x, (lo, hi)) in enumerate(zip(xi, self.range)):
+            if x.min() < lo or x.max() > hi:
+                raise ValueError(
+                    f"Values for parameter {i+1} outside the allowed range: {lo} - {hi}"
+                )
+        return self.fn(self.obj, *xi)
+
+
+class _medium_property(Generic[_R]):
+    """Class marking medium properties in models. See `medium_property`"""
+
+    def __init__(
+        self,
+        fn: Callable[..., _R],
+        *,
+        name: str | None = None,
+        range: list[tuple[float, float]] | tuple[float, float] | None = None,
+        interpolation: Interpolation = "linear",
+    ) -> None:
+        self.fn = fn
+        self.name = name
+        if isinstance(range, tuple):
+            range = [range]
+        self.range = range
+        self.interpolation: Interpolation = interpolation
+
+    def __set_name__(self, owner, name: str) -> None:
+        if self.name is None:
+            self.name = name
+
+    @overload
+    def __get__(self, obj: None, owner=None) -> Self: ...
+
+    @overload
+    def __get__(self, obj: Any, owner=None) -> _range_checked_call[_R]: ...
+
+    def __get__(self, obj, owner=None):
+        if obj is None:
+            # accessed from class
+            return self
+        range = [obj.wavelengthRange] if self.range is None else self.range
+        return _range_checked_call(self.fn, obj, range)
+
+    def createProperty(
+        self,
+        obj,
+        defaultRange: tuple[float, float],
+        numSamples: int,
+        const: bool,
+    ) -> Property:
+        """Creates a `Property` from this medium property"""
+        if const:
+            value = self.fn(obj)
+            return FloatProperty(value)
+        else:
+            range = [defaultRange] if self.range is None else self.range
+            xi = [(*r, numSamples) for r in range]
+            fn = lambda *xi: self.fn(obj, *xi)  # bind object as self
+            table = createTableFromFunction(fn, *xi, interpolation=self.interpolation)
+            return TableProperty(table)
+
+
+# TODO: Fix these type annotations
+@overload
+def medium_property(
+    fn: Callable[..., _R],
+    *,
+    name: None | str = None,
+    range: list[tuple[float, float]] | tuple[float, float] | None = None,
+    interpolation: Interpolation = "linear",
+) -> _medium_property[_R]: ...
+
+
+@overload
+def medium_property(
+    fn: None = None,
+    *,
+    name: None | str = None,
+    range: list[tuple[float, float]] | tuple[float, float] | None = None,
+    interpolation: Interpolation = "linear",
+) -> Callable[[Callable[..., _R]], _medium_property[_R]]: ...
+
+
+def medium_property(func=None, *, name=None, range=None, interpolation="linear"):
+    """
+    Can be used in classes derived from `MediumModel` to mark functions or
+    properties as medium properties. These will be used during medium creation
+    to populate the corresponding `PropertyTable`.
+
+    Parameters
+    ----------
+    fn:
+        Function to decorate
+    name: str | None, default=None
+        Name of the property. If `None`, uses the function's name
+    range: ((float, float), ...) | None, default=None
+        Range over which to sample the function for each axis. If `None`, uses
+        the wavelength range of the model. Ignored on properties.
+    interpolation: Interpolation, default="linear"
+        Interpolation to use when creating look up table from the sampled
+        values. Ignored on properties.
+
+    Examples
+    --------
+    >>> class Model(MediumModel):
+    ...     @property
+    ...     @medium_property
+    ...     def temperature(self) -> float:
+    ...         return 21.0
+    ...     @medium_property
+    ...     def refractive_index(self, wavelength):
+    ...         return 1.41 * np.ones_like(wavelength)
+    ...     @medium_property(range=(-1.,1.))
+    ...     def log_phase_function(self, cos_theta):
+    ...         return np.ones_like(cos_theta) / (4.0 * np.pi)
+    """
+    # need this trick to allow arguments
+    if func is not None:
+        # decorated without parameters -> name is actually the function
+        return _medium_property(func)
+    else:
+        return lambda fn: _medium_property(
+            fn, name=name, range=range, interpolation=interpolation
+        )
+
+
 class MediumModel:
     """
-    Base class for models of media. Implements a function for creating a medium
-    by sampling functions provided by base classes.
+    Base class for medium models. Implements a function for creating a medium
+    by collecting and where necessary sampling properties defined in derived
+    classes. Properties can be defined using the `mediumProperty` decorator.
 
     Parameters
     ----------
     name: str, default="noname"
-        Name of the model. Will be used as default name for instanciated media.
-    wavelengthRange: (float, float), default=(0,inf)
-        Range of wavelengths in nm for which the model is valid.
+        Name of the model. Will be used as default name for created media.
+    wavelengthRange: (float, float), default=(100.0, 1500.0) nm
+        Range of wavelength in nm for which the model is valid. Sampling of
+        optical properties will use this range where applicable.
     """
 
     def __init__(
         self,
         *args,
         name: str = "noname",
-        wavelengthRange: tuple[float, float] = (100.0, 1500.0),
+        wavelengthRange: tuple[float, float] = (100.0, 1500.0) * u.nm,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
         self.name = name
         self.wavelengthRange = wavelengthRange
 
-    @property
-    def name(self) -> str:
-        """Name of the model"""
-        return self._name
-
-    @name.setter
-    def name(self, value: str) -> None:
-        self._name = value
+    @classproperty
+    def propertyNames(cls) -> set[str]:
+        """Name of all medium properties defined by this model"""
+        names = set()
+        for atr in dir(cls):
+            if atr.startswith("_"):
+                continue
+            if atr == "propertyNames":
+                continue  # prevent infinite recursion
+            prop = getattr(cls, atr)
+            if isinstance(prop, property):
+                prop = prop.fget
+            if isinstance(prop, _medium_property):
+                names.add(prop.name)
+        return names
 
     @property
     def wavelengthRange(self) -> tuple[float, float]:
@@ -1285,162 +975,36 @@ class MediumModel:
         """
         self.wavelengthRange = intersectRange(self.wavelengthRange, range)
 
-    def checkWavelength(self, wavelength: ArrayLike) -> NDArray:
-        """
-        Checks whether the given wavelengths fall within the model's allowed
-        range and returns a numpy array if successfull.
-        """
-        array = np.asarray(wavelength)
-        lo, hi = self.wavelengthRange
-        if array.min() < lo or array.max() > hi:
-            raise ValueError(
-                f"Wavelength outside the model's allowed range of ({lo}-{hi})nm!"
-            )
-        return array
-
-    def checkCosTheta(self, cos_theta: ArrayLike) -> NDArray:
-        """
-        Checks whether the given cosines are in the valid range [-1,1] and
-        returns them as numpy array if successfull.
-        """
-        array = np.asarray(cos_theta)
-        if array.min() < -1 or array.max() > 1:
-            raise ValueError("Cosines outside the value range of [-1,1]!")
-        return array
-
-    def checkEta(self, eta: ArrayLike) -> NDArray:
-        """
-        Checks whether the given random numbers are in the valie range [0,1]
-        and returns them as numpy array if successfull.
-        """
-        array = np.asarray(eta)
-        if array.min() < 0 or array.max() > 1:
-            raise ValueError("Eta outside the valid range of [0,1]!")
-        return array
-
-    def refractive_index(self, wavelength: ArrayLike) -> NDArray | None:
-        """
-        Calculates the refractive index for the given wavelengths.
-        Returns None if not defined.
-        """
-        return None
-
-    def group_velocity(self, wavelength: ArrayLike) -> NDArray | None:
-        """
-        Calculates the group velocity for the given wavelengths.
-        Returns None if not defined.
-        """
-        return None
-
-    def absorption_coef(self, wavelength: ArrayLike) -> NDArray | None:
-        """
-        Returns the absorption coefficient for the given wavelengths.
-        Returns None if not defined.
-        """
-        return None
-
-    def scattering_coef(self, wavelength: ArrayLike) -> NDArray | None:
-        """
-        Returns the scattering coefficient for the given wavelengths.
-        Returns None if not defined.
-        """
-        return None
-
-    def log_phase_function(self, cos_theta: ArrayLike) -> NDArray | None:
-        """
-        Evaluates the log phase functions for the given values of cos theta
-        with theta being the angle between incoming and outgoing ray after
-        scattering.
-        Returns None if not defined.
-        """
-        return None
-
-    def phase_sampling(self, eta: ArrayLike) -> NDArray | None:
-        """
-        Returns samples of cos(theta) using the uniform unit random numbers eta
-        which follows the phase function as underlying distribution.
-        Returns None if not defined.
-        """
-        return None
-
-    def phase_m12(self, cos_theta: ArrayLike) -> ArrayLike | None:
-        """
-        Returns samples of the m12 element of the phase matrix for the given
-        values of cos theta with theta being the angle between incoming and
-        outgoing ray after scattering.
-        Returns None if not defined.
-        """
-        return None
-
-    def phase_m22(self, cos_theta: ArrayLike) -> ArrayLike | None:
-        """
-        Returns samples of the m22 element of the phase matrix for the given
-        values of cos theta with theta being the angle between incoming and
-        outgoing ray after scattering.
-        Returns None if not defined.
-        """
-        return None
-
-    def phase_m33(self, cos_theta: ArrayLike) -> ArrayLike | None:
-        """
-        Returns samples of the m33 element of the phase matrix for the given
-        values of cos theta with theta being the angle between incoming and
-        outgoing ray after scattering.
-        Returns None if not defined.
-        """
-        return None
-
-    def phase_m34(self, cos_theta: ArrayLike) -> ArrayLike | None:
-        """
-        Returns samples of the m34 element of the phase matrix for the given
-        values of cos theta with theta being the angle between incoming and
-        outgoing ray after scattering.
-        Returns None if not defined.
-        """
-        return None
-
     def createMedium(
         self,
         *,
         wavelengthRange: tuple[float, float] | None = None,
-        numLambda: int = 1024,
-        numTheta: int = 1024,
+        numSamples: int = 1024,
         name: str | None = None,
     ) -> Medium:
-        """
-        Creates a medium using this model by sampling its properties.
-
-        Parameters
-        ----------
-        wavelengthRange: (float, float) | None, default=None
-            Range of wavelength to sample. If `None`, uses the model's full
-            valid range.
-        numLambda: int, default=1024
-            Number of samples to take from the wavelength range
-        numTheta: int, default=1024
-            Number of samples to take from the phase and its sample function
-        name: str | None, default=None
-            Name of the medium. If `None`, uses the model's name.
-        """
         if wavelengthRange is None:
             wavelengthRange = self.wavelengthRange
-        l = np.linspace(*wavelengthRange, numLambda)
-        t = np.linspace(-1.0, 1.0, numTheta)  # cos(theta)
-        e = np.linspace(0.0, 1.0, numTheta)
-        return Medium(
-            name if name is not None else self.name,
-            *wavelengthRange,
-            refractive_index=self.refractive_index(l),
-            group_velocity=self.group_velocity(l),
-            absorption_coef=self.absorption_coef(l),
-            scattering_coef=self.scattering_coef(l),
-            log_phase_function=self.log_phase_function(t),
-            phase_sampling=self.phase_sampling(e),
-            phase_m12=self.phase_m12(t),
-            phase_m22=self.phase_m22(t),
-            phase_m33=self.phase_m33(t),
-            phase_m34=self.phase_m34(t),
-        )
+        if name is None:
+            name = self.name
+
+        # collect medium properties
+        props = {}
+        for atr in dir(self):
+            if atr.startswith("_"):
+                continue
+            # fetch properties from class object to sidestep descriptor
+            prop = getattr(self.__class__, atr, None)
+            if prop is None:
+                continue
+            const = isinstance(prop, property)
+            if const:
+                prop = prop.fget
+            if isinstance(prop, _medium_property):
+                props[prop.name] = prop.createProperty(
+                    self, wavelengthRange, numSamples, const
+                )
+
+        return Medium(name, wavelengthRange, props)
 
 
 class NumericalPhaseSamplingMixin(MediumModel):
@@ -1483,14 +1047,14 @@ class NumericalPhaseSamplingMixin(MediumModel):
         """Marks the cached phase sampler as invalid"""
         self._phaseSampler = None
 
-    def phase_sampling(self, eta: ArrayLike) -> NDArray:
-        eta = self.checkEta(eta)
+    @medium_property(range=(0.0, 1.0))
+    def phase_sampling(self, eta: NDArray) -> NDArray:
         if self._phaseSampler is not None:
             sampler = self._phaseSampler
         else:
             if "phase_function" in dir(self):
                 dist = NumericalPhaseSamplingMixin._DistWrapper(self)
-            elif self.log_phase_function(0.0) is not None:
+            elif "log_phase_function" in dir(self):
                 dist = NumericalPhaseSamplingMixin._LogDistWrapper(self)
             else:
                 raise NotImplementedError("Model provides no phase function!")
@@ -1531,20 +1095,22 @@ class SellmeierEquation(MediumModel):
         self.C2 = C2
         self.C3 = C3
 
-    def refractive_index(self, wavelength: ArrayLike) -> NDArray:
+    @medium_property
+    def refractive_index(self, wavelength: NDArray) -> NDArray:
         """Calculates the refractive index for the given wavelengths"""
-        L2 = np.square(self.checkWavelength(wavelength))
+        L2 = np.square(wavelength)
         # L2 = np.square(wavelength)
         S1 = self.B1 * L2 / (L2 - self.C1)
         S2 = self.B2 * L2 / (L2 - self.C2)
         S3 = self.B3 * L2 / (L2 - self.C3)
         return np.sqrt(1.0 + S1 + S2 + S3)
 
-    def group_velocity(self, wavelength: ArrayLike) -> NDArray:
+    @medium_property
+    def group_velocity(self, wavelength: NDArray) -> NDArray:
         """
         Calculates the group velocity in for the given wavelengths
         """
-        L = self.checkWavelength(wavelength)
+        L = wavelength
         n = self.refractive_index(L)
         L2 = np.square(L)
         S1 = self.B1 * self.C1 * L / np.square(L2 - self.C1)
@@ -1580,7 +1146,8 @@ class BK7Model(SellmeierEquation):
         if BK7Model.TransmissionTable is None:
             BK7Model.TransmissionTable = loadCSV("bk7_transmission.csv", skiprows=2)
 
-    def absorption_coef(self, wavelength: ArrayLike) -> NDArray:
+    @medium_property
+    def absorption_coef(self, wavelength: NDArray) -> NDArray:
         """Returns the absorption coefficient for the given wavelengths"""
         assert BK7Model.TransmissionTable is not None
         # we can transform the transmission measurements to absorption
@@ -1589,7 +1156,6 @@ class BK7Model(SellmeierEquation):
         # the probe thickness, as thicker ones should give a better result
         # To avoid taking the average with inf, we actually take the average
         # of the absorption lengths, i.e. inf -> 0
-        wavelength = self.checkWavelength(wavelength)
 
         # disable error, since we'll take the log of zero
         with np.errstate(divide="ignore"):
@@ -1625,52 +1191,47 @@ class RayleighScatteringPhaseFunction(NumericalPhaseSamplingMixin, MediumModel):
 
     def __init__(self, *args, depolarizationRatio: float = 0.0, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self._delta = depolarizationRatio
+        self.depolarizationRatio = depolarizationRatio
 
-    @property
-    def depolarizationRatio(self) -> float:
-        """Depolarization ratio of the medium"""
-        return self._delta
-
-    @depolarizationRatio.setter
-    def depolarizationRatio(self, value: float) -> None:
-        self._delta = value
-
-    def phase_function(self, cos_theta: ArrayLike) -> NDArray:
+    @medium_property(range=(-1.0, 1.0))
+    def phase_function(self, cos_theta: NDArray) -> NDArray:
         #                    1 - delta
         # beta(theta) ~ 1 + ----------- cos^2(theta)
         #                    1 + delta
-        cos_theta = self.checkCosTheta(cos_theta)
         delta = self.depolarizationRatio
         phase = 1 + (1 - delta) / (1 + delta) * cos_theta**2
         I = 8 * np.pi / 3 * (2 + delta) / (1 + delta)  # integral phase from -1 to 1
         return phase / I
 
-    def log_phase_function(self, cos_theta: ArrayLike) -> NDArray:
+    @medium_property(range=(-1.0, 1.0))
+    def log_phase_function(self, cos_theta: NDArray) -> NDArray:
         return np.log(self.phase_function(cos_theta))
 
-    def phase_m12(self, cos_theta: ArrayLike) -> NDArray:
+    @medium_property(range=(-1.0, 1.0))
+    def phase_m12(self, cos_theta: NDArray) -> NDArray:
         # M_11 = beta_90 * 1 + (1-d)/(1+d)cos^2
         # M_12 = beta_90 * -(1-d)/(1+d)sin^2
         #            M_12       -(1-d) sin^2
         # -> m_12 = ------ = ------------------
         #            M_11     1+d + (1-d)cos^2
         d = self.depolarizationRatio
-        u = self.checkCosTheta(cos_theta)
+        u = cos_theta
         return -(1 - d) * (1 - u**2) / (1 + d + (1 - d) * u**2)
 
-    def phase_m22(self, cos_theta: ArrayLike) -> NDArray:
+    @medium_property(range=(-1.0, 1.0))
+    def phase_m22(self, cos_theta: NDArray) -> NDArray:
         # M_22 = M_11 -> m_22 = 1
         return np.ones_like(cos_theta)
 
-    def phase_m33(self, cos_theta: ArrayLike) -> NDArray:
+    @medium_property(range=(-1.0, 1.0))
+    def phase_m33(self, cos_theta: NDArray) -> NDArray:
         # M_11 = beta_90 * 1 + (1-d)/(1+d)cos^2
         # M_33 = beta_90 * 2(1-d)/(1+d)cos
         #            M_33        2(1-d)cos
         # -> m_33 = ------ = ------------------
         #            M_11     1+d + (1-d)cos^2
         d = self.depolarizationRatio
-        u = self.checkCosTheta(cos_theta)
+        u = cos_theta
         return 2 * (1 - d) * u / (1 + d + (1 - d) * u**2)
 
 
@@ -1704,32 +1265,15 @@ class RayleighScatteringModel(RayleighScatteringPhaseFunction):
         **kwargs,
     ) -> None:
         super().__init__(*args, depolarizationRatio=depolarizationRatio, **kwargs)
-        self._temp = temperature
-        self._betaT = betaT
+        self.temperature = temperature
+        self.betaT = betaT
 
-    @property
-    def temperature(self) -> float:
-        """Temperature of the media in °C"""
-        return self._temp
-
-    @temperature.setter
-    def temperature(self, value: float) -> None:
-        self._temp = value
-
-    @property
-    def betaT(self) -> float:
-        """Isothermal compressibility of the medium in m^3/J"""
-        return self._betaT
-
-    @betaT.setter
-    def betaT(self, value: float) -> None:
-        self._betaT = value
-
-    def scattering_coef(self, wavelength: ArrayLike) -> NDArray:
+    @medium_property
+    def scattering_coef(self, wavelength: NDArray) -> NDArray:
         #      4pi^3 * k_B*T * beta_T                  2 + delta
         # b = ------------------------ * LL^2 * f_C * -----------
         #            2 * lam^4                         1 + delta
-        lam = u.convert(self.checkWavelength(wavelength), u.m)
+        lam = u.convert(wavelength, u.m)
         T = self.temperature
         betaT = self.betaT
         delta = self.depolarizationRatio
@@ -1738,8 +1282,9 @@ class RayleighScatteringModel(RayleighScatteringPhaseFunction):
         fc = (6 + 6 * delta) / (6 - 7 * delta)
         fc *= (2 + delta) / (1 + delta)  # from integration
         # Lorentz-Lorenz; See [ZH21] Eq. 9
-        n = self.refractive_index(wavelength)
-        if n is None:
+        try:
+            n: NDArray = self.refractive_index(wavelength)
+        except:
             raise RuntimeError(
                 "Rayleigh scattering requires refractive index to be defined!"
             )
@@ -1780,26 +1325,26 @@ class HenyeyGreensteinPhaseFunction(MediumModel):
                 "Asymmetry parameter outside the valid range (-1,1)!", RuntimeWarning
             )
 
-    def log_phase_function(self, cos_theta: ArrayLike) -> NDArray:
+    @medium_property(range=(-1.0, 1.0))
+    def log_phase_function(self, cos_theta: NDArray) -> NDArray:
         """
         Evaluates the log phase function for the given angles as cos(theta).
         Normalized with respect to unit sphere.
         """
-        cos_theta = self.checkCosTheta(cos_theta)
         return np.log(
             (1.0 - self.g**2)
             / np.power(1.0 + self.g**2 - 2 * self.g * cos_theta, 1.5)
             / (4.0 * np.pi)
         )
 
-    def phase_sampling(self, eta: ArrayLike) -> NDArray:
+    @medium_property(range=(0.0, 1.0))
+    def phase_sampling(self, eta: NDArray) -> NDArray:
         """
         Samples the phase function using provided unit random numbers eta.
         Returns the cosine of the sampled angle.
 
         See Zhang, J.: On Sampling of Scattering Phase Functions, 2019
         """
-        eta = self.checkEta(eta)
         if abs(self.g) < 1e-7:
             # prevent division by zero: g=0 -> uniform
             return 1.0 - 2.0 * eta
@@ -1847,11 +1392,11 @@ class FournierForandPhaseFunction(NumericalPhaseSamplingMixin):
         self._mu = value
         self._invalidatePhaseSampler()
 
+    @medium_property(range=(-1.0, 1.0))
     def log_phase_function(self, cos_theta: ArrayLike) -> NDArray:
         """Evaluates the log phase function for the given angles mu = cos(theta)"""
         # phase functions becomes singular at cos_theta = 1.0
         # clip close before (1 float ulp)
-        cos_theta = self.checkCosTheta(cos_theta)
         cos_theta = np.clip(cos_theta, -1.0, 1.0 - 1e-5)
         # constants
         nu = 0.5 * (3.0 - self.mu)
@@ -1907,57 +1452,25 @@ class DispersionFreeMedium(MediumModel):
         self.mu_a = mu_a
         self.mu_s = mu_s
 
-    @property
-    def n(self) -> float:
-        """Refractive index"""
-        return self._n
-
-    @n.setter
-    def n(self, value: float) -> None:
-        self._n = value
-
-    @property
-    def ng(self) -> float:
-        """Group index (group velocity = c/ng)"""
-        return self._ng
-
-    @ng.setter
-    def ng(self, value: float) -> None:
-        self._ng = value
-
-    @property
-    def mu_a(self) -> float:
-        """Absorption coefficient"""
-        return self._mu_a
-
-    @mu_a.setter
-    def mu_a(self, value: float) -> None:
-        self._mu_a = value
-
-    @property
-    def mu_s(self) -> float:
-        """Scattering coefficient"""
-        return self._mu_s
-
-    @mu_s.setter
-    def mu_s(self, value: float) -> None:
-        self._mu_s = value
-
+    @medium_property
     def refractive_index(self, wavelength: ArrayLike) -> NDArray:
         if not np.min(wavelength) >= 0.0:
             raise ValueError("wavelength must be positive!")
         return np.ones_like(wavelength) * self.n
 
+    @medium_property
     def group_velocity(self, wavelength: ArrayLike) -> NDArray:
         if not np.min(wavelength) >= 0.0:
             raise ValueError("wavelength must be positive!")
         return np.ones_like(wavelength) / self.ng * u.c
 
+    @medium_property
     def absorption_coef(self, wavelength: ArrayLike) -> NDArray:
         if not np.min(wavelength) >= 0.0:
             raise ValueError("wavelength must be positive!")
         return np.ones_like(wavelength) * self.mu_a
 
+    @medium_property
     def scattering_coef(self, wavelength: ArrayLike) -> NDArray:
         if not np.min(wavelength) >= 0.0:
             raise ValueError("wavelength must be positive!")
@@ -2076,9 +1589,10 @@ class WaterBaseModel(MediumModel):
             raise ValueError("Salinity must be in the range [0,120]g/kg!")
         self._salinity = value
 
-    def refractive_index(self, wavelength: ArrayLike) -> NDArray:
+    @medium_property
+    def refractive_index(self, wavelength: NDArray) -> NDArray:
         # formula expects wavelengths in micrometers -> convert
-        L = u.convert(self.checkWavelength(wavelength), u.um)
+        L = u.convert(wavelength, u.um)
         T = self.temperature
         p = self.pressure
         S = self.salinity / (35.16504 / 35)  # convert ppt -> PSU
@@ -2117,9 +1631,10 @@ class WaterBaseModel(MediumModel):
         N4 = C.P1S * p * S + C.PTS * p * T * S + C.PT2S * p * (T**2) * S
         return N1 + N2 + N3 + N4
 
-    def group_velocity(self, wavelength: ArrayLike) -> NDArray:
+    @medium_property
+    def group_velocity(self, wavelength: NDArray) -> NDArray:
         # formula expects wavelengths in micrometers -> convert
-        L = u.convert(self.checkWavelength(wavelength), u.um)
+        L = u.convert(wavelength, u.um)
         T = self.temperature
         p = self.pressure
         S = self.salinity / (35.16504 / 35)  # convert ppt -> PSU
@@ -2217,11 +1732,11 @@ class PureWaterModel(WaterBaseModel, RayleighScatteringPhaseFunction):
             table = np.concatenate((mcf, bhd_cut), 0)
             PureWaterModel._MU_A_SPLINE = CubicSpline(table[:, 0], table[:, 1])
 
-    def absorption_coef(self, wavelength: ArrayLike) -> NDArray:
+    @medium_property
+    def absorption_coef(self, wavelength: NDArray) -> NDArray:
         # linear interpolate table
-        L = self.checkWavelength(wavelength)
         assert PureWaterModel._MU_A_SPLINE is not None  # make the linter happy...
-        return PureWaterModel._MU_A_SPLINE(L)
+        return PureWaterModel._MU_A_SPLINE(wavelength)
 
     def _dg_dp(self) -> float:
         """partial derivative of Gibbs function w.r.t pressure"""
@@ -2343,11 +1858,12 @@ class PureWaterModel(WaterBaseModel, RayleighScatteringPhaseFunction):
             + P * (C.P1S + C.PTS * Tc + C.PT2S * Tc**2)
         ) / sal_con
 
-    def scattering_coef(self, wavelength: ArrayLike) -> NDArray:
+    @medium_property
+    def scattering_coef(self, wavelength: NDArray) -> NDArray:
         # Code based on matlab code from [ZH21]
         Kbz = 1.3806503e-23  #  Boltzmann constant
         Tk = self.temperature + 273.15  #  Absolute temperature
-        lam = self.checkWavelength(wavelength)
+        lam = u.convert(wavelength, u.m)
         delta = self.depolarizationRatio
         nsw = self.refractive_index(wavelength)
         dnswds = self._dn_dS(wavelength)
@@ -2356,7 +1872,7 @@ class PureWaterModel(WaterBaseModel, RayleighScatteringPhaseFunction):
         SFRI = 2 * nsw * dnswds
         gp = self._dg_dp()
         gpp = self._dg_dp2()
-        beta90 = np.pi**2 * Kbz / 2 * ((lam * 1e-9) ** (-4)) * Tk
+        beta90 = np.pi**2 * Kbz / 2 * (lam ** (-4)) * Tk
         beta90 *= (6 + 6 * delta) / (6 - 7 * delta)  # cabannes factor
         if self.salinity > 0:
             gss = self._dg_ds2()
@@ -2392,17 +1908,17 @@ class SmithNaturalWaterMeasurements(MediumModel):
         if SmithNaturalWaterMeasurements._TABLE is None:
             SmithNaturalWaterMeasurements._TABLE = loadCSV("water_smith81.csv")
 
-    def absorption_coef(self, wavelength: ArrayLike) -> NDArray:
-        lam = self.checkWavelength(wavelength)
+    @medium_property
+    def absorption_coef(self, wavelength: NDArray) -> NDArray:
         table = SmithNaturalWaterMeasurements._TABLE
         assert table is not None
-        return np.interp(lam, table[:, 0], table[:, 1])
+        return np.interp(wavelength, table[:, 0], table[:, 1])
 
-    def scattering_coef(self, wavelength: ArrayLike) -> NDArray:
-        lam = self.checkWavelength(wavelength)
+    @medium_property
+    def scattering_coef(self, wavelength: NDArray) -> NDArray:
         table = SmithNaturalWaterMeasurements._TABLE
         assert table is not None
-        return np.interp(lam, table[:, 0], table[:, 2])
+        return np.interp(wavelength, table[:, 0], table[:, 2])
 
 
 class KokhanovskyOceanWaterPhaseMatrix(MediumModel):
@@ -2437,61 +1953,25 @@ class KokhanovskyOceanWaterPhaseMatrix(MediumModel):
         self.alpha = alpha
         self.xi = xi
 
-    @property
-    def p90(self) -> float:
-        """Degree of polarization at 90°"""
-        return self._p90
-
-    @p90.setter
-    def p90(self, value: float) -> None:
-        self._p90 = value
-
-    @property
-    def theta0(self) -> float:
-        """Shift in angle"""
-        return self._theta0
-
-    @theta0.setter
-    def theta0(self, value) -> None:
-        self._theta0 = value
-
-    @property
-    def alpha(self) -> float:
-        """multipole scatter slope"""
-        return self._alpha
-
-    @alpha.setter
-    def alpha(self, value) -> None:
-        self._alpha = value
-
-    @property
-    def xi(self) -> float:
-        """multipole scatter scale"""
-        return self._xi
-
-    @xi.setter
-    def xi(self, value: float) -> None:
-        self._xi = value
-
+    @medium_property(range=(-1.0, 1.0))
     def phase_m12(self, cos_theta: ArrayLike) -> NDArray:
         """m12 element of the phase matrix"""
-        cos_theta = self.checkCosTheta(cos_theta)
         cos_theta_sq = np.square(cos_theta)
         sin_theta_sq = 1.0 - cos_theta_sq
         return -self.p90 * sin_theta_sq / (1.0 + self.p90 * cos_theta_sq)
 
+    @medium_property(range=(-1.0, 1.0))
     def phase_m22(self, cos_theta: ArrayLike) -> NDArray:
         """m22 element of the phase matrix"""
-        cos_theta = self.checkCosTheta(cos_theta)
         theta = np.arccos(cos_theta)
         z = theta - self.theta0
         cos_z_sq = np.square(np.cos(z))
         e = self.xi * np.exp(-self.alpha * theta)
         return (self.p90 * (1.0 + cos_z_sq) + e) / (1.0 + self.p90 * cos_z_sq + e)
 
+    @medium_property(range=(-1.0, 1.0))
     def phase_m33(self, cos_theta: ArrayLike) -> NDArray:
         """m33 element of the phase matrix"""
-        cos_theta = self.checkCosTheta(cos_theta)
         cos_theta = np.asarray(cos_theta)
         theta = np.arccos(cos_theta)
         ct_sq = np.square(cos_theta)

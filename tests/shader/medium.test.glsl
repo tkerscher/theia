@@ -22,7 +22,7 @@ buffer QueryBuffer{ Query queries[]; };
 writeonly buffer Results{ Result results[]; };
 
 layout(scalar, push_constant) uniform PushConstant {
-    Medium medium;
+    uint mediumIdx;
 } push;
 
 void main() {
@@ -32,14 +32,16 @@ void main() {
     float theta = queries[i].theta;
     float eta = queries[i].eta;
     // look up
-    MediumConstants consts = lookUpMedium(push.medium, wavelength);
+    MediumConstants consts = lookUpMedium(push.mediumIdx, wavelength);
     // look up other two tables and build result
+    Table1D log_phase =  loadMediaSlot_Table1D(LOG_PHASE_FUNCTION, push.mediumIdx);
+    Table1D phase_sampling = loadMediaSlot_Table1D(PHASE_SAMPLING, push.mediumIdx);
     results[i] = Result(
         consts.n,
         consts.vg,
         consts.mu_s,
         consts.mu_e,
-        lookUp(push.medium.log_phase, 0.5 * (theta + 1.0)),
-        lookUp(push.medium.phase_sampling, eta)
+        lookUp(log_phase, 0.5 * (theta + 1.0)),
+        lookUp(phase_sampling, eta)
     );
 }

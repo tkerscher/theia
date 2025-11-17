@@ -12,6 +12,16 @@ from numpy.typing import NDArray
 from typing import Any
 
 
+class classproperty:
+    """class property decorator"""
+
+    def __init__(self, func):
+        self.fget = func
+
+    def __get__(self, instance, owner):
+        return self.fget(owner)
+
+
 def intersectRange(
     a: tuple[float, float] | None,
     b: tuple[float, float] | None,

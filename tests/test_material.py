@@ -6,9 +6,13 @@ import os.path
 import theia.material
 import theia.units as u
 import warnings
-from ctypes import Structure, c_uint64, c_float
+from ctypes import Structure, c_uint32, c_float
 from scipy.integrate import quad
+
+from theia.lookup import Table
+from theia.property import FloatProperty, TableProperty
 from theia.testing import WaterTestModel
+from theia.util import createPreamble
 
 
 def test_checkMedium():
@@ -213,7 +217,7 @@ def test_MediumShader(shaderUtil, rng):
         ]
 
     class Push(Structure):
-        _fields_ = [("medium", c_uint64)]
+        _fields_ = [("medium", c_uint32)]
 
     push = Push(medium=store.media["water"])
 
@@ -224,14 +228,16 @@ def test_MediumShader(shaderUtil, rng):
     result_buffer = hp.ArrayBuffer(Result, N)
     # fill query structures with random parameters
     queries = query_buffer.numpy()
-    dLam = water.lambda_max - water.lambda_min
-    queries["wavelength"] = (rng.random(N, np.float32) * dLam + water.lambda_min) * u.nm
+    lambda_min, lambda_max = water.wavelengthRange
+    dLam = lambda_max - lambda_min
+    queries["wavelength"] = (rng.random(N, np.float32) * dLam + lambda_min) * u.nm
     queries["theta"] = 1.0 - 2 * rng.random(N, np.float32)  # [-1,1]
     queries["eta"] = rng.random(N, np.float32)  # [0,1]
 
     # create program
-    program = shaderUtil.createTestProgram("medium.test.glsl")
+    program = shaderUtil.createTestProgram("medium.test.glsl", headers=store.header)
     program.bindParams(QueryBuffer=query_tensor, Results=result_tensor)
+    store.bindParams(program)
     # run it
     (
         hp.beginSequence()
@@ -267,15 +273,16 @@ def test_MaterialShader(shaderUtil, rng):
     water_model = WaterTestModel()
     water = water_model.createMedium()
     glass_model = theia.material.BK7Model()
-    glass = glass_model.createMedium(name="glass", numLambda=4096)
-    mat_water_glass = theia.material.Material("water_glass", water, glass)
+    glass = glass_model.createMedium(name="glass", numSamples=4096)
+    f = ("TRVB", "BDL")
+    mat_water_glass = theia.material.Material("water_glass", water, glass, flags=f)
     mat_vac_glass = theia.material.Material("vac_glass", None, glass)
     mat_store = theia.material.MaterialStore([mat_water_glass, mat_vac_glass])
 
     # let's define the structs used in the shader
     class Query(Structure):
         _fields_ = [
-            ("material", c_uint64),
+            ("materialIdx", c_uint32),
             ("lam", c_float),  # wavelength
             ("theta", c_float),
             ("eta", c_float),
@@ -305,20 +312,23 @@ def test_MaterialShader(shaderUtil, rng):
     flag_buffer = hp.UnsignedIntBuffer(2)
     # fill query structures with random parameters
     queries = query_buffer.numpy()
-    queries["material"] = [
-        mat_store.material["water_glass"],
+    queries["materialIdx"] = [
+        mat_store["water_glass"],
     ] * (N // 2) + [
-        mat_store.material["vac_glass"],
+        mat_store["vac_glass"],
     ] * (N // 2)
     queries["lam"] = (rng.random(N, np.float32) * 550.0 + 250.0) * u.nm
     queries["theta"] = 1.0 - 2 * rng.random(N, np.float32)  # [-1,1]
     queries["eta"] = rng.random(N, np.float32)  # [0,1]
 
     # create program
-    program = shaderUtil.createTestProgram("material.test.glsl")
+    program = shaderUtil.createTestProgram(
+        "material.test.glsl", headers=mat_store.header
+    )
     program.bindParams(
         QueryBuffer=query_tensor, Results=result_tensor, Flags=flag_tensor
     )
+    mat_store.bindParams(program)
     # run it
     (
         hp.beginSequence()
@@ -398,53 +408,56 @@ def test_MaterialShader(shaderUtil, rng):
     assert np.abs(gpu["m22"] - cpu[:, 7]).max() < 1e-3
     assert np.abs(gpu["m33"] - cpu[:, 8]).max() < 1e-3
     assert np.abs(gpu["m34"] - cpu[:, 9]).max() < 1e-3
-    assert flag_buffer.numpy()[0] == mat_vac_glass.flagsInward
-    assert flag_buffer.numpy()[1] == mat_vac_glass.flagsOutward
+    assert flag_buffer.numpy()[0] == mat_water_glass.flagsInward
+    assert flag_buffer.numpy()[1] == mat_water_glass.flagsOutward
 
 
 def test_serializeMaterial(tmp_path, rng):
     """create some dummy media/material and try to save/load them"""
     # create dummy media
+    rand = lambda n: rng.random(n, dtype=np.float32)
+    table = lambda n, a: TableProperty(Table(rand(n) * a))
     med1 = theia.material.Medium(
         "med1",
-        450.0,
-        750.0,
-        refractive_index=rng.random(456, dtype=np.float32) * 2.0,
-        group_velocity=rng.random(196, dtype=np.float32) * 0.8,
-        absorption_coef=rng.random(233, dtype=np.float32) * 30.0,
-        scattering_coef=rng.random(199, dtype=np.float32) * 30.0,
-        log_phase_function=rng.random(156, dtype=np.float32) * 1.0,
-        phase_sampling=rng.random(648, dtype=np.float32) * 3.14,
-        phase_m12=rng.random(354, dtype=np.float32),
-        phase_m22=rng.random(416, dtype=np.float32),
-        phase_m33=rng.random(422, dtype=np.float32),
-        phase_m34=rng.random(235, dtype=np.float32),
+        (450.0, 750.0),
+        {
+            "refractice_index": table(456, 2.0),
+            "group_velocity": table(196, 0.8),
+            "scattering_coef": table(199, 30.0),
+            "phase_sampling": table(648, 3.14),
+        },
     )
     med2 = theia.material.Medium(
         "med2",
-        500.0,
-        700.0,
-        refractive_index=rng.random(199, dtype=np.float32) * 4.5,
-        group_velocity=rng.random(256, dtype=np.float32) * 0.8,
-        absorption_coef=rng.random(145, dtype=np.float32) * 25.0,
-        scattering_coef=rng.random(263, dtype=np.float32) * 25.0,
-        log_phase_function=rng.random(105, dtype=np.float32),
-        phase_sampling=rng.random(156, dtype=np.float32),
+        (500.0, 700.0),
+        {
+            "refractive_index": table(199, 4.5),
+            "group_velocity": table(256, 0.8),
+            "absorption_coef": table(145, 25.0),
+            "scattering_coef": table(263, 25.0),
+            "log_phase_function": table(105, 1.0),
+            "phase_sampling": table(156, 1.0),
+        },
     )
     medExtra = theia.material.Medium(
         "extra",
-        450.0,
-        650.0,
-        refractive_index=rng.random(199, dtype=np.float32),
-        group_velocity=rng.random(156, dtype=np.float32) * 0.8,
-        absorption_coef=rng.random(133, dtype=np.float32) * 25.0,
-        scattering_coef=rng.random(119, dtype=np.float32) * 25.0,
-        log_phase_function=rng.random(107, dtype=np.float32),
-        phase_sampling=rng.random(108, dtype=np.float32),
+        (450.0, 650.0),
+        {
+            "refractive_index": table(199, 2.5),
+            "group_velocity": table(156, 0.8),
+            "absorption_coef": table(133, 25.0),
+            "scattering_coef": table(119, 25.0),
+            "log_phase_function": table(107, 1.0),
+            "phase_sampling": table(108, 1.0),
+        },
     )
     # dummy material
     mat1 = theia.material.Material("mat1", "med1", med2, flags=("R", "Tfb"))
     mat2 = theia.material.Material("mat2", med1, None, flags=("B", "RbTf"))
+    mat2.properties = {
+        "albedo": FloatProperty((1.0, 0.5)),
+        "anisotropy": table(165, 1.0),
+    }
 
     # save
     path = tmp_path.joinpath("materials.zip")
@@ -454,18 +467,17 @@ def test_serializeMaterial(tmp_path, rng):
 
     # check if media was restored correctly
     def checkMedium(test: theia.material.Medium, true: theia.material.Medium):
-        assert test.lambda_min == true.lambda_min
-        assert test.lambda_max == true.lambda_max
-        assert np.all(test.refractive_index == true.refractive_index)
-        assert np.all(test.group_velocity == true.group_velocity)
-        assert np.all(test.absorption_coef == true.absorption_coef)
-        assert np.all(test.scattering_coef == true.scattering_coef)
-        assert np.all(test.log_phase_function == true.log_phase_function)
-        assert np.all(test.phase_sampling == true.phase_sampling)
-        assert np.all(test.phase_m12 == true.phase_m12)
-        assert np.all(test.phase_m22 == true.phase_m22)
-        assert np.all(test.phase_m33 == true.phase_m33)
-        assert np.all(test.phase_m34 == true.phase_m34)
+        assert test.name == true.name
+        assert test.wavelengthRange == true.wavelengthRange
+        assert test.properties.keys() == true.properties.keys()
+        for name, prop in true.properties.items():
+            # for now we only do table properties
+            test_prop = test.properties[name]
+            assert isinstance(test_prop, TableProperty)
+            assert test_prop.table is not None
+            assert isinstance(prop, TableProperty)
+            assert prop.table is not None
+            assert np.all(test_prop.table.samples == prop.table.samples)
 
     assert med.keys() == {"med1", "med2", "extra"}
     checkMedium(med["med1"], med1)
@@ -481,3 +493,8 @@ def test_serializeMaterial(tmp_path, rng):
     assert mat["mat2"].outside == None
     assert mat["mat2"].flagsInward == mat2.flagsInward
     assert mat["mat2"].flagsOutward == mat2.flagsOutward
+    assert mat["mat2"].properties.keys() == mat2.properties.keys()
+    assert mat["mat2"].properties["albedo"].value == mat2.properties["albedo"].value
+    t1 = mat["mat2"].properties["anisotropy"].table.samples
+    t2 = mat2.properties["anisotropy"].table.samples
+    assert np.all(t1 == t2)

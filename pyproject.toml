@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "theia"
-version = "0.1.0"
+version = "0.2.0"
 description = "Transient Ray Tracing Framework on the GPU"
 authors = [
     { name = "Tobias Kerscher", email = "88444139+tkerscher@users.noreply.github.com" }
@@ -14,9 +14,9 @@ requires-python = ">=3.9"
 license = { text = "MIT" }
 dependencies = [
     "hephaistos",
-    "jsonschema~=4.23",
     "numpy>=1.22",
     "scipy>=1.8",
+    "typing-extensions~=4.0",
     "trimesh[easy]~=4.5.3"
 ]
 

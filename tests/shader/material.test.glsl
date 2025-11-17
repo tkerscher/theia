@@ -3,7 +3,7 @@ layout(local_size_x = 32) in;
 #include "material.glsl"
 
 struct Query {
-    Material material; //!<-- 8 byte alignment !
+    uint materialIdx;
     // Medium medium;
     float wavelength;
     float theta; // scattering angle
@@ -29,21 +29,34 @@ buffer QueryBuffer{ Query queries[]; };
 writeonly buffer Results{ Result results[]; };
 writeonly buffer Flags{ uint32_t flags[]; };
 
-Result sampleMedium(const Medium medium, float lambda, float theta, float eta) {
-    MediumConstants constants = lookUpMedium(medium, lambda);
-    bool hasMedium = uint64_t(medium) != 0;
+Result sampleMedium(const uint mediumIdx, float lambda, float theta, float eta) {
+    MediumConstants constants = lookUpMedium(mediumIdx, lambda);
     float t = 0.5 * (theta + 1.0); //remap [-1,1] -> [0,1]
+    Table1D log_phase = Table1D(uint64_t(0));
+    Table1D phase_sampling = Table1D(uint64_t(0));
+    Table1D phase_m12 = Table1D(uint64_t(0));
+    Table1D phase_m22 = Table1D(uint64_t(0));
+    Table1D phase_m33 = Table1D(uint64_t(0));
+    Table1D phase_m34 = Table1D(uint64_t(0));
+    if (!isVacuum(mediumIdx)) {
+        log_phase = loadMediaSlot_Table1D(LOG_PHASE_FUNCTION, mediumIdx);
+        phase_sampling = loadMediaSlot_Table1D(PHASE_SAMPLING, mediumIdx);
+        phase_m12 = loadMediaSlot_Table1D(PHASE_M12, mediumIdx);
+        phase_m22 = loadMediaSlot_Table1D(PHASE_M22, mediumIdx);
+        phase_m33 = loadMediaSlot_Table1D(PHASE_M33, mediumIdx);
+        phase_m34 = loadMediaSlot_Table1D(PHASE_M34, mediumIdx);
+    }
     return Result(
         constants.n,
         constants.vg,
         constants.mu_s,
         constants.mu_e,
-        hasMedium ? lookUp(medium.log_phase, t) : 0.0,
-        hasMedium ? lookUp(medium.phase_sampling, eta) : 0.0,
-        hasMedium ? lookUp(medium.phase_m12, t) : 0.0,
-        hasMedium ? lookUp(medium.phase_m22, t) : 0.0,
-        hasMedium ? lookUp(medium.phase_m33, t) : 0.0,
-        hasMedium ? lookUp(medium.phase_m34, t) : 0.0
+        lookUp(log_phase, t),
+        lookUp(phase_sampling, eta),
+        lookUp(phase_m12, t),
+        lookUp(phase_m22, t),
+        lookUp(phase_m33, t),
+        lookUp(phase_m34, t)
     );
 }
 
@@ -52,15 +65,19 @@ void main() {
     float wavelength = queries[i].wavelength;
     float theta = queries[i].theta;
     float eta = queries[i].eta;
-    Material mat = queries[i].material;
+    uint matIdx = queries[i].materialIdx;
+
+    uint medInsideIdx, flagsInwards, medOutsideIdx, flagsOutwards;
+    queryMaterialSide(matIdx, true, medInsideIdx, flagsInwards);
+    queryMaterialSide(matIdx, false, medOutsideIdx, flagsOutwards);
 
     // sample both inside and outside medium
-    results[2*i + 0] = sampleMedium(mat.inside, wavelength, theta, eta);
-    results[2*i + 1] = sampleMedium(mat.outside, wavelength, theta, eta);
+    results[2*i + 0] = sampleMedium(medInsideIdx, wavelength, theta, eta);
+    results[2*i + 1] = sampleMedium(medOutsideIdx, wavelength, theta, eta);
 
     //storing flags once is enough
     if (i == 0) {
-        flags[0] = mat.flagsInwards;
-        flags[1] = mat.flagsOutwards;
+        flags[0] = flagsInwards;
+        flags[1] = flagsOutwards;
     }
 }
