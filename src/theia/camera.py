@@ -10,6 +10,7 @@ from ctypes import Structure, c_float, c_int32, c_uint32
 
 import theia.units as u
 from theia.light import WavelengthSampleItem, WavelengthSource
+from theia.material import MaterialStore
 from theia.random import RNG
 from theia.scene import MeshInstance, Transform
 from theia.util import ShaderLoader, compileShader, createPreamble
@@ -120,6 +121,9 @@ class CameraRaySampler(PipelineStage):
     rng: RNG | None, default=None
         The random number generator used for sampling. May be `None` if `camera`
         does not require random numbers.
+    materials: MaterialStore | None, default=None
+        Optional store containing material and medium properties the camera may
+        reference. If `None`, creates an empty store.
     polarized: bool, default=True
         Whether to save polarization information.
     batchSize: int
@@ -149,6 +153,7 @@ class CameraRaySampler(PipelineStage):
         capacity: int,
         *,
         rng: RNG | None = None,
+        materials: MaterialStore | None = None,
         polarized: bool = True,
         batchSize: int = 128,
         code: bytes | None = None,
@@ -160,12 +165,16 @@ class CameraRaySampler(PipelineStage):
         # init stage
         super().__init__({"SampleParams": self.SampleParams})
 
+        if materials is None:
+            materials = MaterialStore([])
+
         # save params
         self._batchSize = batchSize
         self._camera = camera
         self._capacity = capacity
         self._polarized = polarized
         self._rng = rng
+        self._materials = materials
         self._wavelengthSource = wavelengthSource
         self.setParams(count=capacity, baseCount=0)
 
@@ -182,10 +191,12 @@ class CameraRaySampler(PipelineStage):
                 "camera.glsl": camera.sourceCode,
                 "rng.glsl": rng.sourceCode if rng is not None else "",
                 "photon.glsl": wavelengthSource.sourceCode,
+                **materials.header,
             }
             code = compileShader("camera.sample.glsl", preamble, headers)
         self._code = code
         self._program = hp.Program(self._code)
+        materials.bindParams(self._program)
         # calculate group size
         self._groups = -(capacity // -batchSize)
 

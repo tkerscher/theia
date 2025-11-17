@@ -497,14 +497,19 @@ def test_meshCamera(polarized: bool, inward: bool):
     )
     c1 = store.createInstance("cube", "mat", t1)
     c2 = store.createInstance("cube", "mat", t2)
-    scene = Scene([c1, c2], matStore.material, medium=matStore.media["water"])
+    scene = Scene([c1, c2], matStore, medium="water")
 
     # create camera and sampler
     photon = ConstWavelengthSource()
     camera = theia.camera.MeshCamera(c2, timeDelta=t0, inward=inward)
     philox = PhiloxRNG(key=0xC0FFEE)
     sampler = theia.camera.CameraRaySampler(
-        camera, photon, N, rng=philox, polarized=polarized
+        camera,
+        photon,
+        N,
+        rng=philox,
+        polarized=polarized,
+        materials=matStore,
     )
     # run
     runPipeline([philox, photon, camera, sampler])
