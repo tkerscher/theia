@@ -344,6 +344,7 @@ def test_pencilLightSource(polarized: bool):
     stokes = (1.0, 0.9, 0.1, -0.5)
     polRef = (0.0, 0.48, -0.36)
     budget = 12.0
+
     # create pipeline
     philox = PhiloxRNG(key=0xC0110FFC0FFEE)
     photons = theia.light.ConstWavelengthSource(wavelength=100.0 * u.nm)
@@ -356,7 +357,11 @@ def test_pencilLightSource(polarized: bool):
         polarizationRef=polRef,
     )
     sampler = theia.light.LightSampler(
-        light, photons, N, rng=philox, polarized=polarized
+        light,
+        photons,
+        N,
+        rng=philox,
+        polarized=polarized,
     )
     # run
     runPipeline([philox, photons, light, sampler])
@@ -387,7 +392,11 @@ def test_sphericalLightSource_fwd(polarized: bool):
         budget=budget,
     )
     sampler = theia.light.LightSampler(
-        light, photons, N, rng=philox, polarized=polarized
+        light,
+        photons,
+        N,
+        rng=philox,
+        polarized=polarized,
     )
     # run
     runPipeline([philox, photons, light, sampler])
@@ -474,7 +483,13 @@ def test_cherenkov_fwd(usePhotons: bool, polarized: bool):
         usePhotonCount=usePhotons,
     )
     sampler = theia.light.LightSampler(
-        light, photon, N, rng=philox, medium=store.media["water"], polarized=polarized
+        light,
+        photon,
+        N,
+        rng=philox,
+        materials=store,
+        medium="water",
+        polarized=polarized,
     )
     # run
     runPipeline([philox, photon, light, sampler])
@@ -546,7 +561,8 @@ def test_cherenkov_bwd(usePhotons: bool, polarized: bool):
         light,
         photons,
         rng=philox,
-        medium=store.media["water"],
+        materials=store,
+        medium="water",
         polarized=polarized,
     )
     # run
@@ -633,7 +649,13 @@ def test_cherenkovTrack(usePhotons: bool, polarized: bool):
     # build pipeline
     philox = PhiloxRNG(key=0xC0FFEE)
     sampler = theia.light.LightSampler(
-        light, photon, N, rng=philox, medium=store.media["water"], polarized=polarized
+        light,
+        photon,
+        N,
+        rng=philox,
+        materials=store,
+        medium="water",
+        polarized=polarized,
     )
     # run pipeline
     runPipeline([philox, photon, light, sampler])
@@ -859,7 +881,12 @@ def test_muonTrackLightSource_fwd(applyFrankTamm: bool) -> None:
         startPos, startTime, endPos, endTime, E_muon, applyFrankTamm=applyFrankTamm
     )
     sampler = theia.light.LightSampler(
-        light, photons, N, rng=philox, medium=store.media["water"]
+        light,
+        photons,
+        N,
+        rng=philox,
+        medium="water",
+        materials=store,
     )
     # run
     runPipeline(sampler.collectStages())
@@ -938,7 +965,13 @@ def test_muonTrackLightSource_bwd(
         startPos, startTime, endPos, endTime, E_muon, applyFrankTamm=applyFrankTamm
     )
     sampler = BackwardLightSampler(
-        N, light, photons, rng=philox, observer=observer, medium=store.media["water"]
+        N,
+        light,
+        photons,
+        rng=philox,
+        observer=observer,
+        medium="water",
+        materials=store,
     )
     # run
     runPipeline(sampler.collectStages())
@@ -1015,7 +1048,12 @@ def test_particleCascadeLightSource_fwd(applyFrankTamm: bool, particle: str) -> 
         **params, applyFrankTamm=applyFrankTamm
     )
     sampler = theia.light.LightSampler(
-        light, photons, N, rng=philox, medium=store.media["water"]
+        light,
+        photons,
+        N,
+        rng=philox,
+        medium="water",
+        materials=store,
     )
     # run
     runPipeline(sampler.collectStages())
@@ -1101,7 +1139,13 @@ def test_particleCascadeLightSource_bwd(
         **params, applyFrankTamm=applyFrankTamm
     )
     sampler = BackwardLightSampler(
-        N, light, photons, rng=philox, observer=observer, medium=store.media["water"]
+        N,
+        light,
+        photons,
+        rng=philox,
+        observer=observer,
+        medium="water",
+        materials=store,
     )
     # run
     runPipeline(sampler.collectStages())

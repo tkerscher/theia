@@ -15,6 +15,7 @@ from hephaistos.glsl import buffer_reference, vec2, vec3, vec4
 from numpy.ctypeslib import as_array
 
 from theia.lookup import uploadTables
+from theia.material import MaterialStore, VACUUM_IDX
 from theia.random import RNG
 from theia.scene import Scene
 from theia.util import ShaderLoader, compileShader, createPreamble
@@ -504,10 +505,13 @@ class LightSampler(PipelineStage):
     rng: RNG | None, default=None
         The random number generator used for sampling. May be `None` if `source`
         does not require random numbers.
-    medium: int | None, default=None
-        Address of medium the light source is submerged in. If `None` and a
-        scene is provided, uses the scene's medium, otherwise a vacuum is
+    medium: str | int | None, default=None
+        Name or index of medium the light source is submerged in. If `None` and
+        a scene is provided, uses the scene's medium, otherwise a vacuum is
         assumed.
+    materials: MaterialStore | None, default=None
+        Store containing the materials and medium the light may depend on.
+        Overrides the one present in `scene` if both are given.
     polarized: bool, default=False
         Whether to save polarization information.
     retrieve: bool, default=True
@@ -539,7 +543,7 @@ class LightSampler(PipelineStage):
         _fields_ = [
             ("count", c_uint32),
             ("baseCount", c_uint32),
-            ("medium", buffer_reference),
+            ("_medium", c_uint32),
         ]
 
     def __init__(
@@ -549,7 +553,8 @@ class LightSampler(PipelineStage):
         capacity: int,
         *,
         rng: RNG | None = None,
-        medium: int | None = None,
+        medium: str | int | None = None,
+        materials: MaterialStore | None = None,
         polarized: bool = False,
         retrieve: bool = True,
         scene: Scene | None = None,
@@ -561,11 +566,15 @@ class LightSampler(PipelineStage):
         if needRNG and rng is None:
             raise ValueError("Light source requires a RNG but none was given!")
         # init stage
-        super().__init__({"SampleParams": self.SampleParams})
+        super().__init__({"SampleParams": self.SampleParams}, {"medium"})
 
-        # fetch medium
-        if medium is None:
-            medium = 0 if scene is None else scene.medium
+        # fetch materials
+        if materials is None and scene is not None:
+            materials = scene.materials
+        if materials is None:
+            # we need a material store to serve all the binding
+            # -> create an empty one
+            materials = MaterialStore([])
 
         # save params
         self._batchSize = batchSize
@@ -576,7 +585,9 @@ class LightSampler(PipelineStage):
         self._polarized = polarized
         self._rng = rng
         self._wavelengthSource = wavelengthSource
-        self.setParams(count=capacity, baseCount=0, medium=medium)
+        self._materials = materials
+        self.medium = medium
+        self.setParams(count=capacity, baseCount=0)
 
         # create code if needed
         if code is None:
@@ -591,6 +602,7 @@ class LightSampler(PipelineStage):
                 "light.glsl": source.sourceCode,
                 "photon.glsl": wavelengthSource.sourceCode,
                 "rng.glsl": rng.sourceCode if rng is not None else "",
+                **materials.header,
             }
             code = compileShader("lightsource.sample.glsl", preamble, headers)
         self._code = code
@@ -610,6 +622,8 @@ class LightSampler(PipelineStage):
         )
         if self.scene is not None:
             self.scene.bindParams(self._program)
+        else:
+            materials.bindParams(self._program)
 
     @property
     def batchSize(self) -> int:
@@ -630,6 +644,24 @@ class LightSampler(PipelineStage):
     def lightQueue(self) -> IOQueue:
         """Queue storing the light samples"""
         return self._lightQueue
+
+    @property
+    def medium(self) -> int:
+        """Index of the medium the light source is submerged in"""
+        return self.getParam("_medium")
+
+    @medium.setter
+    def medium(self, value: str | int | None) -> None:
+        if self._materials is None and value is not None:
+            raise ValueError(
+                "Cannot set material if neither `materials` nor `scene` is provided!"
+            )
+        if value is None:
+            value = VACUUM_IDX
+        elif isinstance(value, str):
+            assert self._materials is not None  # to make the linter happy...
+            value = self._materials.media[value]
+        self.setParam("_medium", value)
 
     @property
     def polarized(self) -> bool:

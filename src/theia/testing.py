@@ -6,8 +6,10 @@ from theia.light import LightSource, WavelengthSource
 from theia.material import (
     HenyeyGreensteinPhaseFunction,
     KokhanovskyOceanWaterPhaseMatrix,
+    MaterialStore,
     SmithNaturalWaterMeasurements,
     WaterBaseModel,
+    VACUUM_IDX,
 )
 from theia.random import RNG
 from theia.scene import RectBBox
@@ -17,7 +19,7 @@ from theia.util import createPreamble, compileShader
 import theia.units as u
 
 from ctypes import Structure, c_float, c_int32, c_uint32
-from hephaistos.glsl import buffer_reference, mat4, vec3, vec4
+from hephaistos.glsl import mat4, vec3, vec4
 from numpy.typing import NDArray
 from numpy.lib.recfunctions import structured_to_unstructured
 
@@ -96,7 +98,7 @@ class BackwardLightSampler(PipelineStage):
         ]
 
     class SamplerParams(Structure):
-        _fields_ = [("observer", vec3), ("medium", buffer_reference)]
+        _fields_ = [("observer", vec3), ("_medium", c_uint32)]
 
     def __init__(
         self,
@@ -105,15 +107,21 @@ class BackwardLightSampler(PipelineStage):
         wavelengthSource: WavelengthSource,
         *,
         rng: RNG,
+        medium: str | int | None = None,
+        materials: MaterialStore | None = None,
         observer: tuple[float, float, float] = (float("Nan"),) * 3,
-        medium: int = 0,
         box_size: float = 100.0 * u.m,
         polarized: bool = False,
     ) -> None:
         if not source.supportBackward:
             raise ValueError("Light source does not support backward mode!")
 
-        super().__init__({"SamplerParams": self.SamplerParams})
+        super().__init__({"SamplerParams": self.SamplerParams}, {"mediums"})
+
+        if materials is None:
+            # we need a material store to serve all bindings
+            # -> create an empty one
+            materials = MaterialStore([])
 
         self._source = source
         self._rng = rng
@@ -121,6 +129,7 @@ class BackwardLightSampler(PipelineStage):
         self._polarized = polarized
         self._batch = capacity
         self._groups = -(capacity // -32)
+        self._materials = materials
         self.setParams(observer=observer, medium=medium)
 
         self._item = self.PolarizedItem if polarized else self.UnpolarizedItem
@@ -136,15 +145,33 @@ class BackwardLightSampler(PipelineStage):
             "rng.glsl": rng.sourceCode,
             "light.glsl": source.sourceCode,
             "photon.glsl": wavelengthSource.sourceCode,
+            **self._materials.header,
         }
         code = compileShader("lightsource.sample.bwd.glsl", preamble, headers)
         self._program = hp.Program(code)
         self._program.bindParams(ResultBuffer=self._tensor)
+        self._materials.bindParams(self._program)
 
     @property
     def batchSize(self) -> int:
         """Number of samples to draw per batch"""
         return self._batch
+
+    @property
+    def medium(self) -> int:
+        """Index of the medium the light source is submerged in"""
+        return self.getParam("_medium")
+
+    @medium.setter
+    def medium(self, value: str | int | None) -> None:
+        if self._materials is None and value is not None:
+            raise ValueError("Cannot set material if none were provide!")
+        if value is None:
+            value = VACUUM_IDX
+        elif isinstance(value, str):
+            assert self._materials is not None  # to make the linter happy...
+            value = self._materials.media[value]
+        self.setParam("_medium", value)
 
     @property
     def source(self) -> LightSource:

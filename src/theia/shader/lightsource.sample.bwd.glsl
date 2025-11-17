@@ -18,7 +18,7 @@ writeonly buffer ResultBuffer { Result r[]; };
 
 uniform SamplerParams {
     vec3 observer;
-    uvec2 medium;    
+    uint medium;    
 } samplerParams;
 
 void main() {
@@ -42,8 +42,7 @@ void main() {
     vec3 normal = sampleHemisphere(random2D(i, dim));
 
     //sample light
-    Medium medium = Medium(samplerParams.medium);
-    MediumConstants c = lookUpMedium(medium, lambda);
+    MediumConstants c = lookUpMedium(samplerParams.medium, lambda);
     SourceRay ray = sampleLight(observer, normal, lambda, c, i, dim);
 
     //save result
