@@ -10,10 +10,13 @@ from scipy.interpolate import (
 
 import hephaistos as hp
 from ctypes import memmove
+from struct import pack, unpack
 
 from abc import ABC, abstractmethod
 from enum import IntEnum
+from io import BufferedIOBase
 from typing import Final, Literal, Type
+from typing_extensions import Self  # introduced in 3.11
 
 __all__ = [
     "createInterpolator",
@@ -182,6 +185,37 @@ class Table:
         self.copy(buffer.address)
         hp.execute(hp.updateTensor(buffer, tensor))
         return tensor
+
+    def save(self, file: BufferedIOBase) -> None:
+        """
+        Writes the table to the given file.
+        Returns the total amount of bytes written.
+        """
+        # first, write the header. currently this only
+        # consists of the interpolation method
+        file.write(pack("<i", self.interpolation))
+        # followed by the actual numpy data
+        np.save(file, self.samples)
+
+    @classmethod
+    def load(cls, file: BufferedIOBase) -> Self | None:
+        """
+        Loads the next table stored in the given file. Returns `None` if end
+        of file has been reached.
+        """
+        # first read interpolation method. will be empty if we already reached eof
+        # TODO: we are not guaranteed to get 4 bytes. E.g. on TCP streams, we might
+        #       get less, requiring additional read commands. For now this should
+        #       be fine though
+        header = file.read(4)
+        if not header or len(header) < 4:
+            return None
+        interpolation = unpack("<i", header)[0]
+        if interpolation not in InterpolationMethod:
+            raise RuntimeError(f"Unknown interpolation method {interpolation}")
+        interpolation = InterpolationMethod(interpolation)
+        samples = np.load(file)
+        return cls(samples, interpolation=interpolation)
 
 
 def getTableSize(a: ArrayLike | tuple[int, ...] | None) -> int:
@@ -614,7 +648,7 @@ def createInterpolator(
         Boundaries of each dimension specified as (min, max). If `None`,
         assumes (0, 1) for every dimension.
     """
-    table = data if type(data) is Table else Table(data)
+    table = data if isinstance(data, Table) else Table(data)
     if method is None:
         method = table.interpolation
     else:
