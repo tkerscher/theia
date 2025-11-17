@@ -344,7 +344,7 @@ def test_targetLightSource(checkVisibility: bool):
     store = MeshStore({"cube": "assets/cube.ply"})
     trafo = Transform.TRS(translate=(1.0, 0.0, 0.0))
     inst = store.createInstance("cube", "mat", trafo)
-    scene = Scene([inst], matStore.material, medium=matStore.media["water"])
+    scene = Scene([inst], matStore, medium="water")
 
     # create pipeline
     philox = PhiloxRNG(key=0xC0FFEE)
