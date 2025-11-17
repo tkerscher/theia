@@ -35,17 +35,16 @@ uniform DispatchParams {
 
 uniform TraceParams {
     int targetId;
-    uvec2 sceneMedium;
+    uint sceneMediumIdx;
 
     PropagateParams propagation;
 } params;
 
 ForwardRay sampleRay(uint idx, inout uint dim) {
     WavelengthSample photon = sampleWavelength(idx, dim);
-    Medium medium = Medium(params.sceneMedium);
-    MediumConstants constants = lookUpMedium(medium, photon.wavelength);
+    MediumConstants constants = lookUpMedium(params.sceneMediumIdx, photon.wavelength);
     SourceRay lightRay = sampleLight(photon.wavelength, constants, idx, dim);
-    ForwardRay ray = createRay(lightRay, medium, constants, photon);
+    ForwardRay ray = createRay(lightRay, params.sceneMediumIdx, constants, photon);
 
     //in photon tracing, we want contrib to be the survival chance (1.0 - absorption)
     //thus we have to set the initial contrib to 1.0

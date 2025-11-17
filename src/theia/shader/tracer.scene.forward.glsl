@@ -35,7 +35,7 @@ uniform DispatchParams {
 
 uniform TraceParams {
     int targetId;
-    uvec2 sceneMedium;
+    uint sceneMediumIdx;
 
     PropagateParams propagation;
 } params;
@@ -49,7 +49,7 @@ uniform TraceParams {
 
 ForwardRay sampleRay(uint idx, inout uint dim) {
     WavelengthSample photon = sampleWavelength(idx, dim);
-    Medium medium = Medium(params.sceneMedium);
+    uint medium = params.sceneMediumIdx;
     MediumConstants constants = lookUpMedium(medium, photon.wavelength);
     SourceRay lightRay = sampleLight(photon.wavelength, constants, idx, dim);
     return createRay(lightRay, medium, constants, photon);

@@ -54,18 +54,18 @@ ResultCode checkSamples(const CameraSample camSample, const SourceRay light) {
 
 void sampleDirect(
     uint idx, inout uint dim,
-    const Medium medium,
+    const uint mediumIdx,
     const PropagateParams params    
 ) {
     //sample light path from wavelength, camera and lightsource
     WavelengthSample photon = sampleWavelength(idx, dim);
     CameraSample camSample = sampleCamera(
         photon.wavelength, idx, dim);
-    MediumConstants consts = lookUpMedium(medium, photon.wavelength);
+    MediumConstants consts = lookUpMedium(mediumIdx, photon.wavelength);
     SourceRay light = sampleLight(
         camSample.position, camSample.normal,
         photon.wavelength, consts, idx, dim);
-    ForwardRay ray = createRay(light, medium, consts, photon);
+    ForwardRay ray = createRay(light, mediumIdx, consts, photon);
     onEvent(ray, RESULT_CODE_RAY_CREATED, idx, 0);
     
     //check if we can combine both rays

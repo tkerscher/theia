@@ -7,15 +7,15 @@ uniform DispatchParams {
 };
 
 uniform TraceParams {
-    uvec2 medium;
+    uint mediumIdx;
 
     PropagateParams propagation;
 } params;
 
 //define global medium
 #define USE_GLOBAL_MEDIUM
-Medium getMedium() {
-    return Medium(params.medium);
+uint getMediumIdx() {
+    return params.mediumIdx;
 }
 #include "ray.medium.glsl"
 
@@ -123,7 +123,7 @@ void traceMain() {
     
     //Direct light sampling
     #ifndef DISABLE_DIRECT_LIGHTING
-    sampleDirect(idx, dim, Medium(params.medium), params.propagation);
+    sampleDirect(idx, dim, getMediumIdx(), params.propagation);
     uint iPath = 2;
     #else
     uint iPath = 0;
@@ -132,7 +132,7 @@ void traceMain() {
     //sample camera ray
     WavelengthSample photon = sampleWavelength(idx, dim);
     CameraRay cam = sampleCameraRay(photon.wavelength, idx, dim);
-    BackwardRay ray = createRay(cam, getMedium(), photon);
+    BackwardRay ray = createRay(cam, getMediumIdx(), photon);
     onEvent(ray, RESULT_CODE_RAY_CREATED, idx, iPath++);
 
     //trace loop

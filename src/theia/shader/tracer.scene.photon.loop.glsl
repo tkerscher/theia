@@ -27,7 +27,7 @@ layout(local_size_x = BLOCK_SIZE) in;
 
 uniform TraceParams {
     int targetId;
-    uvec2 sceneMedium;
+    uint sceneMedium;
 
     PropagateParams propagation;
 } params;

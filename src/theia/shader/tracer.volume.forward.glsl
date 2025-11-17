@@ -16,7 +16,7 @@ uniform DispatchParams {
 };
 
 uniform TraceParams {
-    uvec2 medium;
+    uint mediumIdx;
     int objectId;
 
     PropagateParams propagation;
@@ -24,8 +24,8 @@ uniform TraceParams {
 
 //define global medium
 #define USE_GLOBAL_MEDIUM
-Medium getMedium() {
-    return Medium(params.medium);
+uint getMediumIdx() {
+    return params.mediumIdx;
 }
 #include "ray.medium.glsl"
 
@@ -121,7 +121,7 @@ void sampleTargetMIS(ForwardRay ray, uint idx, inout uint dim) {
     //e.g. pTP: p_target(dir ~ phase)
 
     //shorthand notation
-    Medium med = Medium(params.medium);
+    uint med = params.mediumIdx;
     vec3 obs = ray.state.position;
     vec3 dir = ray.state.direction;
 
@@ -222,7 +222,7 @@ ResultCode trace(
 
 ForwardRay sampleRay(uint idx, inout uint dim) {
     WavelengthSample photon = sampleWavelength(idx, dim);
-    Medium medium = Medium(params.medium);
+    uint medium = params.mediumIdx;
     MediumConstants constants = lookUpMedium(medium, photon.wavelength);
     SourceRay lightRay = sampleLight(photon.wavelength, constants, idx, dim);
     return createRay(lightRay, medium, constants, photon);

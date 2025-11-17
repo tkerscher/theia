@@ -33,7 +33,7 @@ uniform DispatchParams {
 };
 
 uniform TraceParams {
-    uvec2 camMedium;
+    uint camMedium;
     int targetId;
     PropagateParams propagation;
 } params;
@@ -45,10 +45,9 @@ void traceMain() {
         return;
     
     //sample camera ray
-    Medium medium = Medium(params.camMedium);
     WavelengthSample photon = sampleWavelength(idx, dim);
     CameraRay cam = sampleCameraRay(photon.wavelength, idx, dim);
-    BackwardRay ray = createRay(cam, medium, photon);
+    BackwardRay ray = createRay(cam, params.camMedium, photon);
     onEvent(ray, RESULT_CODE_RAY_CREATED, idx, 0);
 
     //there is no dedicated direct lighting tracer for this setting

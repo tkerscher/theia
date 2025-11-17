@@ -101,11 +101,7 @@ def test_SceneForwardTracer_GroundTruth(
     # create scene
     trafo = Transform.TRS(scale=radius, translate=position)
     target = meshStore.createInstance("sphere", "det", trafo, detectorId=0)
-    scene = theia.scene.Scene(
-        [target],
-        matStore.material,
-        medium=matStore.media["homogenous"],
-    )
+    scene = theia.scene.Scene([target], matStore, medium="homogenous")
     # create light (delta pulse)
     photons = theia.light.UniformWavelengthSource(lambdaRange=(lam, lam))
     light = theia.light.SphericalLightSource(
@@ -231,11 +227,7 @@ def test_SceneForwardTracer_Crosscheck(
     guide = SphereTargetGuide(position=position, radius=radius)
     trafo = Transform.TRS(scale=radius, translate=position)
     target = meshStore.createInstance("sphere", "det", trafo, detectorId=0)
-    scene = theia.scene.Scene(
-        [target],
-        matStore.material,
-        medium=matStore.media["homogenous"],
-    )
+    scene = theia.scene.Scene([target], matStore, medium="homogenous")
     # create light (delta pulse)
     photons = theia.light.UniformWavelengthSource(lambdaRange=(lam, lam))
     light = theia.light.SphericalLightSource(
@@ -392,11 +384,7 @@ def test_SceneBackwardTracer(
     # create scene
     trafo = Transform.TRS(scale=radius, translate=position)
     target = meshStore.createInstance("sphere", "det", trafo, detectorId=0)
-    scene = theia.scene.Scene(
-        [target],
-        matStore.material,
-        medium=matStore.media["homogenous"],
-    )
+    scene = theia.scene.Scene([target], matStore, medium="homogenous")
 
     # create light (delta pulse)
     photons = theia.light.UniformWavelengthSource(lambdaRange=(lam, lam))
@@ -525,7 +513,7 @@ def test_SceneForwardTracer_MultiMedia(polarized: bool):
     t_det = Transform.TRS(scale=radius, translate=position)
     inner = meshStore.createInstance("sphere", "inner", t_inner)
     det = meshStore.createInstance("sphere", "det", t_det)
-    scene = theia.scene.Scene([inner, det], matStore.material)
+    scene = theia.scene.Scene([inner, det], matStore)
 
     # create tracing pipeline
     photons = theia.light.ConstWavelengthSource(lam)
@@ -545,7 +533,7 @@ def test_SceneForwardTracer_MultiMedia(polarized: bool):
         scene,
         maxPathLength=max_length,
         scatterCoefficient=scatter_coef,
-        sourceMedium=matStore.media["inner"],
+        sourceMedium="inner",
         maxTime=maxTime,
         polarized=polarized,
     )
@@ -633,8 +621,8 @@ def test_SceneBackwardTracer_MultiMedia(polarized: bool):
     outer_bwd = meshStore.createInstance("sphere", "det_bwd", t_outer)
     inner_fwd = meshStore.createInstance("sphere", "inner_fwd", t_inner)
     outer_fwd = meshStore.createInstance("sphere", "det_fwd", t_outer)
-    scene_bwd = theia.scene.Scene([inner_bwd, outer_bwd], matStore.material)
-    scene_fwd = theia.scene.Scene([inner_fwd, outer_fwd], matStore.material)
+    scene_bwd = theia.scene.Scene([inner_bwd, outer_bwd], matStore)
+    scene_fwd = theia.scene.Scene([inner_fwd, outer_fwd], matStore)
 
     # backward tracer
     photons = theia.light.ConstWavelengthSource(lam)
@@ -656,7 +644,7 @@ def test_SceneBackwardTracer_MultiMedia(polarized: bool):
         scene_bwd,
         maxPathLength=max_length,
         scatterCoefficient=scatter_coef,
-        medium=matStore.media["outer"],
+        medium="outer",
         maxTime=maxTime,
         polarized=polarized,
     )
@@ -697,7 +685,7 @@ def test_SceneBackwardTracer_MultiMedia(polarized: bool):
         scene_fwd,
         maxPathLength=max_length,
         scatterCoefficient=scatter_coef,
-        sourceMedium=matStore.media["inner"],
+        sourceMedium="inner",
         maxTime=maxTime,
         polarized=polarized,
     )
@@ -769,7 +757,7 @@ def test_SceneBackwardTargetTrace() -> None:
     t_det = Transform.TRS(scale=radius, translate=position)
     inner = meshStore.createInstance("sphere", "inner", t_inner)
     det = meshStore.createInstance("sphere", "det", t_det, detectorId=1)
-    scene = theia.scene.Scene([inner, det], matStore.material)
+    scene = theia.scene.Scene([inner, det], matStore)
 
     # creating tracing pipeline
     photons = theia.light.ConstWavelengthSource(lam)
@@ -790,7 +778,7 @@ def test_SceneBackwardTargetTrace() -> None:
         # callback=stats,
         scatterCoefficient=scatter_coef,
         targetId=1,
-        medium=matStore.media["inner"],
+        medium="inner",
         maxTime=maxTime,
     )
     rng.autoAdvance = tracer.nRNGSamples
@@ -837,7 +825,7 @@ def test_SceneBackwardTargetTrace() -> None:
 def test_VolumeForwardTracer(
     mu_a: float,
     mu_s: float,
-    mu_sample: float | None,
+    mu_sample: float,
     g: float,
     disableDirect: bool,
     sampleTarget: bool,
@@ -883,7 +871,8 @@ def test_VolumeForwardTracer(
         recorder,
         rng,
         # callback=stats,
-        medium=store.media["homogenous"],
+        medium="homogenous",
+        materials=store,
         maxTime=maxTime,
         nScattering=max_length,
         scatterCoefficient=mu_sample,
@@ -957,7 +946,7 @@ def test_VolumeForwardTracer(
 def test_VolumeBackwardTracer(
     mu_a: float,
     mu_s: float,
-    mu_sample: float | None,
+    mu_sample: float,
     g: float,
     disableDirect: bool,
     polarized: bool,
@@ -1002,7 +991,8 @@ def test_VolumeBackwardTracer(
         photons,
         recorder,
         rng,
-        medium=store.media["homogenous"],
+        medium="homogenous",
+        materials=store,
         nScattering=max_length,
         callback=stats,
         target=target,
@@ -1116,11 +1106,7 @@ def test_BidirectionalPathTracer(
     # create scene
     trafo = Transform.TRS(scale=radius, translate=position)
     target = meshStore.createInstance("sphere", "det", trafo, detectorId=0)
-    scene = theia.scene.Scene(
-        [target],
-        matStore.material,
-        medium=matStore.media["homogenous"],
-    )
+    scene = theia.scene.Scene([target], matStore, medium="homogenous")
 
     # create light (delta pulse)
     photons = theia.light.UniformWavelengthSource(lambdaRange=(lam, lam))
@@ -1287,7 +1273,8 @@ def test_DirectTracer(mu_a: float, mu_s: float, g: float, polarized: bool):
         recorder,
         rng,
         maxTime=maxTime,
-        medium=matStore.media["homogenous"],
+        medium="homogenous",
+        materials=matStore,
         polarized=polarized,
     )
     rng.autoAdvance = tracer.nRNGSamples
@@ -1385,11 +1372,7 @@ def test_ScenePhotonTracer(mu_a: float, mu_s: float, g: float, polarized: bool):
     # create scene
     trafo = Transform.TRS(scale=radius, translate=position)
     target = meshStore.createInstance("sphere", "det", trafo, detectorId=0)
-    scene = theia.scene.Scene(
-        [target],
-        matStore.material,
-        medium=matStore.media["homogenous"],
-    )
+    scene = theia.scene.Scene([target], matStore, medium="homogenous")
 
     # create tracer
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
@@ -1457,6 +1440,8 @@ def test_ScenePhotonTracer(mu_a: float, mu_s: float, g: float, polarized: bool):
     hits = response.result(0)
     # hits = response.queue.view(0)
     # check amount
+    assert stats.lost == 0
+    assert stats.error == 0
     assert hits is not None
     if mu_a != 0.0:
         # since the photon tracer samples a random distribution we need to allow a
@@ -1523,7 +1508,8 @@ def test_VolumePhotonTracer(mu_a: float, mu_s: float, g: float, polarized: bool)
         photons,
         hist_response,
         rng,
-        medium=store.media["homogenous"],
+        medium="homogenous",
+        materials=store,
         maxTime=maxTime,
         nScattering=max_length,
         scatterCoefficient=scatter_coef,
@@ -1560,7 +1546,8 @@ def test_VolumePhotonTracer(mu_a: float, mu_s: float, g: float, polarized: bool)
         photons,
         response,
         rng,
-        medium=store.media["homogenous"],
+        medium="homogenous",
+        materials=store,
         nScatteringPerRun=n_scatterPerRun,
         nRuns=n_runs,
         maxTime=maxTime,

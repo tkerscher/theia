@@ -13,7 +13,7 @@ uniform DispatchParams {
 };
 
 uniform TraceParams {
-    uvec2 medium;
+    uint mediumIdx;
 
     PropagateParams propagation;
 } params;
@@ -27,8 +27,8 @@ uniform accelerationStructureEXT tlas;
 
 //define global medium
 #define USE_GLOBAL_MEDIUM
-Medium getMedium() {
-    return Medium(params.medium);
+uint getMediumIdx() {
+    return params.mediumIdx;
 }
 #include "ray.medium.glsl"
 
@@ -58,7 +58,7 @@ void main() {
     
     initResponse();
     if (idx < batchSize) {
-        sampleDirect(idx, dim, Medium(params.medium), params.propagation);
+        sampleDirect(idx, dim, params.mediumIdx, params.propagation);
     }
     finalizeResponse();
 }

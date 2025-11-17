@@ -41,6 +41,9 @@ def test_tracerReportsConfig():
         def updateConfig(self, config):
             self.updatedConfig = config
 
+    medium = theia.material.PureWaterModel().createMedium()
+    store = theia.material.MaterialStore([], media=[medium])
+
     philox = theia.random.PhiloxRNG(key=0xABBA)
     target = theia.target.SphereTarget()
     source = theia.light.SphericalLightSource()
@@ -53,7 +56,8 @@ def test_tracerReportsConfig():
         photons,
         response,
         rng=philox,
-        medium=0,
+        medium="water",
+        materials=store,
         capacity=capacity,
         polarized=polarized,
     )
@@ -112,7 +116,9 @@ def test_VolumeForwardTracer(
     d_min = (
         np.sqrt(np.square(np.subtract(light_pos, target_pos)).sum(-1)) - target_radius
     )
-    v_max = np.max(water.group_velocity)
+    vg = theia.material.getPropertySamples(water, "group_velocity")
+    assert vg is not None
+    v_max = np.max(vg)
     t_min = d_min / v_max + T0
 
     # create pipeline
@@ -131,7 +137,8 @@ def test_VolumeForwardTracer(
         photons,
         recorder,
         rng,
-        medium=store.media["water"],
+        medium="water",
+        materials=store,
         objectId=objectId,
         capacity=capacity,
         nScattering=N_SCATTER,
@@ -242,7 +249,9 @@ def test_VolumeBackwardTracer(
     d_min = (
         np.sqrt(np.square(np.subtract(light_pos, target_pos)).sum(-1)) - target_radius
     )
-    v_max = np.max(water.group_velocity)
+    vg = theia.material.getPropertySamples(water, "group_velocity")
+    assert vg is not None
+    v_max = np.max(vg)
     t_min = d_min / v_max + T0
 
     # create pipeline
@@ -264,7 +273,8 @@ def test_VolumeBackwardTracer(
         recorder,
         rng,
         callback=stats,
-        medium=store.media["water"],
+        medium="water",
+        materials=store,
         capacity=capacity,
         nScattering=N_SCATTER,
         scatterCoefficient=0.0 if disableScattering else float("NaN"),
@@ -378,15 +388,15 @@ def test_SceneForwardTracer(
         scale=r, translate=(x, y, z - r - d), rotate=(0.0, 0.0, 1.0, 110.0)
     )
     c2 = store.createInstance("sphere", "mat", t2, detectorId=1)
-    scene = theia.scene.Scene(
-        [c1, c2], matStore.material, medium=matStore.media["water"]
-    )
+    scene = theia.scene.Scene([c1, c2], matStore, medium="water")
     guide = SphereTargetGuide(position=(x, y, z - r - d), radius=r)
 
     # calculate min time
     target_pos = (x, y, z - r - d) * u.m  # detector #1
     d_min = np.sqrt(np.square(np.subtract(target_pos, light_pos)).sum(-1)) - r
-    v_max = np.max(water.group_velocity)
+    vg = theia.material.getPropertySamples(water, "group_velocity")
+    assert vg is not None
+    v_max = np.max(vg)
     t_min = d_min / v_max + T0
 
     # create pipeline stages
@@ -488,9 +498,7 @@ def test_SceneForwardTracer_multiTarget():
         scale=r, translate=(x, y, z - r - d), rotate=(0.0, 0.0, 1.0, 110.0)
     )
     c2 = store.createInstance("sphere", "mat", t2, detectorId=1)
-    scene = theia.scene.Scene(
-        [c1, c2], matStore.material, medium=matStore.media["water"]
-    )
+    scene = theia.scene.Scene([c1, c2], matStore, medium="water")
 
     # create pipeline stages
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
@@ -574,14 +582,14 @@ def test_SceneBackwardTracer(
     c4 = store.createInstance("sphere", "vol", t4)
     if not disableVolumeBorder:
         instances.append(c4)
-    scene = theia.scene.Scene(
-        instances, matStore.material, medium=matStore.media["water"]
-    )
+    scene = theia.scene.Scene(instances, matStore, medium="water")
 
     # calculate min time
     target_pos = (x, y, z - r - d) * u.m  # detector #1
     d_min = np.sqrt(np.square(np.subtract(target_pos, light_pos)).sum(-1)) - r
-    v_max = np.max(water.group_velocity)
+    vg = theia.material.getPropertySamples(water, "group_velocity")
+    assert vg is not None
+    v_max = np.max(vg)
     t_min = d_min / v_max + T0
 
     # create pipeline stages
@@ -706,15 +714,15 @@ def test_SceneBackwardTargetTracer(
         scale=r, translate=(x, y, z - r - d), rotate=(0.0, 0.0, 1.0, 110.0)
     )
     c2 = store.createInstance("sphere", "mat", t2, detectorId=2)
-    scene = theia.scene.Scene(
-        [c1, c2], matStore.material, medium=matStore.media["water"]
-    )
+    scene = theia.scene.Scene([c1, c2], matStore, medium="water")
     guide = SphereTargetGuide(position=(x, y, z - r - d), radius=r)
 
     # calculate min time
     target_pos = (x, y, z - r - d) * u.m  # detector #2
     d_min = np.sqrt(np.square(np.subtract(target_pos, cam_pos)).sum(-1)) - r
-    v_max = np.max(water.group_velocity)
+    vg = theia.material.getPropertySamples(water, "group_velocity")
+    assert vg is not None
+    v_max = np.max(vg)
     t_min = d_min / v_max + T0
 
     # create pipeline stages
@@ -789,9 +797,7 @@ def test_SceneBackwardTargetTracer_multiTarget():
         scale=r, translate=(x, y, z - r - d), rotate=(0.0, 0.0, 1.0, 110.0)
     )
     c2 = store.createInstance("sphere", "mat", t2, detectorId=2)
-    scene = theia.scene.Scene(
-        [c1, c2], matStore.material, medium=matStore.media["water"]
-    )
+    scene = theia.scene.Scene([c1, c2], matStore, medium="water")
 
     # create pipeline stages
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
@@ -870,13 +876,15 @@ def test_BidirectionalPathTracer(
     shield = store.createInstance("cube", "absorber", t_shield)
     scene = theia.scene.Scene(
         [det_outer, det_inner, src_outer, src_inner, shield],
-        matStore.material,
+        matStore,
         bbox=theia.scene.RectBBox(*bbox),
     )
 
     # calc expected shortest time for light paths
     d_min = 2.0 * np.sqrt(det_pos[0] ** 2 + shield_scale**2)
-    v_max = np.max(water.group_velocity)
+    vg = theia.material.getPropertySamples(water, "group_velocity")
+    assert vg is not None
+    v_max = np.max(vg)
     t_min = d_min / v_max + T0  # short path in air/glass ignored (should be fine)
 
     # create pipeline
@@ -970,9 +978,7 @@ def test_EventStatisticCallback():
     t4 = Transform.TRS(scale=r, translate=(-17.0, 17.0, 17.0))
     c4 = store.createInstance("sphere", "abs", t4)
     bbox = theia.scene.RectBBox((-50.0,) * 3, (50.0,) * 3)
-    scene = theia.scene.Scene(
-        [c1, c2, c3, c4], matStore.material, medium=matStore.media["water"], bbox=bbox
-    )
+    scene = theia.scene.Scene([c1, c2, c3, c4], matStore, medium="water", bbox=bbox)
 
     # create pipeline
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
@@ -1083,7 +1089,8 @@ def test_TrackRecordCallback(polarizedTrack: bool, polarized: bool):
         response,
         rng,
         callback=track,
-        medium=store.media["water"],
+        medium="water",
+        materials=store,
         nScattering=N_SCATTER,
         scatterCoefficient=0.1,
         maxTime=T_MAX,
@@ -1143,7 +1150,7 @@ def test_volumeBorder():
     store = theia.scene.MeshStore({"cube": "assets/cube.ply"})
     trafo = Transform.TRS(scale=50.0, translate=(75.0, 0.0, 0.0))
     cube = store.createInstance("cube", "mat", trafo)
-    scene = theia.scene.Scene([cube], matStore.material)
+    scene = theia.scene.Scene([cube], matStore)
 
     # create scene
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
@@ -1236,7 +1243,7 @@ def test_tracer_reflection(flag, reflectance, err):
     ref_det = store.createInstance("cube", "det", ref_trans, detectorId=1)
     trans_trans = Transform.TRS(scale=(0.5, 50.0, 50.0), translate=(50.0, 0.0, 0.0))
     trans_det = store.createInstance("cube", "det", trans_trans, detectorId=2)
-    scene = theia.scene.Scene([splitter, trans_det, ref_det], matStore.material)
+    scene = theia.scene.Scene([splitter, trans_det, ref_det], matStore)
 
     # create pipeline
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
@@ -1294,7 +1301,9 @@ def test_DirectTracer_volume(polarized: bool):
     store = theia.material.MaterialStore([], media=[water])
 
     # estimate min time
-    v_max = np.max(water.group_velocity)
+    vg = theia.material.getPropertySamples(water, "group_velocity")
+    assert vg is not None
+    v_max = np.max(vg)
     d = np.array(lightPos) - np.array(camPos)
     d = np.multiply(d, camDir).sum(-1)  # not exact, but lower bound
     t_min = d / v_max + T0
@@ -1323,7 +1332,8 @@ def test_DirectTracer_volume(polarized: bool):
         rng,
         capacity=capacity,
         callback=stats,
-        medium=store.media["water"],
+        medium="water",
+        materials=store,
         maxTime=T_MAX,
         polarized=polarized,
     )
@@ -1389,10 +1399,12 @@ def test_DirectTracer_scene(polarized: bool):
     aperture_pos = (5.03, 2.0 + width, -1.0)
     t = Transform.TRS(scale=aperture_size, translate=aperture_pos)
     a = meshes.createInstance("cube", "absorber", t)
-    scene = theia.scene.Scene([a], store.material, medium=store.media["water"])
+    scene = theia.scene.Scene([a], store, medium="water")
 
     # estimate min time
-    v_max = np.max(water.group_velocity)
+    vg = theia.material.getPropertySamples(water, "group_velocity")
+    assert vg is not None
+    v_max = np.max(vg)
     d = np.array(lightPos) - np.array(camPos)
     d = np.multiply(d, camDir).sum(-1)  # not exact, but lower bound
     t_min = d / v_max + T0
@@ -1497,9 +1509,7 @@ def test_ScenePhotonTracer(polarized: bool):
         scale=r, translate=(x, y, z - r - d), rotate=(0.0, 0.0, 1.0, 110.0)
     )
     c2 = store.createInstance("sphere", "mat", t2, detectorId=1)
-    scene = theia.scene.Scene(
-        [c1, c2], matStore.material, medium=matStore.media["water"]
-    )
+    scene = theia.scene.Scene([c1, c2], matStore, medium="water")
 
     # create pipeline stages
     rng = theia.random.PhiloxRNG(key=0xC01DC0FFEE)
@@ -1582,7 +1592,9 @@ def test_VolumePhotonTracer(polarized: bool):
     d_min = (
         np.sqrt(np.square(np.subtract(light_pos, target_pos)).sum(-1)) - target_radius
     )
-    v_max = np.max(water.group_velocity)
+    vg = theia.material.getPropertySamples(water, "group_velocity")
+    assert vg is not None
+    v_max = np.max(vg)
     t_min = d_min / v_max + T0
 
     # create pipeline
@@ -1601,7 +1613,8 @@ def test_VolumePhotonTracer(polarized: bool):
         photons,
         recorder,
         rng,
-        medium=store.media["water"],
+        medium="water",
+        materials=store,
         objectId=objectId,
         capacity=capacity,
         nRuns=N_RUNS,

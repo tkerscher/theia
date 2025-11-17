@@ -39,14 +39,14 @@ uniform DispatchParams {
 };
 
 uniform TraceParams {
-    uvec2 sceneMedium;
-    uvec2 cameraMedium;
+    uint sceneMedium;
+    uint cameraMedium;
 
     PropagateParams propagation;
 } params;
 
 struct PathVertex {
-    uvec2 medium;   // zero if not connectable; i.e. not a volume scatter
+    uint medium;   // ~0 if not connectable; i.e. not a volume scatter
     SourceRay ray;
 };
 PathVertex lightPath[LIGHT_PATH_LENGTH];
@@ -66,13 +66,14 @@ float normalizePath(uint pathLength) {
 }
 
 void storeVertex(const ForwardRay ray, const SurfaceHit hit, uint i) {
-    uvec2 medium = uvec2(ray.state.medium);
-    //set medium to zero if surface hit to mark as not connectable
-    medium *= uint(!hit.valid); //hit.valid ? 0 : 1
+    uint mediumIdx = ray.state.mediumIdx;
+    //set medium to vacuum if surface hit to mark as not connectable
+    if (hit.valid)
+        mediumIdx = VACUUM_MEDIUM_IDX;
     
     //create and store vertex (zero based index)
     lightPath[i - 1] = PathVertex(
-        medium,
+        mediumIdx,
         SourceRay(
             ray.state.position,
             ray.state.direction,
@@ -89,10 +90,9 @@ void storeVertex(const ForwardRay ray, const SurfaceHit hit, uint i) {
 
 ForwardRay sampleRay(uint idx, inout uint dim) {
     WavelengthSample photon = sampleWavelength(idx, dim);
-    Medium medium = Medium(params.sceneMedium);
-    MediumConstants constants = lookUpMedium(medium, photon.wavelength);
+    MediumConstants constants = lookUpMedium(params.sceneMedium, photon.wavelength);
     SourceRay lightRay = sampleLight(photon.wavelength, constants, idx, dim);
-    return createRay(lightRay, medium, constants, photon);
+    return createRay(lightRay, params.sceneMedium, constants, photon);
 }
 
 void createLightSubPath(
@@ -156,10 +156,9 @@ void connectVertex(
 
     //normalize path length
     light.contrib *= normalizePath(pathLength);
-    //scatter source ray in right direction    
-    Medium medium = Medium(ray.state.medium);    
+    //scatter source ray in right direction  
     scatterSourceRay(
-        light, medium,
+        light, ray.state.mediumIdx,
         ray.state.constants.mu_s,
         normalize(ray.state.position - light.position)
     );
@@ -180,14 +179,14 @@ void connectVertex(
 
 void completePath(BackwardRay ray, CameraRay cam, uint camLength, uint idx, inout uint dim) {
     //fail safe: do not even try to connect in vacuum (no scatter)
-    if (ray.state.medium == uvec2(0))
+    if (isVacuum(ray.state.mediumIdx))
         return;
 
     //iterate over all light path vertices
     for (uint i = 0; i < LIGHT_PATH_LENGTH; ++i) {       
         if (i >= nLight) return;
 
-        if (ray.state.medium == lightPath[i].medium) {
+        if (ray.state.mediumIdx == lightPath[i].medium) {
             //i and nCamera are zero index
             //-> total path length is i + nCamera + 2(zero index) + 1(connection)
             uint pathLength = camLength + i + 3;
@@ -204,7 +203,7 @@ void simulateCamera(
 ) {
     //sample camera ray
     CameraRay cam = sampleCameraRay(wavelength, idx, dim);
-    BackwardRay ray = createRay(cam, Medium(params.cameraMedium), wavelength);
+    BackwardRay ray = createRay(cam, params.cameraMedium, wavelength);
     #ifndef DISABLE_CAMERA_CALLBACK
     onEvent(ray, RESULT_CODE_RAY_CREATED, idx, pathIdx++);
     #endif

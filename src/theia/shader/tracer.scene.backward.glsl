@@ -35,7 +35,7 @@ uniform DispatchParams {
 };
 
 uniform TraceParams {
-    uvec2 camMedium;
+    uint camMedium;
     PropagateParams propagation;
 } params;
 
@@ -47,17 +47,16 @@ void traceMain() {
     
     //Direct Light Sampling
     #ifndef DISABLE_DIRECT_LIGHTING
-    sampleDirect(idx, dim, Medium(params.camMedium), params.propagation);
+    sampleDirect(idx, dim, params.camMedium, params.propagation);
     uint iPath = 2;
     #else
     uint iPath = 0;
     #endif
     
     //sample camera ray
-    Medium medium = Medium(params.camMedium);
     WavelengthSample photon = sampleWavelength(idx, dim);
     CameraRay cam = sampleCameraRay(photon.wavelength, idx, dim);
-    BackwardRay ray = createRay(cam, medium, photon);
+    BackwardRay ray = createRay(cam, params.camMedium, photon);
     onEvent(ray, RESULT_CODE_RAY_CREATED, idx, iPath++);
 
     //trace loop

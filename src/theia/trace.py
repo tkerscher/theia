@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hephaistos as hp
 from hephaistos import Program
-from hephaistos.glsl import buffer_reference, vec3
+from hephaistos.glsl import vec3
 from hephaistos.pipeline import PipelineStage, SourceCodeMixin
 
 from abc import abstractmethod
@@ -13,6 +13,7 @@ from numpy.ctypeslib import as_array
 from theia.camera import Camera
 from theia.response import HitResponse, TraceConfig
 from theia.light import LightSource, WavelengthSource
+from theia.material import MaterialStore, VACUUM_IDX
 from theia.random import RNG
 from theia.scene import RectBBox, Scene
 from theia.target import Target, TargetGuide
@@ -264,7 +265,7 @@ class TrackRecordCallback(TraceEventCallback):
         """Tensor containing the tracks"""
         return self._tensor
 
-    def result(self, i: int) -> tuple[NDArray, NDArray]:
+    def result(self, i: int) -> tuple[NDArray, NDArray, NDArray]:
         """
         Returns the recorded tracks saved using the i-th pipeline configuration.
         First tuple are the tracks, the second one the length of each track, and
@@ -518,9 +519,11 @@ class VolumeForwardTracer(Tracer):
         Response function processing each simulated hit
     rng: RNG
         Generator for creating random numbers
-    medium: int
-        Device address of the medium the scene is emerged in, e.g. the address
-        of a water medium for an underwater simulation.
+    medium: int | str
+        Index or name of the medium the scene is emerged in. If given as a
+        string, the index will be fetched from the given `MaterialStore`.
+    materials: MaterialStore
+        Store containing the material and media referenced by the tracer.
     capacity: int | None, default=None
         Maximum batch size. If None, same as `batchSize`.
     callback: TraceEventCallback, default=EmptyEventCallback()
@@ -567,10 +570,9 @@ class VolumeForwardTracer(Tracer):
         Scatter coefficient used for sampling ray lengths. Negative values or
         NaN will cause the tracer to use the current scattering length
         instead. A value of zero disables volume scattering all together.
-    medium: int
-        device address of the medium the scene is emerged in, e.g. the
-        address of a water medium for an underwater simulation.
-        Defaults to zero specifying vacuum.
+    medium: int | str
+        Index or name of the medium the scene is emerged in. If given as a
+        string, the index will be fetched from the given `MaterialStore`.
     objectId: int
         Object id to use for creating hits.
     lowerBBoxCorner: (float, float, float)
@@ -588,7 +590,7 @@ class VolumeForwardTracer(Tracer):
 
     class TraceParams(Structure):
         _fields_ = [
-            ("medium", buffer_reference),
+            ("_mediumIdx", c_uint32),
             ("objectId", c_int32),
             ("scatterCoefficient", c_float),
             ("lowerBBoxCorner", vec3),
@@ -606,7 +608,8 @@ class VolumeForwardTracer(Tracer):
         response: HitResponse,
         rng: RNG,
         *,
-        medium: int,
+        medium: int | str,
+        materials: MaterialStore,
         objectId: int = 0,
         capacity: int | None = None,
         callback: TraceEventCallback = EmptyEventCallback(),
@@ -636,6 +639,7 @@ class VolumeForwardTracer(Tracer):
         super().__init__(
             response,
             {"TraceParams": self.TraceParams},
+            {"medium"},
             batchSize=batchSize,
             blockSize=blockSize,
             capacity=capacity,
@@ -649,6 +653,7 @@ class VolumeForwardTracer(Tracer):
         self._rng = rng
         self._target = target
         self._callback = callback
+        self._materials = materials
         self._nScattering = nScattering
         self._directLightingDisabled = disableDirectLighting
         self._targetSamplingDisabled = disableTargetSampling
@@ -678,11 +683,13 @@ class VolumeForwardTracer(Tracer):
                 "source.glsl": source.sourceCode,
                 "photon.glsl": wavelengthSource.sourceCode,
                 "target.glsl": target.sourceCode,
+                **self.materials.header,
             }
             code = compileShader("tracer.volume.forward.glsl", preamble, headers)
         self._code = code
         # create program
         self._program = hp.Program(self._code)
+        self.materials.bindParams(self._program)
 
     @property
     def callback(self) -> TraceEventCallback:
@@ -698,6 +705,26 @@ class VolumeForwardTracer(Tracer):
     def directLightingDisabled(self) -> bool:
         """Wether direct lighting is disabled"""
         return self._directLightingDisabled
+
+    @property
+    def materials(self) -> MaterialStore:
+        """Store containing the material and media referenced by the tracer."""
+        return self._materials
+
+    @property
+    def medium(self) -> int:
+        """Index of the medium used to trace rays in"""
+        return self.getParam("_mediumIdx")
+
+    @medium.setter
+    def medium(self, value: int | str | None) -> None:
+        if value is None:
+            value = VACUUM_IDX
+        elif isinstance(value, str):
+            if value not in self.materials.media:
+                raise ValueError(f"Unknown medium: {value}")
+            value = self.materials.media[value]
+        self.setParam("_mediumIdx", value)
 
     @property
     def nScattering(self) -> int:
@@ -794,9 +821,11 @@ class VolumeBackwardTracer(Tracer):
         Response function simulating the detector
     rng: RNG
         Generator for creating random numbers
-    medium: int
-        dDevice address of the medium the scene is emerged in, e.g. the address
-        of a water medium for an underwater simulation.
+    medium: int | str
+        Index or name of the medium the scene is emerged in. If given as a
+        string, the index will be fetched from the given `MaterialStore`.
+    materials: MaterialStore
+        Store containing the material and media referenced by the tracer.
     capacity: int | None, default=None
         Maximum batch size. If None, same as `batchSize`.
     callback: TraceEventCallback, default=EmptyEventCallback()
@@ -836,10 +865,9 @@ class VolumeBackwardTracer(Tracer):
         Scatter coefficient used for sampling ray lengths. Negative values or
         NaN will cause the tracer to use the current scattering length
         instead. A value of zero disables volume scattering all together.
-    medium: int
-        device address of the medium the scene is emerged in, e.g. the
-        address of a water medium for an underwater simulation.
-        Defaults to zero specifying vacuum.
+    medium: int | str
+        Index or name of the medium the scene is emerged in. If given as a
+        string, the index will be fetched from the given `MaterialStore`.
     lowerBBoxCorner: (float, float, float)
         Lower limit of the x,y,z coordinates a ray must stay above to not get
         stopped
@@ -859,7 +887,7 @@ class VolumeBackwardTracer(Tracer):
 
     class TraceParams(Structure):
         _fields_ = [
-            ("medium", buffer_reference),
+            ("_medium", c_uint32),
             ("scatterCoefficient", c_float),
             ("lowerBBoxCorner", vec3),
             ("upperBBoxCorner", vec3),
@@ -876,7 +904,8 @@ class VolumeBackwardTracer(Tracer):
         response: HitResponse,
         rng: RNG,
         *,
-        medium: int,
+        medium: int | str,
+        materials: MaterialStore,
         capacity: int | None = None,
         callback: TraceEventCallback = EmptyEventCallback(),
         nScattering: int = 6,
@@ -912,6 +941,7 @@ class VolumeBackwardTracer(Tracer):
         super().__init__(
             response,
             {"TraceParams": self.TraceParams},
+            {"medium"},
             batchSize=batchSize,
             blockSize=blockSize,
             capacity=capacity,
@@ -926,6 +956,7 @@ class VolumeBackwardTracer(Tracer):
         self._rng = rng
         self._target = target
         self._callback = callback
+        self._materials = materials
         self._nScattering = nScattering
         self._directLightingDisabled = disableDirectLighting
         self.setParams(
@@ -954,11 +985,13 @@ class VolumeBackwardTracer(Tracer):
                 "rng.glsl": rng.sourceCode,
                 "source.glsl": wavelengthSource.sourceCode,
                 "target.glsl": "" if target is None else target.sourceCode,
+                **self.materials.header,
             }
             code = compileShader("tracer.volume.backward.glsl", preamble, headers)
         self._code = code
         # create program
         self._program = hp.Program(self._code)
+        self.materials.bindParams(self._program)
 
     @property
     def callback(self) -> TraceEventCallback:
@@ -979,6 +1012,26 @@ class VolumeBackwardTracer(Tracer):
     def directLightingDisabled(self) -> bool:
         """Wether direct lighting is disabled"""
         return self._directLightingDisabled
+
+    @property
+    def materials(self) -> MaterialStore:
+        """Store containing the material and media referenced by the tracer."""
+        return self._materials
+
+    @property
+    def medium(self) -> int:
+        """Index of the medium used to trace rays in"""
+        return self.getParam("_medium")
+
+    @medium.setter
+    def medium(self, value: int | str | None) -> None:
+        if value is None:
+            value = VACUUM_IDX
+        elif isinstance(value, str):
+            if value not in self.materials.media:
+                raise ValueError(f"Unknown medium: {value}")
+            value = self.materials.media[value]
+        self.setParam("_medium", value)
 
     @property
     def nScattering(self) -> int:
@@ -1088,8 +1141,9 @@ class SceneForwardTracer(Tracer):
         will importance sample the medium the ray currently propagates by
         using the corresponding scattering coefficient. A value of zero disables
         volume scattering all together.
-    sourceMedium: int | None, default=None
-        Medium surrounding the light source. If None, uses the scene`s medium.
+    sourceMedium: str | int | None, default=None
+        Index or name of the medium surrounding the light source. If None, uses
+        the scene`s medium.
     maxTime: float, default=1000.0 ns
         Max total time including delay from the source and travel time, after
         which a ray gets stopped
@@ -1136,7 +1190,7 @@ class SceneForwardTracer(Tracer):
     class TraceParams(Structure):
         _fields_ = [
             ("targetId", c_int32),
-            ("sourceMedium", buffer_reference),
+            ("_sourceMediumIdx", c_uint32),
             ("scatterCoefficient", c_float),
             ("_lowerBBoxCorner", vec3),
             ("_upperBBoxCorner", vec3),
@@ -1159,7 +1213,7 @@ class SceneForwardTracer(Tracer):
         targetId: int = -1,
         targetGuide: TargetGuide | None = None,
         scatterCoefficient: float = float("NaN"),
-        sourceMedium: int | None = None,
+        sourceMedium: str | int | None = None,
         maxTime: float = 1000.0 * u.ns,
         polarized: bool = False,
         disableDirectLighting: bool = False,
@@ -1188,6 +1242,7 @@ class SceneForwardTracer(Tracer):
         super().__init__(
             response,
             {"TraceParams": self.TraceParams},
+            {"sourceMedium"},
             batchSize=batchSize,
             blockSize=blockSize,
             capacity=capacity,
@@ -1241,6 +1296,7 @@ class SceneForwardTracer(Tracer):
                 "source.glsl": source.sourceCode,
                 "photon.glsl": wavelengthSource.sourceCode,
                 "target_guide.glsl": guideCode,
+                **scene.materials.header,
             }
             code = compileShader("tracer.scene.forward.glsl", preamble, headers)
         self._code = code
@@ -1288,6 +1344,21 @@ class SceneForwardTracer(Tracer):
     def source(self) -> LightSource:
         """Source producing light rays"""
         return self._source
+
+    @property
+    def sourceMedium(self) -> int:
+        """Index of the medium surrounding the light source"""
+        return self.getParam("_sourceMediumIdx")
+
+    @sourceMedium.setter
+    def sourceMedium(self, value: int | str | None) -> None:
+        if value is None:
+            value = self.scene.medium
+        elif isinstance(value, str):
+            if value not in self.scene.materials.media:
+                raise ValueError(f"Unknown medium: {value}")
+            value = self.scene.materials.media[value]
+        self.setParam("_sourceMediumIdx", value)
 
     @property
     def targetGuide(self) -> TargetGuide | None:
@@ -1366,9 +1437,9 @@ class SceneBackwardTracer(Tracer):
         Maximum batch size. If None, same as `batchSize`.
     callback: TraceEventCallback, default=EmptyEventCallback()
         Callback called for each tracing event. See `TraceEventCallback`.
-    medium: Optional[int], default=None
-        Medium the camera is emerged in. Defaults to the scene's medium.
-        Overrides scene's medium if present.
+    medium: str | int | None, default=None
+        Name or index of the medium the camera is emerged in. Defaults to the
+        scene's medium. Overrides scene's medium if present.
     maxPathLength: int, default=6
         Maximum number of events per simulated ray. An event includes volume
         scatter and scene intersections.
@@ -1419,7 +1490,7 @@ class SceneBackwardTracer(Tracer):
 
     class TraceParams(Structure):
         _fields_ = [
-            ("_medium", buffer_reference),
+            ("_medium", c_uint32),
             ("scatterCoefficient", c_float),
             ("_lowerBBoxCorner", vec3),
             ("_upperBBoxCorner", vec3),
@@ -1439,7 +1510,7 @@ class SceneBackwardTracer(Tracer):
         *,
         capacity: int | None = None,
         callback: TraceEventCallback = EmptyEventCallback(),
-        medium: int | None = None,
+        medium: str | int | None = None,
         maxPathLength: int = 6,
         scatterCoefficient: float = float("NaN"),
         maxTime: float = 1000.0 * u.ns,
@@ -1473,6 +1544,7 @@ class SceneBackwardTracer(Tracer):
         super().__init__(
             response,
             {"TraceParams": self.TraceParams},
+            {"medium"},
             batchSize=batchSize,
             blockSize=blockSize,
             capacity=capacity,
@@ -1486,6 +1558,7 @@ class SceneBackwardTracer(Tracer):
         self._wavelengthSource = wavelengthSource
         self._rng = rng
         self._scene = scene
+        self.medium = medium
         self._callback = callback
         self._maxPathLength = maxPathLength
         self._directLightingDisabled = disableDirectLighting
@@ -1493,7 +1566,6 @@ class SceneBackwardTracer(Tracer):
         self._volumeBorderDisabled = disableVolumeBorder
         self.setParams(
             scatterCoefficient=scatterCoefficient,
-            _medium=scene.medium if medium is None else medium,
             maxTime=maxTime,
             _lowerBBoxCorner=scene.bbox.lowerCorner,
             _upperBBoxCorner=scene.bbox.upperCorner,
@@ -1517,6 +1589,7 @@ class SceneBackwardTracer(Tracer):
                 "response.glsl": response.sourceCode,
                 "rng.glsl": rng.sourceCode,
                 "photon.glsl": wavelengthSource.sourceCode,
+                **scene.materials.header,
             }
             code = compileShader("tracer.scene.backward.glsl", preamble, headers)
         self._code = code
@@ -1549,6 +1622,19 @@ class SceneBackwardTracer(Tracer):
     def maxPathLength(self) -> int:
         """Maximum number of events per simulated ray"""
         return self._maxPathLength
+
+    @property
+    def medium(self) -> int:
+        """Index of the medium the camera is surrounded with"""
+        return self.getParam("_medium")
+
+    @medium.setter
+    def medium(self, value: str | int | None) -> None:
+        if value is None:
+            value = self.scene.medium
+        elif isinstance(value, str):
+            value = self.scene.materials.media[value]
+        self.setParam("_medium", value)
 
     @property
     def rng(self) -> RNG:
@@ -1629,9 +1715,9 @@ class SceneBackwardTargetTracer(Tracer):
         Maximum batch size. If None, same as `batchSize`.
     callback: TraceEventCallback, default=EmptyEventCallback()
         Callback called for each tracing event. See `TraceEventCallback`.
-    medium: Optional[int], default=None
-        Medium the camera is emerged in. Defaults to the scene's medium.
-        Overrides scene's medium if present.
+    medium: str | int | None, default=None
+        Name or index of the medium the camera is emerged in. Defaults to the
+        scene's medium. Overrides scene's medium if present.
     maxPathLength: int, default=6
         Maximum number of events per simulated ray. An event includes volume
         scatter and scene intersections.
@@ -1691,7 +1777,7 @@ class SceneBackwardTargetTracer(Tracer):
 
     class TraceParams(Structure):
         _fields_ = [
-            ("_medium", buffer_reference),
+            ("_medium", c_uint32),
             ("targetId", c_int32),
             ("scatterCoefficient", c_float),
             ("_lowerBBoxCorner", vec3),
@@ -1711,7 +1797,7 @@ class SceneBackwardTargetTracer(Tracer):
         *,
         capacity: int | None = None,
         callback: TraceEventCallback = EmptyEventCallback(),
-        medium: int | None = None,
+        medium: str | int | None = None,
         maxPathLength: int = 6,
         targetId: int = -1,
         targetGuide: TargetGuide | None = None,
@@ -1740,6 +1826,7 @@ class SceneBackwardTargetTracer(Tracer):
         super().__init__(
             response,
             {"TraceParams": self.TraceParams},
+            {"medium"},
             batchSize=batchSize,
             blockSize=blockSize,
             capacity=capacity,
@@ -1757,6 +1844,7 @@ class SceneBackwardTargetTracer(Tracer):
         self._camera = camera
         self._rng = rng
         self._scene = scene
+        self.medium = medium
         self._targetGuide = targetGuide
         self._maxPathLength = maxPathLength
         self._transmissionDisabled = disableTransmission
@@ -1765,7 +1853,6 @@ class SceneBackwardTargetTracer(Tracer):
         self.setParams(
             targetId=targetId,
             scatterCoefficient=scatterCoefficient,
-            _medium=medium,
             maxTime=maxTime,
             _lowerBBoxCorner=scene.bbox.lowerCorner,
             _upperBBoxCorner=scene.bbox.upperCorner,
@@ -1790,6 +1877,7 @@ class SceneBackwardTargetTracer(Tracer):
                 "rng.glsl": rng.sourceCode,
                 "photon.glsl": wavelengthSource.sourceCode,
                 "target_guide.glsl": guideCode,
+                **scene.materials.header,
             }
             code = compileShader("tracer.scene.backward.target.glsl", preamble, headers)
         self._code = code
@@ -1822,6 +1910,19 @@ class SceneBackwardTargetTracer(Tracer):
     def maxPathLength(self) -> int:
         """Maximum number of events per simulated ray"""
         return self._maxPathLength
+
+    @property
+    def medium(self) -> int:
+        """Index of the medium the camera is surrounded with"""
+        return self.getParam("_medium")
+
+    @medium.setter
+    def medium(self, value: str | int | None) -> None:
+        if value is None:
+            value = self.scene.medium
+        elif isinstance(value, str):
+            value = self.scene.materials.media[value]
+        self.setParam("_medium", value)
 
     @property
     def rng(self) -> RNG:
@@ -1906,10 +2007,13 @@ class DirectLightTracer(Tracer):
         Maximum batch size. If None, same as `batchSize`.
     callback: TraceEventCallback, default=EmptyEventCallback()
         Callback called for each tracing event. See `TraceEventCallback`
-    medium: Optional[int], default=None
-        Medium the scene is emerged in. Defaults to the scene's medium.
-        Must be provided if scene is `None`. Overrides scene's medium if
-        present.
+    medium: str | int | None, default=None
+        Index or name of the medium the scene is emerged in. Defaults to the
+        scene's medium. Must be provided if scene is `None`. Overrides scene's
+        medium if present.
+    materials: MaterialStore | None, default=None
+        Store containing the material and media referenced by the tracer. If
+        `None`, will use the material store of `scene` instead.
     maxTime: float, default=1000.0 ns
         Max total time including delay from each source and travel time, after
         which no responses are generated.
@@ -1939,7 +2043,7 @@ class DirectLightTracer(Tracer):
 
     class TraceParams(Structure):
         _fields_ = [
-            ("medium", buffer_reference),
+            ("_medium", c_uint32),
             ("_scatterCoefficient", c_float),
             ("_lowerBBoxCorner", vec3),
             ("_upperBBoxCorner", vec3),
@@ -1957,9 +2061,10 @@ class DirectLightTracer(Tracer):
         rng: RNG,
         scene: Scene | None = None,
         *,
+        materials: MaterialStore | None = None,
         capacity: int | None = None,
         callback: TraceEventCallback = EmptyEventCallback(),
-        medium: int | None = None,
+        medium: int | str | None = None,
         maxTime: float = 1000.0 * u.ns,
         polarized: bool = False,
         blockSize: int = 128,
@@ -1973,6 +2078,8 @@ class DirectLightTracer(Tracer):
         # check if there's a medium defined
         if scene is None and medium is None:
             raise ValueError("No medium was provided")
+        if scene is None and materials is None:
+            raise ValueError("No media is defined!")
         # check for ray tracing if there's a scene
         if scene is not None and not hp.isRaytracingEnabled():
             raise RuntimeError("Ray tracing is not supported on this system")
@@ -1980,6 +2087,7 @@ class DirectLightTracer(Tracer):
         super().__init__(
             response,
             {"TraceParams": self.TraceParams},
+            {"medium"},
             batchSize=batchSize,
             blockSize=blockSize,
             capacity=capacity,
@@ -1988,13 +2096,6 @@ class DirectLightTracer(Tracer):
             polarized=polarized,
         )
 
-        # save params
-        self._source = source
-        self._camera = camera
-        self._wavelengthSource = wavelengthSource
-        self._rng = rng
-        self._scene = scene
-        self._callback = callback
         # assemble scene
         bbox = RectBBox((float("-inf"),) * 3, (float("inf"),) * 3)
         maxDist = float("inf")
@@ -2003,9 +2104,20 @@ class DirectLightTracer(Tracer):
             maxDist = scene.bbox.diagonal
             if medium is None:
                 medium = scene.medium
+            if materials is None:
+                materials = scene.materials
+        assert materials is not None
+        self._materials = materials
+        # save params
+        self._source = source
+        self._camera = camera
+        self._wavelengthSource = wavelengthSource
+        self._rng = rng
+        self._scene = scene
+        self.medium = medium
+        self._callback = callback
         # set params
         self.setParams(
-            medium=medium,
             _scatterCoefficient=float("NaN"),
             _lowerBBoxCorner=bbox.lowerCorner,
             _upperBBoxCorner=bbox.upperCorner,
@@ -2029,6 +2141,7 @@ class DirectLightTracer(Tracer):
                 "photon.glsl": wavelengthSource.sourceCode,
                 "response.glsl": response.sourceCode,
                 "rng.glsl": rng.sourceCode,
+                **materials.header,
             }
             code = compileShader("tracer.direct.glsl", preamble, headers)
         self._code = code
@@ -2037,6 +2150,8 @@ class DirectLightTracer(Tracer):
         # bind scene if present
         if scene is not None:
             scene.bindParams(self._program)
+        else:
+            self._materials.bindParams(self._program)
 
     @property
     def callback(self) -> TraceEventCallback:
@@ -2052,6 +2167,26 @@ class DirectLightTracer(Tracer):
     def code(self) -> bytes:
         """Compiled source code. Can be used for caching"""
         return self._code
+
+    @property
+    def materials(self) -> MaterialStore:
+        """Store containing the material and media referenced by the tracer."""
+        return self._materials
+
+    @property
+    def medium(self) -> int:
+        """Index of the medium used to trace rays in"""
+        return self.getParam("_medium")
+
+    @medium.setter
+    def medium(self, value: int | str | None) -> None:
+        if value is None:
+            value = VACUUM_IDX
+        elif isinstance(value, str):
+            if value not in self.materials.media:
+                raise ValueError(f"Unknown medium: {value}")
+            value = self.materials.media[value]
+        self.setParam("_medium", value)
 
     @property
     def rng(self) -> RNG:
@@ -2144,8 +2279,9 @@ class BidirectionalPathTracer(Tracer):
         which no responses are generated.
     polarized: bool, default=False
         Whether to simulate polarization effects.
-    cameraMedium: Optional[int], default=None
-        Medium the camera is submerged in. If `None`, same as `scene.medium`.
+    cameraMedium: str | int | None, default=None
+        Index or name of the medium the camera is submerged in. If `None`,
+        same as `scene.medium`.
     disableTransmission: bool, default=False
         Disables GPU code handling transmission, which may improve performance.
         Rays will default to always reflect where possible.
@@ -2182,8 +2318,8 @@ class BidirectionalPathTracer(Tracer):
 
     class TraceParams(Structure):
         _fields_ = [
-            ("_sceneMedium", buffer_reference),
-            ("_cameraMedium", buffer_reference),
+            ("_sceneMedium", c_uint32),
+            ("_cameraMedium", c_uint32),
             ("scatterCoefficient", c_float),
             ("_lowerBBoxCorner", vec3),
             ("_upperBBoxCorner", vec3),
@@ -2236,6 +2372,11 @@ class BidirectionalPathTracer(Tracer):
             polarized=polarized,
         )
 
+        # fetch camera medium
+        if cameraMedium is None:
+            cameraMedium = scene.medium
+        elif isinstance(cameraMedium, str):
+            cameraMedium = scene.materials.media[cameraMedium]
         # save params
         self._wavelengthSource = wavelengthSource
         self._source = source
@@ -2250,7 +2391,7 @@ class BidirectionalPathTracer(Tracer):
         self._volumeBorderDisabled = disableVolumeBorder
         self.setParams(
             _sceneMedium=scene.medium,
-            _cameraMedium=(scene.medium if cameraMedium is None else cameraMedium),
+            _cameraMedium=cameraMedium,
             scatterCoefficient=scatterCoefficient,
             maxTime=maxTime,
             _lowerBBoxCorner=scene.bbox.lowerCorner,
@@ -2277,6 +2418,7 @@ class BidirectionalPathTracer(Tracer):
                 "light.glsl": source.sourceCode,
                 "camera.glsl": camera.sourceCode,
                 "photon.glsl": wavelengthSource.sourceCode,
+                **scene.materials.header,
             }
             code = compileShader("tracer.bidirectional.glsl", preamble, headers)
         self._code = code
@@ -2397,8 +2539,9 @@ class ScenePhotonTracer(Tracer):
         detectors are ignored to make estimates easier.
         A negative value will cause the tracer to report all hits regardless of
         the detector id.
-    sourceMedium: int | None, default=None
-        Medium surrounding the light source. If None, uses the scene`s medium.
+    sourceMedium: str | int | None, default=None
+        Index or name of the medium surrounding the light source. If None, uses
+        the scene`s medium.
     maxTime: float, default=1000.0 ns
         Max total time including delay from the source and travel time, after
         which a ray gets stopped
@@ -2445,7 +2588,7 @@ class ScenePhotonTracer(Tracer):
     class TraceParams(Structure):
         _fields_ = [
             ("targetId", c_int32),
-            ("sourceMedium", buffer_reference),
+            ("_sourceMediumIdx", c_uint32),
             ("_scatterCoefficient", c_float),
             ("_lowerBBoxCorner", vec3),
             ("_upperBBoxCorner", vec3),
@@ -2472,7 +2615,7 @@ class ScenePhotonTracer(Tracer):
         capacity: int | None = None,
         callback: TraceEventCallback = EmptyEventCallback(),
         targetId: int = -1,
-        sourceMedium: int | None = None,
+        sourceMedium: str | int | None = None,
         maxTime: float = 1.0 * u.ms,
         nScatteringPerRun: int = 10,
         nRuns: int = 10,
@@ -2492,6 +2635,7 @@ class ScenePhotonTracer(Tracer):
         super().__init__(
             response,
             {"TraceParams": self.TraceParams},
+            {"sourceMedium"},
             batchSize=batchSize,
             blockSize=blockSize,
             capacity=capacity,
@@ -2514,10 +2658,10 @@ class ScenePhotonTracer(Tracer):
         self._useRefractedHitDir = useRefractedHitDir
         self._transmissionDisabled = disableTransmission
         self._volumeBorderDisabled = disableVolumeBorder
+        self.sourceMedium = sourceMedium
         self.setParams(
             targetId=targetId,
             _scatterCoefficient=float("NaN"),
-            sourceMedium=sourceMedium,
             maxTime=maxTime,
             _lowerBBoxCorner=scene.bbox.lowerCorner,
             _upperBBoxCorner=scene.bbox.upperCorner,
@@ -2525,7 +2669,7 @@ class ScenePhotonTracer(Tracer):
         )
 
         # allocate queues
-        itemSize = 17 * 4
+        itemSize = 16 * 4
         headerSize = 4 * 4
         queueSize = headerSize + itemSize * self.capacity
         self._queues = [hp.Tensor(queueSize) for _ in range(2)]
@@ -2546,6 +2690,7 @@ class ScenePhotonTracer(Tracer):
             "rng.glsl": rng.sourceCode,
             "source.glsl": source.sourceCode,
             "photon.glsl": wavelengthSource.sourceCode,
+            **scene.materials.header,
         }
         code_init = compileShader("tracer.scene.photon.init.glsl", preamble, headers)
         code_loop = compileShader("tracer.scene.photon.loop.glsl", preamble, headers)
@@ -2598,6 +2743,21 @@ class ScenePhotonTracer(Tracer):
     def source(self) -> LightSource:
         """Source producing light rays"""
         return self._source
+
+    @property
+    def sourceMedium(self) -> int:
+        """Index of the medium surrounding the light source"""
+        return self.getParam("_sourceMediumIdx")
+
+    @sourceMedium.setter
+    def sourceMedium(self, value: int | str | None) -> None:
+        if value is None:
+            value = self.scene.medium
+        elif isinstance(value, str):
+            if value not in self.scene.materials.media:
+                raise ValueError(f"Unknown medium: {value}")
+            value = self.scene.materials.media[value]
+        self.setParam("_sourceMediumIdx", value)
 
     @property
     def transmissionDisabled(self) -> bool:
@@ -2689,9 +2849,11 @@ class VolumePhotonTracer(Tracer):
         Response function simulating the detector
     rng: RNG
         Generator for creating random numbers
-    medium: int
-        Device address of the medium the scene is emerged in, e.g. the address
-        of a water medium for an underwater simulation.
+    medium: int | str
+        Index or name of the medium the scene is emerged in. If given as a
+        string, the index will be fetched from the given `MaterialStore`.
+    materials: MaterialStore
+        Store containing the material and media referenced by the tracer.
     capacity: int | None, default=None
         Maximum batch size. If None, same as `batchSize`.
     callback: TraceEventCallback, default=EmptyEventCallback()
@@ -2744,7 +2906,7 @@ class VolumePhotonTracer(Tracer):
 
     class TraceParams(Structure):
         _fields_ = [
-            ("medium", buffer_reference),
+            ("_medium", c_uint32),
             ("objectId", c_int32),
             ("_scatterCoefficient", c_float),
             ("lowerBBoxCorner", vec3),
@@ -2769,7 +2931,8 @@ class VolumePhotonTracer(Tracer):
         response: HitResponse,
         rng: RNG,
         *,
-        medium: int,
+        medium: int | str,
+        materials: MaterialStore,
         objectId: int = 0,
         capacity: int | None = None,
         callback: TraceEventCallback = EmptyEventCallback(),
@@ -2789,6 +2952,7 @@ class VolumePhotonTracer(Tracer):
         super().__init__(
             response,
             {"TraceParams": self.TraceParams},
+            {"medium"},
             batchSize=batchSize,
             blockSize=blockSize,
             capacity=capacity,
@@ -2804,9 +2968,10 @@ class VolumePhotonTracer(Tracer):
         self._callback = callback
         self._nRuns = nRuns
         self._nScatteringPerRun = nScatteringPerRun
+        self._materials = materials
+        self.medium = medium
         self.setParams(
             _scatterCoefficient=float("NaN"),
-            medium=medium,
             objectId=objectId,
             lowerBBoxCorner=traceBBox.lowerCorner,
             upperBBoxCorner=traceBBox.upperCorner,
@@ -2815,7 +2980,7 @@ class VolumePhotonTracer(Tracer):
         )
 
         # allocate queues
-        itemSize = 17 * 4
+        itemSize = 16 * 4
         headerSize = 4 * 4
         queueSize = headerSize + itemSize * self.capacity
         self._queues = [hp.Tensor(queueSize) for _ in range(2)]
@@ -2834,17 +2999,40 @@ class VolumePhotonTracer(Tracer):
             "source.glsl": source.sourceCode,
             "photon.glsl": wavelengthSource.sourceCode,
             "target.glsl": target.sourceCode,
+            **materials.header,
         }
         code_init = compileShader("tracer.volume.photon.init.glsl", preamble, headers)
         code_loop = compileShader("tracer.volume.photon.loop.glsl", preamble, headers)
         # create programs
         self._init = hp.Program(code_init)
         self._loop = hp.Program(code_loop)
+        materials.bindParams(self._init)
+        materials.bindParams(self._loop)
 
     @property
     def callback(self) -> TraceEventCallback:
         """Callback called for each tracing event"""
         return self._callback
+
+    @property
+    def materials(self) -> MaterialStore:
+        """Store containing the material and media referenced by the tracer."""
+        return self._materials
+
+    @property
+    def medium(self) -> int:
+        """Index of the medium used to trace rays in"""
+        return self.getParam("_medium")
+
+    @medium.setter
+    def medium(self, value: int | str | None) -> None:
+        if value is None:
+            value = VACUUM_IDX
+        elif isinstance(value, str):
+            if value not in self.materials.media:
+                raise ValueError(f"Unknown medium: {value}")
+            value = self.materials.media[value]
+        self.setParam("_medium", value)
 
     @property
     def nScatteringPerRun(self) -> int:

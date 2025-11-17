@@ -12,8 +12,7 @@ struct PhotonQueue {
     float dirZ[PHOTON_QUEUE_SIZE];
 
     #ifndef USE_GLOBAL_MEDIUM
-    uint mediumX[PHOTON_QUEUE_SIZE];
-    uint mediumY[PHOTON_QUEUE_SIZE];
+    uint mediumIdx[PHOTON_QUEUE_SIZE];
     #endif
 
     #ifdef POLARIZATION
@@ -60,8 +59,7 @@ void saveRay(const ForwardRay ray, uint idx) {
     photonQueueOut.queue.dirZ[i] = ray.state.direction.z;
 
     #ifndef USE_GLOBAL_MEDIUM
-    photonQueueOut.queue.mediumX[i] = ray.state.medium.x;
-    photonQueueOut.queue.mediumY[i] = ray.state.medium.y;
+    photonQueueOut.queue.mediumIdx[i] = ray.state.mediumIdx;
     #endif
 
     #ifdef POLARIZATION
@@ -81,7 +79,7 @@ void saveRay(const ForwardRay ray, uint idx) {
 
 ForwardRay loadRay(
     #ifdef USE_GLOBAL_MEDIUM
-    Medium medium,
+    uint mediumIdx,
     #endif
     uint idx
 ) {
@@ -100,10 +98,7 @@ ForwardRay loadRay(
     float time = photonQueueIn.queue.time[idx];
 
     #ifndef USE_GLOBAL_MEDIUM
-    Medium medium = Medium(uvec2(
-        photonQueueIn.queue.mediumX[idx],
-        photonQueueIn.queue.mediumY[idx]
-    ));
+    uint mediumIdx = photonQueueIn.queue.mediumIdx[idx];
     #endif
 
     #ifdef POLARIZATION
@@ -130,8 +125,8 @@ ForwardRay loadRay(
         time,
         1.0
     );
-    MediumConstants consts = lookUpMedium(medium, wavelength);
-    return createRay(source, medium, consts, wavelength);
+    MediumConstants consts = lookUpMedium(mediumIdx, wavelength);
+    return createRay(source, mediumIdx, consts, wavelength);
 }
 
 #endif

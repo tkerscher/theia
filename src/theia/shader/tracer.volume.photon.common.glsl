@@ -6,7 +6,7 @@
 #include "tracer.photon.queue.glsl"
 
 uniform TraceParams {
-    uvec2 medium;
+    uint mediumIdx;
     int objectId;
 
     PropagateParams propagation;
@@ -14,8 +14,8 @@ uniform TraceParams {
 
 //define global medium
 #define USE_GLOBAL_MEDIUM
-Medium getMedium() {
-    return Medium(params.medium);
+uint getMediumIdx() {
+    return params.mediumIdx;
 }
 #include "ray.medium.glsl"
 
