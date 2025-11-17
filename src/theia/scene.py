@@ -8,11 +8,9 @@ from hephaistos.glsl import vec2, vec3
 import itertools
 import os.path
 import trimesh
-import trimesh.scene
-import trimesh.visual
 
 import theia.units as u
-from theia.material import MaterialStore
+from theia.material import MaterialStore, VACUUM_IDX
 
 from collections.abc import Iterable, Mapping
 from ctypes import Structure, c_float, c_uint64
@@ -614,64 +612,48 @@ class Scene:
     ----------
     instances: Iterable[MeshInstance]
         instances that make up the scene
-    materials: Mapping[str, int]
-        Mapping from material names to device addresses
-    medium: int, default=0
-        device address of the medium the scene is emerged in, e.g. the address
-        of a water medium for an underwater simulation. Defaults to zero
-        specifying vacuum.
+    materials: MaterialStore
+        Store containing the material and media referenced by the tracer.
+    medium: str | int | None, default=None
+        Name or index of the medium the scene is emerged in, e.g. "water" for an
+        underwater simulation assuming the corresponding medium has this name.
+        Defaults to `None` specifying vacuum.
     bbox: RectBBox, default=None
         bounding box containing the scene, limiting traced rays inside. Defaults
         to a cube of 1km in each primal direction.
     """
 
-    class GLSLGeometry(Structure):
-        """Equivalent structure for the Geometry type used in the shader"""
-
-        _fields_ = [
-            ("vertices", c_uint64),
-            ("indices", c_uint64),
-            ("material", c_uint64),
-        ]
-
     def __init__(
         self,
         instances: Iterable[MeshInstance],
-        materials: MaterialStore | Mapping[str, int],
+        materials: MaterialStore,
         *,
-        medium: int = 0,
+        medium: str | int | None = None,
         bbox: RectBBox | None = None,
     ) -> None:
         instances = list(instances)
         if len(instances) == 0:
             raise ValueError("No instances given. Scene cannot be empty!")
-        # fetch materials from store if needed
-        if isinstance(materials, MaterialStore):
-            materials = materials.material
+        self._materials = materials
+        self.medium = medium
+        if bbox is None:
+            bbox = RectBBox((-1.0 * u.km,) * 3, (1.0 * u.km,) * 3)
+        self.bbox = bbox
+
         # build materials map
-        materialMap = hp.UnsignedLongBuffer(len(instances))
+        materialMap = hp.UnsignedIntBuffer(len(instances))
         materialMapArray = materialMap.numpy()
         for i, inst in enumerate(instances):
-            if inst.material is not None:
-                if inst.material not in materials:
-                    raise ValueError(f'Unknown material "{inst.material}"')
-                materialMapArray[i] = materials.get(inst.material)
-            else:
-                materialMapArray[i] = 0
+            if inst.material not in materials:
+                raise ValueError(f'Unknown material "{inst.material}"')
+            materialMapArray[i] = materials[inst.material]
         # upload map to GPU
-        self._materialMap = hp.UnsignedLongTensor(len(instances))
+        self._materialMap = hp.UnsignedIntTensor(len(instances))
         hp.execute(hp.updateTensor(materialMap, self._materialMap))
 
         # in order to pass to hephaistos.AccelerationStructure, we need to
         # extract the hephaistos.GeometryInstance from the MeshInstance
         self._tlas = hp.AccelerationStructure([i.instance for i in instances])
-
-        # save medium
-        self.medium = medium
-        # save bbox
-        if bbox is None:
-            bbox = RectBBox((-1.0 * u.km,) * 3, (1.0 * u.km,) * 3)
-        self.bbox = bbox
 
     @property
     def bbox(self) -> RectBBox:
@@ -691,15 +673,26 @@ class Scene:
         return self._materialMap
 
     @property
+    def materials(self) -> MaterialStore:
+        """Store containing the materials and media used in the scene."""
+        return self._materials
+
+    @property
     def medium(self) -> int:
         """
-        device address of the medium the scene is emerged in, e.g. the address
-        of a water medium for an underwater simulation.
+        Index of the medium the scene is emerged in as specified by the
+        `MaterialStore` in use.
         """
         return self._medium
 
     @medium.setter
-    def medium(self, value: int) -> None:
+    def medium(self, value: str | int | None) -> None:
+        if value is None:
+            value = VACUUM_IDX
+        if isinstance(value, str):
+            value = self.materials.media[value]
+        if not 0 <= value < len(self.materials.media) and value != VACUUM_IDX:
+            raise ValueError(f"Media index {value} is out of range!")
         self._medium = value
 
     @property
@@ -709,6 +702,7 @@ class Scene:
 
     def bindParams(self, program: hp.Program) -> None:
         """Binds the parameters describing the scene in the given program"""
+        self.materials.bindParams(program)
         program.bindParams(tlas=self.tlas, MaterialMap=self.materialMap)
 
 
