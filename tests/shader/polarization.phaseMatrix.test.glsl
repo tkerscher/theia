@@ -10,12 +10,8 @@ struct Query{
 readonly buffer QueryBuffer{ Query q[]; };
 writeonly buffer ResultBuffer{ vec4 result[]; };
 
-layout(scalar, push_constant) uniform Push {
-    uvec2 medium;
-};
-
 void main() {
     uint i = gl_GlobalInvocationID.x;
-    mat4 phase = lookUpPhaseMatrix(Medium(medium), q[i].cos_theta);
+    mat4 phase = lookUpPhaseMatrix(0, q[i].cos_theta);
     result[i] = phase * q[i].stokes;
 }

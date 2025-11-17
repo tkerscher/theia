@@ -49,9 +49,10 @@ void crossBorder(
     ray.position = offsetRay(hit.worldPos, -hit.rayNrm);
 
     //update medium & constants
-    Medium medium = hit.inward ? hit.material.inside : hit.material.outside;
-    ray.medium = uvec2(medium);
-    ray.constants = lookUpMedium(medium, ray.wavelength);
+    uint mediumIdx, flags;
+    queryMaterialSide(hit.materialIdx, hit.inward, mediumIdx, flags);
+    ray.mediumIdx = mediumIdx;
+    ray.constants = lookUpMedium(mediumIdx, ray.wavelength);
 }
 
 /**

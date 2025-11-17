@@ -5,7 +5,7 @@ layout(local_size_x = 32) in;
 
 struct Query {
     vec3 dir;
-    uvec2 medium;
+    uint medium;
 };
 readonly buffer Input{
     Query queries[];
@@ -24,7 +24,7 @@ void main() {
     Query q = queries[i];
     
     float prob;
-    vec3 dir = scatter(Medium(q.medium), q.dir, random2D_s(i, 0), prob);
+    vec3 dir = scatter(q.medium, q.dir, random2D_s(i, 0), prob);
 
     results[i] = Result(dir, prob);
 }

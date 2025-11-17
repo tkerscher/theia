@@ -24,12 +24,14 @@ Reflectance fresnelReflect(const RayState ray, const SurfaceHit hit) {
     float sin_i = sqrt(max(1.0 - cos_i*cos_i, 0.0));
 
     //fetch refractive index on other side
-    Medium otherMed = hit.inward ? hit.material.inside : hit.material.outside;
+    uint otherIdx, flags;
+    queryMaterialSide(hit.materialIdx, hit.inward, otherIdx, flags);
     float n_i = ray.constants.n;
     float n_t = 1.0;
-    if (uint64_t(otherMed) != 0) {
-        float u_t = normalize_lambda(otherMed, ray.wavelength);
-        n_t = lookUp(otherMed.n, u_t, 1.0);
+    if (!isVacuum(otherIdx)) {
+        float u_t = normalize_lambda(otherIdx, ray.wavelength);
+        Table1D n = loadMediaSlot_Table1D(REFRACTIVE_INDEX, otherIdx);
+        n_t = lookUp(n, u_t, 1.0);
     }
 
     //calculate outgoing angle (Snell's law)

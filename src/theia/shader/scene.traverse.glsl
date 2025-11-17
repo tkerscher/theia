@@ -244,20 +244,19 @@ void sampleTargetMIS(
     //e.g. pTP: p_target(dir ~ phase)
 
     //shorthand notation
-    Medium med = Medium(ray.state.medium);
     vec3 obs = ray.state.position;
     vec3 dir = ray.state.direction;
 
     //sample phase function
     float pPP;
-    vec3 dirPhase = scatter(med, dir, random2D(idx, dim), pPP);
+    vec3 dirPhase = scatter(ray.state.mediumIdx, dir, random2D(idx, dim), pPP);
     //sample target guide
     TargetGuideSample targetSample = sampleTargetGuide(obs, idx, dim);
     float pTT = targetSample.prob;
     //calculate cross probabilities
     TargetGuideSample phaseSample = evalTargetGuide(obs, dirPhase);
     float pTP = phaseSample.prob;
-    float pPT = scatterProb(med, dir, targetSample.dir);
+    float pPT = scatterProb(ray.state.mediumIdx, dir, targetSample.dir);
 
     //calculate MIS weights
     float wTarget = pTT * pPT / (pTT*pTT + pPT*pPT);

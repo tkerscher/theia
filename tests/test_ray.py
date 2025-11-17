@@ -104,14 +104,12 @@ def test_surface(shaderUtil, forward: bool, polarized: bool):
     # create push constants
     class Push(Structure):
         _fields_ = [
-            ("material", c_uint64),
             ("normal", vec3),
             ("lam_min", c_float),
             ("lam_max", c_float),
         ]
 
     push = Push(
-        material=matStore.material["mat"],
         normal=v_nrm,
         lam_min=lam_min,
         lam_max=lam_max,
@@ -119,7 +117,10 @@ def test_surface(shaderUtil, forward: bool, polarized: bool):
 
     # prepare dependencies
     rng = theia.random.PhiloxRNG(key=0xC0FFEE)
-    headers = {"rng.glsl": rng.sourceCode}
+    headers = {
+        "rng.glsl": rng.sourceCode,
+        **matStore.header,
+    }
     pipeline = [rng]
     if forward:
         light = theia.light.SphericalLightSource(timeRange=(0.0, 0.0))
@@ -138,6 +139,7 @@ def test_surface(shaderUtil, forward: bool, polarized: bool):
         StokesBuffer=stokes_tensor,
         MuellerBuffer=mueller_tensor,
     )
+    matStore.bindParams(program)
     for stage in pipeline:
         stage.update(0)
         stage._bindParams(program, 0)

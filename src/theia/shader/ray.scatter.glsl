@@ -19,7 +19,7 @@ void scatterRayIS(inout RayState ray, vec3 dir) {
  * apply both the phase function and scattering coefficient.
 */
 void scatterRay(inout RayState ray, vec3 dir) {
-    float phase = scatterProb(getMedium(ray), ray.direction, dir);
+    float phase = scatterProb(getMediumIdx(ray), ray.direction, dir);
     ray.lin_contrib *= ray.constants.mu_s * phase;
     ray.direction = dir;
 }
@@ -31,7 +31,7 @@ void scatterRay(inout RayState ray, vec3 dir) {
 void scatterRay(inout RayState ray, vec2 u) {
     //sample new direction
     float cos_theta, phi;
-    sampleScatterDir(getMedium(ray), ray.direction, u, cos_theta, phi);
+    sampleScatterDir(getMediumIdx(ray), ray.direction, u, cos_theta, phi);
     vec3 newDir = scatterDir(ray.direction, cos_theta, phi);
     //scatter
     scatterRayIS(ray, newDir);
@@ -45,7 +45,7 @@ void scatterRay(inout RayState ray, vec2 u) {
 
 void _scatterPolRay_impl(inout PolarizedForwardRay ray, vec3 dir, float cos_theta) {
     vec3 polRef;
-    mat4 phase = lookUpPhaseMatrix(getMedium(ray), cos_theta);
+    mat4 phase = lookUpPhaseMatrix(getMediumIdx(ray), cos_theta);
     //rotates rays polRef to plane of scattering
     mat4 rotate = rotatePolRef(ray.state.direction, ray.polRef, dir, polRef);
 
@@ -54,7 +54,7 @@ void _scatterPolRay_impl(inout PolarizedForwardRay ray, vec3 dir, float cos_thet
 }
 void _scatterPolRay_impl(inout PolarizedBackwardRay ray, vec3 dir, float cos_theta) {
     vec3 polRef;
-    mat4 phase = lookUpPhaseMatrix(getMedium(ray), cos_theta);
+    mat4 phase = lookUpPhaseMatrix(getMediumIdx(ray), cos_theta);
     //rotates rays polRef to plane of scattering
     mat4 rotate = rotatePolRef(ray.state.direction, ray.polRef, dir, polRef);
 
@@ -92,7 +92,7 @@ void scatterRay(inout PolarizedBackwardRay ray, vec3 dir) {
 void scatterRay(inout PolarizedForwardRay ray, vec2 u) {
     //sample new direction
     float cos_theta, phi;
-    sampleScatterDir(getMedium(ray), ray.state.direction, u, cos_theta, phi);
+    sampleScatterDir(getMediumIdx(ray), ray.state.direction, u, cos_theta, phi);
     vec3 newDir = scatterDir(ray.state.direction, cos_theta, phi);
 
     _scatterPolRay_impl(ray, newDir, cos_theta);
@@ -101,7 +101,7 @@ void scatterRay(inout PolarizedForwardRay ray, vec2 u) {
 void scatterRay(inout PolarizedBackwardRay ray, vec2 u) {
     //sample new direction
     float cos_theta, phi;
-    sampleScatterDir(getMedium(ray), ray.state.direction, u, cos_theta, phi);
+    sampleScatterDir(getMediumIdx(ray), ray.state.direction, u, cos_theta, phi);
     vec3 newDir = scatterDir(ray.state.direction, cos_theta, phi);
 
     _scatterPolRay_impl(ray, newDir, cos_theta);

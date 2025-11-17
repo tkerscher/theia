@@ -9,20 +9,20 @@
 //get medium util function
 //returns the medium the ray currently resides in
 #ifndef USE_GLOBAL_MEDIUM
-Medium getMedium(ForwardRay ray) {
-    return getMedium(ray.state);
+uint getMediumIdx(ForwardRay ray) {
+    return getMediumIdx(ray.state);
 }
-Medium getMedium(BackwardRay ray) {
-    return getMedium(ray.state);
+uint getMediumIdx(BackwardRay ray) {
+    return getMediumIdx(ray.state);
 }
 #else
-//here we expect a getMedium() for fetching the global medium to be defined
+//here we expect a getMediumIdx() for fetching the global medium to be defined
 //to hide this detail, we still define functions taking a ray.
-Medium getMedium(ForwardRay ray) {
-    return getMedium();
+uint getMediumIdx(ForwardRay ray) {
+    return getMediumIdx();
 }
-Medium getMedium(BackwardRay ray) {
-    return getMedium();
+uint getMediumIdx(BackwardRay ray) {
+    return getMediumIdx();
 }
 #endif
 

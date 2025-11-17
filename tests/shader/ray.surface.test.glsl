@@ -49,7 +49,6 @@ writeonly buffer MuellerBuffer { MuellerResult mueller[]; };
 #endif //#ifdef POLARIZATION
 
 layout(scalar, push_constant) uniform Push {
-    Material mat;
     vec3 normal;
 
     float lam_min;
@@ -70,13 +69,15 @@ Ray sampleRay(uint idx) {
     float lam = push.lam_min + (push.lam_max - push.lam_min) * u;
 
     //use wrong medium for light sampling as it does not depend on it
-    MediumConstants consts = lookUpMedium(Medium(uvec2(0)), lam);
+    //use vacuum for light sampling as it does not depend on the medium
+    MediumConstants consts = lookUpMedium(VACUUM_MEDIUM_IDX, lam);
     SourceRay source = sampleLight(lam, consts, idx, dim);
     bool inward = dot(source.direction, push.normal) < 0.0;
-    Medium med = inward ? push.mat.outside : push.mat.inside; //medium of ray
-    consts = lookUpMedium(med, lam);
+    uint mediumIdx, flags;
+    queryMaterialSide(0, !inward, mediumIdx, flags); //always material index 0
+    consts = lookUpMedium(mediumIdx, lam);
     
-    return createRay(source, med, consts, lam);
+    return createRay(source, VACUUM_MEDIUM_IDX, consts, lam);
 }
 
 #else //#ifdef FORWARD
@@ -93,9 +94,10 @@ Ray sampleRay(uint idx) {
 
     CameraRay cam = sampleCameraRay(lam, idx, dim);
     bool inward = dot(cam.direction, push.normal) < 0.0;
-    Medium med = inward ? push.mat.outside : push.mat.inside; //medium of ray
+    uint mediumIdx, flags;
+    queryMaterialSide(0, !inward, mediumIdx, flags); //always use material index 0
 
-    return createRay(cam, med, lam);
+    return createRay(cam, mediumIdx, lam);
 }
 
 #endif
@@ -141,7 +143,7 @@ void main() {
     bool inward = dot(ray.state.direction, push.normal) <= 0.0;
     vec3 normal = inward ? push.normal : -push.normal;
     SurfaceHit hit = SurfaceHit(
-        true, push.mat, inward,
+        true, 0, inward,
         0, 0,
         ray.state.position, normal,
         ray.state.position, push.normal, ray.state.direction,

@@ -7,7 +7,8 @@
 #include "scene.types.glsl"
 
 //list of material used by each instanced geometry
-readonly buffer MaterialMap { Material materialMap[]; };
+//materials are referenced by their id in the material table
+readonly buffer MaterialMap { uint materialMap[]; };
 //Top level acceleration structure containing the scene
 uniform accelerationStructureEXT tlas;
 
@@ -65,16 +66,18 @@ ResultCode processRayQuery(
 
     //fetch object material
     int instanceId = rayQueryGetIntersectionInstanceIdEXT(rayQuery, true);
-    hit.material = materialMap[instanceId];
+    hit.materialIdx = materialMap[instanceId];
     //fetch material flags
-    hit.flags = hit.inward ? hit.material.flagsInwards : hit.material.flagsOutwards;
+    uint mediumIdx, flags;
+    queryMaterialSide(hit.materialIdx, hit.inward, mediumIdx, flags);
+    hit.flags = flags;
     //light models are generally unaware of the scene's geometry and might have
     //sampled a light ray inside a geometry
     //-> test against and discard
     //address of expected ray medium
-    uvec2 medium = hit.inward ? uvec2(hit.material.outside) : uvec2(hit.material.inside);
-    if (ray.medium != medium)
-        return ERROR_CODE_MEDIA_MISMATCH; 
+    queryMaterialSide(hit.materialIdx, !hit.inward, mediumIdx, flags);
+    if (ray.mediumIdx != mediumIdx)
+        return ERROR_CODE_MEDIA_MISMATCH;
     
     //translate from object to world space
     // hit.worldNrm = normalize(vec3(hit.objNrm * world2Obj));

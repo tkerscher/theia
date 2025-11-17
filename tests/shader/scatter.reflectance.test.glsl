@@ -12,20 +12,16 @@ struct Query {
 readonly buffer QueryBuffer{ Query q[]; };
 writeonly buffer ResultBuffer{ vec3 r[]; };
 
-layout(scalar, push_constant) uniform Scene {
-    uvec2 mat;
-} scene;
-
 void main() {
     uint i = gl_GlobalInvocationID.x;
-    Material mat = Material(scene.mat);
     //check which side of material via normal (points outwards)
     float cos_i = dot(q[i].direction, q[i].normal);
     bool inward = cos_i <= 0.0;
     vec3 normal = inward ? q[i].normal : -q[i].normal;
-    Medium med = inward ? mat.outside : mat.inside;
+    uint mediumIdx, flags;
+    queryMaterialSide(0, !inward, mediumIdx, flags);
     //look up refractive index
-    MediumConstants consts = lookUpMedium(med, q[i].wavelength);
+    MediumConstants consts = lookUpMedium(mediumIdx, q[i].wavelength);
 
     //assemble dummy ray and hit
     RayState ray = RayState(
@@ -34,7 +30,7 @@ void main() {
         consts
     );
     SurfaceHit hit = SurfaceHit(
-        true, mat, inward,
+        true, 0, inward,
         0, 0,
         vec3(0.0), normal,
         vec3(0.0), q[i].normal, q[i].direction,

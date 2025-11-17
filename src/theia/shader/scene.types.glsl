@@ -16,7 +16,7 @@ struct SurfaceHit {
     //Their normals distinguish them by pointing outwards.
     //Materials finally assign both volumes a medium.
 
-    Material material;          ///< Material of the intersected geometry
+    uint materialIdx;           ///< Material of the intersected geometry
     bool inward;                ///< Direction of ray respective to geometry
     int customId;               ///< Custom ID of the intersected geometry
     uint flags;                 ///< Material flags for specific direction (inward)

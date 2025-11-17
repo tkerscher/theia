@@ -24,7 +24,7 @@ struct RayState {
     vec3 direction;
 
     #ifndef USE_GLOBAL_MEDIUM
-    uvec2 medium; //buffer_reference
+    uint mediumIdx;
     #endif
 
     float wavelength;
@@ -37,7 +37,7 @@ struct RayState {
 
 RayState createRayState(
     const SourceRay source,
-    const Medium medium,
+    const uint mediumIdx,
     const MediumConstants constants,
     float wavelength
 ) {
@@ -46,7 +46,7 @@ RayState createRayState(
         source.direction,
         
         #ifndef USE_GLOBAL_MEDIUM
-        uvec2(medium),
+        mediumIdx,
         #endif
 
         wavelength,
@@ -58,7 +58,7 @@ RayState createRayState(
 }
 RayState createRayState(
     const SourceRay source,
-    const Medium medium,
+    const uint mediumIdx,
     const MediumConstants constants,
     const WavelengthSample photon
 ) {
@@ -67,7 +67,7 @@ RayState createRayState(
         source.direction,
 
         #ifndef USE_GLOBAL_MEDIUM
-        uvec2(medium),
+        mediumIdx,
         #endif
 
         photon.wavelength,
@@ -80,7 +80,7 @@ RayState createRayState(
 
 RayState createRayState(
     const CameraRay cam,
-    const Medium medium,
+    const uint mediumIdx,
     float wavelength
 ) {
     return RayState(
@@ -88,19 +88,19 @@ RayState createRayState(
         cam.direction,
 
         #ifndef USE_GLOBAL_MEDIUM
-        uvec2(medium),
+        mediumIdx,
         #endif
 
         wavelength,
         cam.timeDelta,
         cam.contrib,        //lin_contrib
         0.0,                //log_contrib
-        lookUpMedium(medium, wavelength)
+        lookUpMedium(mediumIdx, wavelength)
     );
 }
 RayState createRayState(
     const CameraRay cam,
-    const Medium medium,
+    const uint mediumIdx,
     const WavelengthSample photon
 ) {
     return RayState(
@@ -108,22 +108,22 @@ RayState createRayState(
         cam.direction,
 
         #ifndef USE_GLOBAL_MEDIUM
-        uvec2(medium),
+        mediumIdx,
         #endif
 
         photon.wavelength,
         cam.timeDelta,
         cam.contrib * photon.contrib,           //lin_contrib
         0.0,                                    //log_contrib
-        lookUpMedium(medium, photon.wavelength)
+        lookUpMedium(mediumIdx, photon.wavelength)
     );
 }
 
 //util function to declutter code
 //(we expect a similar function to be defined in case of a global medium)
 #ifndef USE_GLOBAL_MEDIUM
-Medium getMedium(const RayState ray) {
-    return Medium(ray.medium);
+uint getMediumIdx(const RayState ray) {
+    return ray.mediumIdx;
 }
 #endif
 
@@ -187,24 +187,24 @@ struct PolarizedBackwardRay {
 
 PolarizedForwardRay createRay(
     const SourceRay source,
-    const Medium medium,
+    const uint mediumIdx,
     const MediumConstants constants,
     float wavelength
 ) {
     return PolarizedForwardRay(
-        createRayState(source, medium, constants, wavelength),
+        createRayState(source, mediumIdx, constants, wavelength),
         source.stokes,
         source.polRef
     );
 }
 PolarizedForwardRay createRay(
     const SourceRay source,
-    const Medium medium,
+    const uint mediumIdx,
     const MediumConstants constants,
     const WavelengthSample photon
 ) {
     return PolarizedForwardRay(
-        createRayState(source, medium, constants, photon),
+        createRayState(source, mediumIdx, constants, photon),
         source.stokes,
         source.polRef
     );
@@ -212,22 +212,22 @@ PolarizedForwardRay createRay(
 
 PolarizedBackwardRay createRay(
     const CameraRay cam,
-    const Medium medium,
+    const uint mediumIdx,
     float wavelength
 ) {
     return PolarizedBackwardRay(
-        createRayState(cam, medium, wavelength),
+        createRayState(cam, mediumIdx, wavelength),
         mat4(1.0), //default init
         cam.polRef
     );
 }
 PolarizedBackwardRay createRay(
     const CameraRay cam,
-    const Medium medium,
+    const uint mediumIdx,
     const WavelengthSample photon
 ) {
     return PolarizedBackwardRay(
-        createRayState(cam, medium, photon),
+        createRayState(cam, mediumIdx, photon),
         mat4(1.0),
         cam.polRef
     );
@@ -253,41 +253,41 @@ struct UnpolarizedBackwardRay {
 
 UnpolarizedForwardRay createRay(
     const SourceRay source,
-    const Medium medium,
+    const uint mediumIdx,
     const MediumConstants constants,
     float wavelength
 ) {
     return UnpolarizedForwardRay(
-        createRayState(source, medium, constants, wavelength)
+        createRayState(source, mediumIdx, constants, wavelength)
     );
 }
 UnpolarizedForwardRay createRay(
     const SourceRay source,
-    const Medium medium,
+    const uint mediumIdx,
     const MediumConstants constants,
     const WavelengthSample photon
 ) {
     return UnpolarizedForwardRay(
-        createRayState(source, medium, constants, photon)
+        createRayState(source, mediumIdx, constants, photon)
     );
 }
 
 UnpolarizedBackwardRay createRay(
     const CameraRay cam,
-    const Medium medium,
+    const uint mediumIdx,
     float wavelength
 ) {
     return UnpolarizedBackwardRay(
-        createRayState(cam, medium, wavelength)
+        createRayState(cam, mediumIdx, wavelength)
     );
 }
 UnpolarizedBackwardRay createRay(
     const CameraRay cam,
-    const Medium medium,
+    const uint mediumIdx,
     const WavelengthSample photon
 ) {
     return UnpolarizedBackwardRay(
-        createRayState(cam, medium, photon)
+        createRayState(cam, mediumIdx, photon)
     );
 }
 

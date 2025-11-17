@@ -6,6 +6,7 @@ from hephaistos.glsl import vec3, stackVector
 
 import theia.material
 import theia.random
+from theia.material import MaterialStore
 from theia.testing import WaterTestModel
 
 from numpy.lib.recfunctions import structured_to_unstructured
@@ -35,8 +36,12 @@ def test_scatterDir(rng, shaderUtil):
     queries["phi"] = 2.0 * np.pi * rng.random(N)
 
     # create and run test
-    program = shaderUtil.createTestProgram("scatter.scatterDir.test.glsl")
+    store = MaterialStore([])
+    program = shaderUtil.createTestProgram(
+        "scatter.scatterDir.test.glsl", headers=store.header
+    )
     program.bindParams(QueryBuffer=query_tensor, ResultBuffer=result_tensor)
+    store.bindParams(program)
     (
         hp.beginSequence()
         .And(hp.updateTensor(query_buffer, query_tensor))
@@ -104,12 +109,11 @@ def test_reflectance(rng, shaderUtil):
     outside = WaterTestModel()
     material = theia.material.Material(
         "material",
-        inside.createMedium(name="glass", numLambda=4096),
-        outside.createMedium(name="water", numLambda=4096),
+        inside.createMedium(name="glass", numSamples=4096),
+        outside.createMedium(name="water", numSamples=4096),
     )
     # bake material
     store = theia.material.MaterialStore([material])
-    mat = store.material["material"]
 
     # define types
     class Query(Structure):
@@ -138,12 +142,15 @@ def test_reflectance(rng, shaderUtil):
     queries["lambda"] = 300.0 * rng.random(N) + 400.0
 
     # create program and run it
-    program = shaderUtil.createTestProgram("scatter.reflectance.test.glsl")
+    program = shaderUtil.createTestProgram(
+        "scatter.reflectance.test.glsl", headers=store.header
+    )
+    store.bindParams(program)
     program.bindParams(QueryBuffer=query_tensor, ResultBuffer=result_tensor)
     (
         hp.beginSequence()
         .And(hp.updateTensor(query_buffer, query_tensor))
-        .Then(program.dispatchPush(bytes(packUint64(mat)), N // 32))
+        .Then(program.dispatch(N // 32))
         .Then(hp.retrieveTensor(result_tensor, result_buffer))
         .Submit()
         .wait()
@@ -180,7 +187,7 @@ def test_volumeScatter(rng, shaderUtil):
 
     # define types
     class Query(Structure):
-        _fields_ = [("dir", c_float * 3), ("medium", c_uint32 * 2)]
+        _fields_ = [("dir", c_float * 3), ("medium", c_uint32)]
 
     class Result(Structure):
         _fields_ = [("dir", c_float * 3), ("prob", c_float)]
@@ -195,12 +202,13 @@ def test_volumeScatter(rng, shaderUtil):
     philox.update(0)
 
     # create program
-    headers = {"rng.glsl": philox.sourceCode}
+    headers = {"rng.glsl": philox.sourceCode, **store.header}
     program = shaderUtil.createTestProgram(
         "scatter.volume.scatter.test.glsl", headers=headers
     )
     # bind params
     philox.bindParams(program, 0)
+    store.bindParams(program)
     program.bindParams(Input=inputTensor, Output=outputTensor)
 
     # fill input
@@ -211,8 +219,8 @@ def test_volumeScatter(rng, shaderUtil):
     queries["dir"][:, 0] = sin_theta_in * np.cos(phi)
     queries["dir"][:, 1] = sin_theta_in * np.sin(phi)
     queries["dir"][:, 2] = cos_theta_in
-    queries["medium"][N_EMPTY:] = packUint64(store.media["water"]).value
-    queries["medium"][:N_EMPTY] = packUint64(store.media["empty"]).value
+    queries["medium"][N_EMPTY:] = store.media["water"]
+    queries["medium"][:N_EMPTY] = store.media["empty"]
 
     # run program
     (
@@ -275,7 +283,7 @@ def test_volumeScatterProb(rng, shaderUtil):
         _fields_ = [
             ("inDir", c_float * 3),
             ("outDir", c_float * 3),
-            ("medium", c_uint32 * 2),
+            ("medium", c_uint32),
         ]
 
     # allocate memory
@@ -285,9 +293,12 @@ def test_volumeScatterProb(rng, shaderUtil):
     outputTensor = hp.FloatTensor(N)
 
     # create program
-    program = shaderUtil.createTestProgram("scatter.volume.prob.test.glsl")
+    program = shaderUtil.createTestProgram(
+        "scatter.volume.prob.test.glsl", headers=store.header
+    )
     # bind params
     program.bindParams(Input=inputTensor, Output=outputTensor)
+    store.bindParams(program)
 
     # fill input
     queries = inputBuffer.numpy()
@@ -297,8 +308,8 @@ def test_volumeScatterProb(rng, shaderUtil):
     queries["inDir"][:, 0] = sin_theta_in * np.cos(phi_in)
     queries["inDir"][:, 1] = sin_theta_in * np.sin(phi_in)
     queries["inDir"][:, 2] = cos_theta_in
-    queries["medium"][: (N // 2)] = packUint64(store.media["water"]).value
-    queries["medium"][(N // 2) :] = packUint64(store.media["empty"]).value
+    queries["medium"][: (N // 2)] = store.media["water"]
+    queries["medium"][(N // 2) :] = store.media["empty"]
     phi_out = rng.random(N) * 2.0 * np.pi
     cos_theta_out = rng.random(N) * 2.0 - 1.0
     sin_theta_out = np.sqrt(1.0 - cos_theta_out**2)

@@ -85,17 +85,22 @@ mat4 matchPolRef(vec3 dir, vec3 oldRef, vec3 newRef) {
 }
 
 //looks up the phase matrix for a 
-mat4 lookUpPhaseMatrix(const Medium medium, float cos_theta) {
-    if (uint64_t(medium) == 0) {
+mat4 lookUpPhaseMatrix(const uint mediumIdx, float cos_theta) {
+    if (isVacuum(mediumIdx)) {
         return mat4(1.0);
     }
 
+    //load tables
+    Table1D phase_m12 = loadMediaSlot_Table1D(PHASE_M12, mediumIdx);
+    Table1D phase_m22 = loadMediaSlot_Table1D(PHASE_M22, mediumIdx);
+    Table1D phase_m33 = loadMediaSlot_Table1D(PHASE_M33, mediumIdx);
+    Table1D phase_m34 = loadMediaSlot_Table1D(PHASE_M34, mediumIdx);
     //look up matrix elements
     float t = 0.5 * (cos_theta + 1.0);
-    float m12 = lookUp(medium.phase_m12, t, 0.0);
-    float m22 = lookUp(medium.phase_m22, t, 0.0);
-    float m33 = lookUp(medium.phase_m33, t, 0.0);
-    float m34 = lookUp(medium.phase_m34, t, 0.0);
+    float m12 = lookUp(phase_m12, t, 0.0);
+    float m22 = lookUp(phase_m22, t, 0.0);
+    float m33 = lookUp(phase_m33, t, 0.0);
+    float m34 = lookUp(phase_m34, t, 0.0);
 
     //assemble matrix (column major!)
     return mat4(
