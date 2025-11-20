@@ -295,6 +295,17 @@ class MaterialFlags(IntFlag):
     media.
     """
 
+    SKIP_MEDIA_MISMATCH_TEST = 0x100
+    """
+    Tells the tracer to skip the test checking whether the ray comes from the
+    expected medium. Usually, if a material describes the boundary between e.g.
+    air and water, the tracer will check whether a ray actually comes from air
+    before transmitting it into water. Skipping this test may be usefull in
+    creating material that border multiple media on one side like a generic
+    absorber material, but may cause errors in the geometry or scene to go
+    unnoticed.
+    """
+
 
 _materialFlagsMap = {
     "B": MaterialFlags.BLACK_BODY,
@@ -311,6 +322,7 @@ _materialFlagsMap = {
     "Tb": MaterialFlags.NO_TRANSMIT_BWD,
     "Tf": MaterialFlags.NO_TRANSMIT_FWD,
     "V": MaterialFlags.VOLUME_BORDER,
+    "*": MaterialFlags.SKIP_MEDIA_MISMATCH_TEST,
 }
 
 
@@ -328,10 +340,11 @@ def parseMaterialFlags(flags: str) -> MaterialFlags:
      - `R` : removes `NO_REFLECT`
      - `T` : removes `NO_TRANSMIT`
      - `V` : `VOLUME_BORDER`
+     - `*` : `SKIP_MEDIA_MISMATCH_TEST`
     """
 
     # tokenize
-    tokens = re.findall(r"[A-Z][a-z]*", flags)
+    tokens = re.findall(r"[A-Z\*][a-z]*", flags)
     # parse tokens
     result = MaterialFlags.NO_REFLECT | MaterialFlags.NO_TRANSMIT
     for token in tokens:
@@ -1422,8 +1435,8 @@ class DispersionFreeMedium(MediumModel):
     ----------
     n: float, default=1.0
         Refractive index.
-    ng: float, default=1.0
-        Group index (group velocity = c/ng)
+    ng: float | None, default=None
+        Group index (group velocity = c/ng). If `None`, same as `n`.
     mu_a: float, default=0.0
         Absorption coefficient.
     mu_s: float, default=0.0
@@ -1436,7 +1449,7 @@ class DispersionFreeMedium(MediumModel):
         self,
         *args,
         n: float = 1.0,
-        ng: float = 1.0,
+        ng: float | None = None,
         mu_a: float = 0.0,
         mu_s: float = 0.0,
         name: str = "constant",
@@ -1448,7 +1461,7 @@ class DispersionFreeMedium(MediumModel):
             **kwargs,
         )
         self.n = n
-        self.ng = ng
+        self.ng = n if ng is None else ng
         self.mu_a = mu_a
         self.mu_s = mu_s
 

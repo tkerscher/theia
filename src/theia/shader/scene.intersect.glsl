@@ -74,9 +74,9 @@ ResultCode processRayQuery(
     //light models are generally unaware of the scene's geometry and might have
     //sampled a light ray inside a geometry
     //-> test against and discard
-    //address of expected ray medium
     queryMaterialSide(hit.materialIdx, !hit.inward, mediumIdx, flags);
-    if (ray.mediumIdx != mediumIdx)
+    bool checkMismatch = (hit.flags & MATERIAL_SKIP_MISMATCH_TEST_BIT) == 0; //check if not set
+    if (checkMismatch && ray.mediumIdx != mediumIdx)
         return ERROR_CODE_MEDIA_MISMATCH;
     
     //translate from object to world space

@@ -90,14 +90,15 @@ readonly buffer MaterialTable {
 #define loadMaterialSlot_uvec2(slot, idx) materialTable.data[materialTable.stride * MATERIAL_SLOT_##slot + idx]
 
 //Material flag bits encoding ray intersection behavior
-const uint MATERIAL_BLACK_BODY_BIT      = 0x00000001; //Rays gets completely absorbed
-const uint MATERIAL_DETECTOR_BIT        = 0x00000002; //Rays reached a target
-const uint MATERIAL_LIGHT_SOURCE_BIT    = 0x00000004; //Rays reached a light source
-const uint MATERIAL_NO_REFLECT_FWD_BIT  = 0x00000008; //Forward rays never reflect
-const uint MATERIAL_NO_REFLECT_BWD_BIT  = 0x00000010; //Backward rays never reflect
-const uint MATERIAL_NO_TRANSMIT_FWD_BIT = 0x00000020; //Forward rays never transmit
-const uint MATERIAL_NO_TRANSMIT_BWD_BIT = 0x00000040; //Backward rays never transmit
-const uint MATERIAL_VOLUME_BORDER_BIT   = 0x00000080; //No geometric effect on Rays
+const uint MATERIAL_BLACK_BODY_BIT          = 0x00000001; //Rays gets completely absorbed
+const uint MATERIAL_DETECTOR_BIT            = 0x00000002; //Rays reached a target
+const uint MATERIAL_LIGHT_SOURCE_BIT        = 0x00000004; //Rays reached a light source
+const uint MATERIAL_NO_REFLECT_FWD_BIT      = 0x00000008; //Forward rays never reflect
+const uint MATERIAL_NO_REFLECT_BWD_BIT      = 0x00000010; //Backward rays never reflect
+const uint MATERIAL_NO_TRANSMIT_FWD_BIT     = 0x00000020; //Forward rays never transmit
+const uint MATERIAL_NO_TRANSMIT_BWD_BIT     = 0x00000040; //Backward rays never transmit
+const uint MATERIAL_VOLUME_BORDER_BIT       = 0x00000080; //No geometric effect on Rays
+const uint MATERIAL_SKIP_MISMATCH_TEST_BIT  = 0x00000100; //Skip media mismatch test
 
 //util function for fetching media and flags
 //for material of the given idx, if inwards is true, fetches medium on the inside and

@@ -1655,3 +1655,49 @@ def test_VolumePhotonTracer(polarized: bool):
         polRef_exp /= np.sqrt(d)[:, None]
         # for very small angle we reuse the old polRef to minimize error
         assert np.abs(np.abs((polRef_exp * polRef).sum(-1))[mask] - 1.0).max() < 1e-6
+
+
+@pytest.mark.parametrize("skip", [True, False])
+def test_skipMismatchTest(skip: bool):
+    """Checks whether setting the `SKIP_MEDIA_MISMATCH_TEST` material flag works"""
+    if not hp.isRaytracingEnabled():
+        pytest.skip("ray tracing is not supported!")
+
+    N = 32 * 256
+
+    # create material
+    glass = theia.material.BK7Model().createMedium()
+    flags = "*B" if skip else "B"
+    matStore = theia.material.MaterialStore(
+        [theia.material.Material("mat", glass, None, flags=flags)]
+    )
+    # create scene
+    meshStore = theia.scene.MeshStore({"cube": "assets/cube.ply"})
+    cube = meshStore.createInstance("cube", "mat")
+    scene = theia.scene.Scene([cube], matStore)
+
+    # create tracer
+    rng = theia.random.PhiloxRNG(key=0xABBA)
+    photons = theia.light.ConstWavelengthSource()
+    source = theia.light.SphericalLightSource()
+    response = theia.response.EmptyResponse()
+    stats = theia.trace.EventStatisticCallback()
+    tracer = theia.trace.SceneForwardTracer(
+        N,
+        source,
+        photons,
+        response,
+        rng,
+        scene,
+        callback=stats,
+    )
+    # run pipeline
+    pl.runPipeline(tracer.collectStages())
+
+    assert stats.created == N
+    if skip:
+        assert stats.mismatch == 0
+        assert stats.absorbed == N
+    else:
+        assert stats.mismatch == N
+        assert stats.absorbed == 0
