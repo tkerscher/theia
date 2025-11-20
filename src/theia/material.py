@@ -1876,7 +1876,7 @@ class PureWaterModel(WaterBaseModel, RayleighScatteringPhaseFunction):
         # Code based on matlab code from [ZH21]
         Kbz = 1.3806503e-23  #  Boltzmann constant
         Tk = self.temperature + 273.15  #  Absolute temperature
-        lam = u.convert(wavelength, u.m)
+        lam = wavelength * 1e-9
         delta = self.depolarizationRatio
         nsw = self.refractive_index(wavelength)
         dnswds = self._dn_dS(wavelength)
