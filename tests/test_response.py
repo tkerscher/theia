@@ -183,7 +183,7 @@ def test_kernelHistogramEstimator(rng, useSharedMemory: bool):
 def test_uniformResponse(rng):
     N = 32 * 1024
 
-    queue = QueueTensor(theia.response.ValueItem, N)
+    queue = theia.response.createValueQueue(N)
     value = theia.response.UniformValueResponse()
     response = theia.response.StoreValueHitResponse(value, queue)
     replay = theia.response.HitReplay(N, response)
