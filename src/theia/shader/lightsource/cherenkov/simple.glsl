@@ -1,7 +1,7 @@
 #ifndef _INCLUDE_LIGHTSOURCE_CHERENKOV_SIMPLE
 #define _INCLUDE_LIGHTSOURCE_CHERENKOV_SIMPLE
 
-#include "lightsource.cherenkov.common.glsl"
+#include "lightsource/cherenkov/common.glsl"
 #include "math.glsl"
 #include "material.glsl"
 

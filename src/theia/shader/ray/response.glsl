@@ -3,7 +3,7 @@
 
 #include "math.glsl"
 #include "ray.glsl"
-#include "response.common.glsl"
+#include "response/common.glsl"
 
 //util functions for creating HitItem from rays to declutter code
 

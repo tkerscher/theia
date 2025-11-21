@@ -4,9 +4,9 @@
 
 layout(local_size_x = BLOCK_SIZE) in;
 
-#include "camera.common.glsl"
-#include "wavelengthsource.common.glsl"
-#include "response.common.glsl"
+#include "camera/common.glsl"
+#include "wavelengthsource/common.glsl"
+#include "response/common.glsl"
 
 //user provided code
 #include "rng.glsl"

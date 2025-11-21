@@ -1,7 +1,7 @@
 #ifndef _INCLUDE_RESPONSE_RECORD
 #define _INCLUDE_RESPONSE_RECORD
 
-#include "response.queue.glsl"
+#include "response/queue.glsl"
 
 writeonly buffer HitQueueOut {
     uint count;

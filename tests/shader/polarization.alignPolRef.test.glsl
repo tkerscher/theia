@@ -1,6 +1,6 @@
 #include "math.glsl"
 #include "polarization.glsl"
-#include "util.sample.glsl"
+#include "util/sample.glsl"
 
 #include "random.glsl"
 

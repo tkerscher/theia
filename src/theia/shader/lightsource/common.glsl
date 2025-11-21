@@ -2,7 +2,7 @@
 #define _INCLUDE_LIGHTSOURCE_SAMPLING
 
 #include "material.glsl"
-#include "wavelengthsource.common.glsl"
+#include "wavelengthsource/common.glsl"
 
 //only needed for polarization
 #ifdef POLARIZATION

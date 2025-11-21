@@ -102,7 +102,7 @@ class HostWavelengthSource(WavelengthSource):
         stage api.
     """
 
-    _sourceCode = ShaderLoader("wavelengthsource.host.glsl")
+    _sourceCode = ShaderLoader("wavelengthsource/host.glsl")
 
     def __init__(
         self,
@@ -281,7 +281,7 @@ class ConstWavelengthSource(WavelengthSource):
         self.setParams(wavelength=wavelength)
 
     # source code via descriptor
-    sourceCode = ShaderLoader("wavelengthsource.const.glsl")
+    sourceCode = ShaderLoader("wavelengthsource/const.glsl")
 
 
 class UniformWavelengthSource(WavelengthSource):
@@ -329,7 +329,7 @@ class UniformWavelengthSource(WavelengthSource):
         self.setParams(lambdaRange=lambdaRange, normalize=normalize)
 
     # sourceCode via descriptor
-    sourceCode = ShaderLoader("wavelengthsource.uniform.glsl")
+    sourceCode = ShaderLoader("wavelengthsource/uniform.glsl")
 
     @property
     def normalize(self) -> bool:
@@ -386,7 +386,7 @@ class FunctionWavelengthSource(WavelengthSource):
         self._updateFn(fn, lambdaRange, numSamples)
 
     # Source code via descriptor
-    sourceCode = ShaderLoader("wavelengthsource.function.glsl")
+    sourceCode = ShaderLoader("wavelengthsource/function.glsl")
 
     def _updateFn(
         self,
@@ -604,7 +604,7 @@ class LightSampler(PipelineStage):
                 "rng.glsl": rng.sourceCode if rng is not None else "",
                 **materials.header,
             }
-            code = compileShader("lightsource.sample.glsl", preamble, headers)
+            code = compileShader("lightsource/sample.glsl", preamble, headers)
         self._code = code
         self._program = hp.Program(self._code)
         # calculate number of workgroups
@@ -745,7 +745,7 @@ class HostLightSource(LightSource):
     which gets ignored.
     """
 
-    _sourceCode = ShaderLoader("lightsource.host.glsl")
+    _sourceCode = ShaderLoader("lightsource/host.glsl")
 
     def __init__(
         self,
@@ -977,7 +977,7 @@ class ConeLightSource(LightSource):
         ]
 
     # lazily load source code
-    _sourceCode = ShaderLoader("lightsource.cone.glsl")
+    _sourceCode = ShaderLoader("lightsource/cone.glsl")
 
     def __init__(
         self,
@@ -1131,7 +1131,7 @@ class PencilLightSource(LightSource):
         )
 
     # lazily load source code
-    sourceCode = ShaderLoader("lightsource.pencil.glsl")
+    sourceCode = ShaderLoader("lightsource/pencil.glsl")
 
 
 class SphericalLightSource(LightSource):
@@ -1209,7 +1209,7 @@ class SphericalLightSource(LightSource):
         self.setParam("_contribBwd", c)
 
     # lazily load source code via descriptor
-    sourceCode = ShaderLoader("lightsource.spherical.glsl")
+    sourceCode = ShaderLoader("lightsource/spherical.glsl")
 
 
 class CherenkovLightSource(LightSource):
@@ -1254,7 +1254,7 @@ class CherenkovLightSource(LightSource):
             ("_trackDist", c_float),
         ]
 
-    _sourceCode = ShaderLoader("lightsource.cherenkov.simple.glsl")
+    _sourceCode = ShaderLoader("lightsource/cherenkov/simple.glsl")
 
     def __init__(
         self,
@@ -1409,7 +1409,7 @@ class CherenkovTrackLightSource(LightSource):
     class TrackParams(Structure):
         _fields_ = [("track", buffer_reference)]
 
-    _sourceCode = ShaderLoader("lightsource.cherenkov.track.glsl")
+    _sourceCode = ShaderLoader("lightsource/cherenkov/track.glsl")
 
     def __init__(
         self,
@@ -1523,7 +1523,7 @@ class MuonTrackLightSource(LightSource):
         self.muonEnergy = muonEnergy
         self._applyFrankTamm = applyFrankTamm
 
-    _sourceCode = ShaderLoader("lightsource.particles.muon.glsl")
+    _sourceCode = ShaderLoader("lightsource/particles/muon.glsl")
 
     @property
     def isFrankTammApplied(self) -> bool:
@@ -1683,7 +1683,7 @@ class ParticleCascadeLightSource(LightSource):
         self._applyFrankTamm = applyFrankTamm
 
     # source code via descriptor
-    _sourceCode = ShaderLoader("lightsource.particles.cascade.glsl")
+    _sourceCode = ShaderLoader("lightsource/particles/cascade.glsl")
 
     @property
     def isFrankTammApplied(self) -> bool:

@@ -4,7 +4,7 @@
 #include "math.glsl"
 #include "ray.glsl"
 #include "result.glsl"
-#include "scene.types.glsl"
+#include "scene/types.glsl"
 
 //list of material used by each instanced geometry
 //materials are referenced by their id in the material table

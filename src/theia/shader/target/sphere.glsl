@@ -3,7 +3,7 @@
 
 #include "math.glsl"
 #include "math.sphere.glsl"
-#include "util.sample.glsl"
+#include "util/sample.glsl"
 
 uniform TargetParams {
     vec3 position;

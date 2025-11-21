@@ -4,7 +4,7 @@
 #include "material.glsl"
 #include "ray.glsl"
 #include "scatter.surface.glsl"
-#include "scene.types.glsl"
+#include "scene/types.glsl"
 
 /**
  * Offsets ray position from surface hits to prevent self-intersection, i.e.

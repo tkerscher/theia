@@ -5,7 +5,7 @@
 #error "LIGHT_QUEUE_SIZE not defined"
 #endif
 
-#include "lightsource.common.glsl"
+#include "lightsource/common.glsl"
 
 struct LightSourceQueue {
     //ray

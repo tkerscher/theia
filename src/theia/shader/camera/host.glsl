@@ -1,7 +1,7 @@
 #ifndef _INCLUDE_CAMERARAYSOURCE_HOST
 #define _INCLUDE_CAMERARAYSOURCE_HOST
 
-#include "camera.queue.glsl"
+#include "camera/queue.glsl"
 
 readonly buffer CameraQueueIn {
     CameraQueue queue;

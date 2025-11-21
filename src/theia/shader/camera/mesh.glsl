@@ -2,8 +2,8 @@
 #define _INCLUDE_CAMERARAYSOURCE_MESH
 
 #include "math.glsl"
-#include "ray.surface.glsl"
-#include "util.sample.glsl"
+#include "ray/surface.glsl"
+#include "util/sample.glsl"
 
 layout(buffer_reference, scalar, buffer_reference_align=4) readonly buffer Vertex {
     vec3 position;

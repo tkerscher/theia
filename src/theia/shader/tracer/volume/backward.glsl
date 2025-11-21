@@ -1,6 +1,6 @@
 layout(local_size_x = BLOCK_SIZE) in;
 
-#include "ray.propagate.glsl"
+#include "ray/propagate.glsl"
 
 uniform DispatchParams {
     uint batchSize;
@@ -17,15 +17,15 @@ uniform TraceParams {
 uint getMediumIdx() {
     return params.mediumIdx;
 }
-#include "ray.medium.glsl"
+#include "ray/medium.glsl"
 
 #include "ray.glsl"
-#include "ray.combine.glsl"
+#include "ray/combine.glsl"
 
-#include "wavelengthsource.common.glsl"
-#include "lightsource.common.glsl"
-#include "response.common.glsl"
-#include "camera.common.glsl"
+#include "wavelengthsource/common.glsl"
+#include "lightsource/common.glsl"
+#include "response/common.glsl"
+#include "camera/common.glsl"
 //user provided code
 #include "rng.glsl"
 #include "callback.glsl"
@@ -34,14 +34,14 @@ uint getMediumIdx() {
 #include "source.glsl"
 #include "response.glsl"
 
-#include "callback.util.glsl"
+#include "callback/util.glsl"
 
 #ifndef DISABLE_DIRECT_LIGHTING
-#include "tracer.direct.common.glsl"
+#include "tracer/direct.common.glsl"
 #endif
 
 #ifndef DISABLE_SELF_SHADOWING
-#include "target.common.glsl"
+#include "target/common.glsl"
 #include "target.glsl"
 
 bool isVisible(vec3 observer, vec3 target) {

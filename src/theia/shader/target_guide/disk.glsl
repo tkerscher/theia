@@ -1,7 +1,7 @@
 #ifndef _INCLUDE_TARGET_GUIDE_DISK
 #define _INCLUDE_TARGET_GUIDE_DISK
 
-#include "util.sample.glsl"
+#include "util/sample.glsl"
 
 uniform TargetGuideParams {
     vec3 position;

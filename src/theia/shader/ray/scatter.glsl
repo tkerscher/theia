@@ -2,7 +2,7 @@
 #define _INCLUDE_RAY_SCATTER
 
 #include "ray.glsl"
-#include "ray.medium.glsl"
+#include "ray/medium.glsl"
 #include "scatter.volume.glsl"
 
 /**

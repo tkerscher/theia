@@ -12,18 +12,18 @@
 
 layout(local_size_x = BLOCK_SIZE) in;
 
-#include "ray.propagate.glsl"
-#include "scene.intersect.glsl"
-#include "scene.traverse.glsl"
-#include "tracer.photon.queue.glsl"
+#include "ray/propagate.glsl"
+#include "scene/intersect.glsl"
+#include "scene/traverse.glsl"
+#include "tracer/photon.queue.glsl"
 
-#include "response.common.glsl"
+#include "response/common.glsl"
 //user provided code
 #include "rng.glsl"
 #include "callback.glsl"
 #include "response.glsl"
 
-#include "callback.util.glsl"
+#include "callback/util.glsl"
 
 uniform TraceParams {
     int targetId;

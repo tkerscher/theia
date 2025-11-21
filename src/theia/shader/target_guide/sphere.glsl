@@ -2,7 +2,7 @@
 #define _INCLUDE_TARGET_GUIDE_SPHERE
 
 #include "math.glsl"
-#include "util.sample.glsl"
+#include "util/sample.glsl"
 
 uniform TargetGuideParams {
     vec3 position;

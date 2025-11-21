@@ -2,7 +2,7 @@
 #define _INCLUDE_LIGHTSOURCE_SPHERICAL
 
 #include "math.glsl"
-#include "util.sample.glsl"
+#include "util/sample.glsl"
 
 uniform LightParams {
     vec3 position;

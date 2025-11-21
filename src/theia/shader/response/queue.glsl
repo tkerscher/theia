@@ -1,7 +1,7 @@
 #ifndef _INCLUDE_RESPONSE_QUEUE
 #define _INCLUDE_RESPONSE_QUEUE
 
-#include "response.common.glsl"
+#include "response/common.glsl"
 
 struct HitQueue {
     //ray

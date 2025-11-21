@@ -2,18 +2,18 @@
 #define _INCLUDE_SCENE_TRAVERSE
 
 #include "ray.glsl"
-#include "ray.propagate.glsl"
-#include "ray.response.glsl"
-#include "ray.scatter.glsl"
-#include "ray.surface.glsl"
+#include "ray/propagate.glsl"
+#include "ray/response.glsl"
+#include "ray/scatter.glsl"
+#include "ray/surface.glsl"
 #include "result.glsl"
-#include "scene.intersect.glsl"
+#include "scene/intersect.glsl"
 
 //user provided code
 #include "rng.glsl"
 #include "response.glsl"
 #ifndef SCENE_TRAVERSE_DISABLE_MIS
-#include "target_guide.common.glsl"
+#include "target_guide/common.glsl"
 #include "target_guide.glsl"
 #endif
 

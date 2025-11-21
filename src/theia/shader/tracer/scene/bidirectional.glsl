@@ -16,15 +16,15 @@ layout(local_size_x = BLOCK_SIZE) in;
 #define SCENE_TRAVERSE_BACKWARD_DISABLE_SHADOW_RAYS 1
 
 #define SCENE_TRAVERSE_FORWARD
-#include "scene.traverse.glsl"
-#include "scene.traverse.backward.glsl"
+#include "scene/traverse.glsl"
+#include "scene/traverse.backward.glsl"
 
-#include "lightsource.scatter.glsl"
-#include "ray.combine.glsl"
+#include "lightsource/scatter.glsl"
+#include "ray/combine.glsl"
 
-#include "lightsource.common.glsl"
-#include "response.common.glsl"
-#include "camera.common.glsl"
+#include "lightsource/common.glsl"
+#include "response/common.glsl"
+#include "camera/common.glsl"
 //user provided code
 #include "rng.glsl"
 #include "callback.glsl"
@@ -32,7 +32,7 @@ layout(local_size_x = BLOCK_SIZE) in;
 #include "camera.glsl"
 #include "photon.glsl"
 
-#include "callback.util.glsl"
+#include "callback/util.glsl"
 
 uniform DispatchParams {
     uint batchSize;

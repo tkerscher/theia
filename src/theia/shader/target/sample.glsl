@@ -1,7 +1,7 @@
 layout(local_size_x = 32) in;
 
-#include "target.common.glsl"
-#include "util.sample.glsl"
+#include "target/common.glsl"
+#include "util/sample.glsl"
 
 #include "rng.glsl"
 #include "target.glsl"

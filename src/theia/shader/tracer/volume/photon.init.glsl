@@ -9,17 +9,17 @@
 layout(local_size_x = BLOCK_SIZE) in;
 
 #include "math.glsl"
-#include "ray.propagate.glsl"
-#include "tracer.photon.queue.glsl"
+#include "ray/propagate.glsl"
+#include "tracer/photon.queue.glsl"
 
 uniform DispatchParams {
     uint batchSize;
 };
 
-#include "tracer.volume.photon.common.glsl"
+#include "tracer/volume/photon.common.glsl"
 
-#include "wavelengthsource.common.glsl"
-#include "lightsource.common.glsl"
+#include "wavelengthsource/common.glsl"
+#include "lightsource/common.glsl"
 //user provided code
 #include "source.glsl"
 #include "photon.glsl"

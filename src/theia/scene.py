@@ -991,7 +991,7 @@ class SceneRender:
         self._image = hp.Image(hp.ImageFormat.R8G8B8A8_UNORM, width, height)
         # build shader
         shader_dir = importlib.resources.files("theia").joinpath("shader")
-        shader_path = os.path.join(shader_dir, "scene.render.glsl")
+        shader_path = os.path.join(shader_dir, "scene/render.glsl")
         source = None
         with open(shader_path, "r") as file:
             source = file.read()

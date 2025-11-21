@@ -125,7 +125,7 @@ class SphereTarget(Target):
         )
 
     # source code via descriptor
-    sourceCode = ShaderLoader("target.sphere.glsl")
+    sourceCode = ShaderLoader("target/sphere.glsl")
 
     def _finishParams(self, i):
         r = self.getParam("radius")
@@ -185,7 +185,7 @@ class InnerSphereTarget(Target):
         self.setParams(position=position, radius=radius)
 
     # source code via descriptor
-    sourceCode = ShaderLoader("target.sphere.inner.glsl")
+    sourceCode = ShaderLoader("target/sphere.inner.glsl")
 
     def _finishParams(self, i):
         r = self.getParam("radius")
@@ -286,7 +286,7 @@ class FlatTarget(Target):
         self.setParams(width=width, length=length, position=position)
 
     # source code via descriptor
-    sourceCode = ShaderLoader("target.flat.glsl")
+    sourceCode = ShaderLoader("target/flat.glsl")
 
     @property
     def direction(self) -> tuple[float, float, float]:
@@ -388,7 +388,7 @@ class DiskTarget(Target):
         self.setParams(position=position, radius=radius, normal=normal, up=up)
 
     # source code via descriptor
-    sourceCode = ShaderLoader("target.disk.glsl")
+    sourceCode = ShaderLoader("target/disk.glsl")
 
     @property
     def normal(self) -> tuple[float, float, float]:
@@ -517,7 +517,7 @@ class SphereTargetGuide(TargetGuide):
         )
 
     # source code via descriptor
-    sourceCode = ShaderLoader("target_guide.sphere.glsl")
+    sourceCode = ShaderLoader("target_guide/sphere.glsl")
 
     def _finishParams(self, i):
         r = self.getParam("radius")
@@ -601,7 +601,7 @@ class FlatTargetGuide(TargetGuide):
         self.setParams(width=width, height=height, position=position)
 
     # source code via descriptor
-    sourceCode = ShaderLoader("target_guide.flat.glsl")
+    sourceCode = ShaderLoader("target_guide/flat.glsl")
 
     @property
     def normal(self) -> tuple[float, float, float]:
@@ -698,7 +698,7 @@ class DiskTargetGuide(TargetGuide):
         )
 
     # source code via descriptor
-    sourceCode = ShaderLoader("target_guide.disk.glsl")
+    sourceCode = ShaderLoader("target_guide/disk.glsl")
 
     @property
     def normal(self) -> tuple[float, float, float]:
@@ -827,7 +827,7 @@ class DiskLightSourceTarget(LightSourceTarget):
         self.setParams(position=position, radius=radius, normal=normal, up=up)
 
     # source code via descriptor
-    sourceCode = ShaderLoader("lightsource.target.disk.glsl")
+    sourceCode = ShaderLoader("lightsource/target/disk.glsl")
 
     @property
     def normal(self) -> tuple[float, float, float]:
@@ -933,7 +933,7 @@ class FlatLightSourceTarget(LightSourceTarget):
         self.setParams(width=width, height=height, position=position)
 
     # source code via descriptor
-    sourceCode = ShaderLoader("lightsource.target.flat.glsl")
+    sourceCode = ShaderLoader("lightsource/target/flat.glsl")
 
     @property
     def normal(self) -> tuple[float, float, float]:
@@ -1000,7 +1000,7 @@ class PointLightSourceTarget(LightSourceTarget):
         self.setParams(position=position)
 
     # source code via descriptor
-    sourceCode = ShaderLoader("lightsource.target.point.glsl")
+    sourceCode = ShaderLoader("lightsource/target/point.glsl")
 
 
 class TargetLightSource(LightSource):
@@ -1059,7 +1059,7 @@ class TargetLightSource(LightSource):
         self._updateLight = updateLightSource
         self._updateTarget = updateTarget
 
-    _sourceCode = ShaderLoader("lightsource.guided.glsl")
+    _sourceCode = ShaderLoader("lightsource/guided.glsl")
 
     @property
     def checkVisibility(self) -> bool:
@@ -1082,7 +1082,7 @@ class TargetLightSource(LightSource):
         # encapsulate dependencies in renaming macros
         # fmt: off
         return "\n".join([
-            '#include "camera.common.glsl"',  # needed for camera target
+            '#include "camera/common.glsl"',  # needed for camera target
             "#define sampleLight principal_sampleLight",
             self.principalLight.sourceCode,
             "#undef sampleLight",

@@ -1,7 +1,7 @@
 #ifndef _INCLUDE_DIRECT_TRACE_COMMON
 #define _INCLUDE_DIRECT_TRACE_COMMON
 
-#include "ray.combine.glsl"
+#include "ray/combine.glsl"
 
 #ifdef USE_SCENE
 

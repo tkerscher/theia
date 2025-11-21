@@ -8,7 +8,7 @@ layout(local_size_x = BLOCK_SIZE) in;
 //optional RNG
 #include "rng.glsl"
 
-#include "response.queue.glsl"
+#include "response/queue.glsl"
 //test for rare edge case:
 //combine HitRecorder & HitReplay but mismatch polarization
 //(would require two different version of HitQueue)

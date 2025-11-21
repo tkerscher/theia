@@ -5,8 +5,8 @@
 
 layout(local_size_x = BATCH_SIZE) in;
 
-#include "lightsource.queue.glsl"
-#include "wavelengthsource.queue.glsl"
+#include "lightsource/queue.glsl"
+#include "wavelengthsource/queue.glsl"
 //test for rare edge case:
 //combine HostLightSource & LightSampler, but mismatch polarization
 //(would require two different version of LightSourceQueue)

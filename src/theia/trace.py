@@ -72,7 +72,7 @@ class EmptyEventCallback(TraceEventCallback):
     def __init__(self) -> None:
         super().__init__()
 
-    sourceCode = ShaderLoader("callback.empty.glsl")
+    sourceCode = ShaderLoader("callback/empty.glsl")
 
 
 class EventStatisticCallback(TraceEventCallback):
@@ -110,7 +110,7 @@ class EventStatisticCallback(TraceEventCallback):
         self.reset()
 
     # sourceCode via descriptor
-    sourceCode = ShaderLoader("callback.stat.glsl")
+    sourceCode = ShaderLoader("callback/stat.glsl")
 
     @property
     def absorbed(self) -> int:
@@ -249,7 +249,7 @@ class TrackRecordCallback(TraceEventCallback):
         return self._retrieve
 
     # sourceCode via descriptor
-    _sourceCode = ShaderLoader("callback.track.glsl")
+    _sourceCode = ShaderLoader("callback/track.glsl")
 
     @property
     def sourceCode(self) -> str:
@@ -685,7 +685,7 @@ class VolumeForwardTracer(Tracer):
                 "target.glsl": target.sourceCode,
                 **self.materials.header,
             }
-            code = compileShader("tracer.volume.forward.glsl", preamble, headers)
+            code = compileShader("tracer/volume/forward.glsl", preamble, headers)
         self._code = code
         # create program
         self._program = hp.Program(self._code)
@@ -987,7 +987,7 @@ class VolumeBackwardTracer(Tracer):
                 "target.glsl": "" if target is None else target.sourceCode,
                 **self.materials.header,
             }
-            code = compileShader("tracer.volume.backward.glsl", preamble, headers)
+            code = compileShader("tracer/volume/backward.glsl", preamble, headers)
         self._code = code
         # create program
         self._program = hp.Program(self._code)
@@ -1298,7 +1298,7 @@ class SceneForwardTracer(Tracer):
                 "target_guide.glsl": guideCode,
                 **scene.materials.header,
             }
-            code = compileShader("tracer.scene.forward.glsl", preamble, headers)
+            code = compileShader("tracer/scene/forward.glsl", preamble, headers)
         self._code = code
         # create program
         self._program = hp.Program(self._code)
@@ -1591,7 +1591,7 @@ class SceneBackwardTracer(Tracer):
                 "photon.glsl": wavelengthSource.sourceCode,
                 **scene.materials.header,
             }
-            code = compileShader("tracer.scene.backward.glsl", preamble, headers)
+            code = compileShader("tracer/scene/backward.glsl", preamble, headers)
         self._code = code
         # create program
         self._program = hp.Program(self._code)
@@ -1879,7 +1879,7 @@ class SceneBackwardTargetTracer(Tracer):
                 "target_guide.glsl": guideCode,
                 **scene.materials.header,
             }
-            code = compileShader("tracer.scene.backward.target.glsl", preamble, headers)
+            code = compileShader("tracer/scene/backward.target.glsl", preamble, headers)
         self._code = code
         # create program
         self._program = hp.Program(self._code)
@@ -2143,7 +2143,7 @@ class DirectLightTracer(Tracer):
                 "rng.glsl": rng.sourceCode,
                 **materials.header,
             }
-            code = compileShader("tracer.direct.glsl", preamble, headers)
+            code = compileShader("tracer/direct.glsl", preamble, headers)
         self._code = code
         # create program
         self._program = hp.Program(self._code)
@@ -2420,7 +2420,7 @@ class BidirectionalPathTracer(Tracer):
                 "photon.glsl": wavelengthSource.sourceCode,
                 **scene.materials.header,
             }
-            code = compileShader("tracer.bidirectional.glsl", preamble, headers)
+            code = compileShader("tracer/scene/bidirectional.glsl", preamble, headers)
         self._code = code
         # create program
         self._program = hp.Program(self._code)
@@ -2692,8 +2692,8 @@ class ScenePhotonTracer(Tracer):
             "photon.glsl": wavelengthSource.sourceCode,
             **scene.materials.header,
         }
-        code_init = compileShader("tracer.scene.photon.init.glsl", preamble, headers)
-        code_loop = compileShader("tracer.scene.photon.loop.glsl", preamble, headers)
+        code_init = compileShader("tracer/scene/photon.init.glsl", preamble, headers)
+        code_loop = compileShader("tracer/scene/photon.loop.glsl", preamble, headers)
         # create programs
         self._init = hp.Program(code_init)
         self._loop = hp.Program(code_loop)
@@ -3001,8 +3001,8 @@ class VolumePhotonTracer(Tracer):
             "target.glsl": target.sourceCode,
             **materials.header,
         }
-        code_init = compileShader("tracer.volume.photon.init.glsl", preamble, headers)
-        code_loop = compileShader("tracer.volume.photon.loop.glsl", preamble, headers)
+        code_init = compileShader("tracer/volume/photon.init.glsl", preamble, headers)
+        code_loop = compileShader("tracer/volume/photon.loop.glsl", preamble, headers)
         # create programs
         self._init = hp.Program(code_init)
         self._loop = hp.Program(code_loop)

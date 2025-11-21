@@ -1,7 +1,7 @@
 #ifndef _INCLUDE_WAVELENGTHSOURCE_UNIFORM
 #define _INCLUDE_WAVELENGTHSOURCE_UNIFORM
 
-#include "wavelengthsource.common.glsl"
+#include "wavelengthsource/common.glsl"
 
 uniform WavelengthParams {
     float lam_min;

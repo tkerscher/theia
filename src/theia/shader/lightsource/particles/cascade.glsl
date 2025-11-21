@@ -1,11 +1,11 @@
 #ifndef _INCLUDE_LIGHTSOURCE_PARTICLES_CASCADE
 #define _INCLUDE_LIGHTSOURCE_PARTICLES_CASCADE
 
-#include "lightsource.common.glsl"
-#include "lightsource.particles.common.glsl"
+#include "lightsource/common.glsl"
+#include "lightsource/particles/common.glsl"
 #include "material.glsl"
-#include "random.gamma.glsl"
-#include "util.sample.glsl"
+#include "random/gamma.glsl"
+#include "util/sample.glsl"
 
 /**
  * Parameterization of the light yield from a electro-magnetic or hadronic

@@ -4,8 +4,8 @@
 
 layout(local_size_x = BATCH_SIZE) in;
 
-#include "camera.queue.glsl"
-#include "wavelengthsource.queue.glsl"
+#include "camera/queue.glsl"
+#include "wavelengthsource/queue.glsl"
 //test for rare edge case:
 //combine HostCameraRaySource & CameraRaySampler, but mismatch polarization
 //(would require two different version of CameraQueue)

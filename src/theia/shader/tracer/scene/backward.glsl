@@ -8,13 +8,13 @@
 
 layout(local_size_x = BLOCK_SIZE) in;
 
-#include "ray.propagate.glsl"
-#include "scene.intersect.glsl"
-#include "scene.traverse.backward.glsl"
+#include "ray/propagate.glsl"
+#include "scene/intersect.glsl"
+#include "scene/traverse.backward.glsl"
 
-#include "camera.common.glsl"
-#include "response.common.glsl"
-#include "wavelengthsource.common.glsl"
+#include "camera/common.glsl"
+#include "response/common.glsl"
+#include "wavelengthsource/common.glsl"
 //user provided code
 #include "rng.glsl"
 #include "callback.glsl"
@@ -23,11 +23,11 @@ layout(local_size_x = BLOCK_SIZE) in;
 #include "light.glsl"
 #include "response.glsl"
 
-#include "callback.util.glsl"
+#include "callback/util.glsl"
 
 #ifndef DISABLE_DIRECT_LIGHTING
 #define USE_SCENE
-#include "tracer.direct.common.glsl"
+#include "tracer/direct.common.glsl"
 #endif
 
 uniform DispatchParams {

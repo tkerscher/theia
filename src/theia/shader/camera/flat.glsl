@@ -2,7 +2,7 @@
 #define _INCLUDE_CAMERARAYSOURCE_FLAT
 
 #include "math.glsl"
-#include "util.sample.glsl"
+#include "util/sample.glsl"
 
 uniform CameraParams {
     float width;

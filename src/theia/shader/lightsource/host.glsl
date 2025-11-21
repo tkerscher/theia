@@ -1,7 +1,7 @@
 #ifndef _INCLUDE_LIGHTSOURCE_HOST
 #define _INCLUDE_LIGHTSOURCE_HOST
 
-#include "lightsource.queue.glsl"
+#include "lightsource/queue.glsl"
 
 //read and return rays from a buffer
 

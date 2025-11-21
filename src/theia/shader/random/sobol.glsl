@@ -1,7 +1,7 @@
 #ifndef _SOBOL_INCLUDE
 #define _SOBOL_INCLUDE
 
-#include "random.util.glsl"
+#include "random/util.glsl"
 
 uniform SobolParams {
     uint seed;

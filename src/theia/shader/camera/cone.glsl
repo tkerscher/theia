@@ -2,7 +2,7 @@
 #define _INCLUDE_CAMERARAYSOURCE_CONE
 
 #include "math.glsl"
-#include "util.sample.glsl"
+#include "util/sample.glsl"
 
 uniform CameraParams {
     vec3 conePos;

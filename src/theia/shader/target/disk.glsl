@@ -1,7 +1,7 @@
 #ifndef _INCLUDE_TARGET_DISK
 #define _INCLUDE_TARGET_DISK
 
-#include "util.sample.glsl"
+#include "util/sample.glsl"
 
 uniform TargetParams {
     vec3 position;

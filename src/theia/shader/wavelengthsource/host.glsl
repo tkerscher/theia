@@ -1,7 +1,7 @@
 #ifndef _INCLUDE_WAVELENGTHSOURCE_HOST
 #define _INCLUDE_WAVELENGTHSOURCE_HOST
 
-#include "wavelengthsource.queue.glsl"
+#include "wavelengthsource/queue.glsl"
 
 readonly buffer WavelengthQueueIn {
     WavelengthQueue queue;

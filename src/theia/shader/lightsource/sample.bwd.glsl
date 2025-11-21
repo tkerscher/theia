@@ -1,12 +1,12 @@
 layout(local_size_x = 32) in;
 
-#include "lightsource.common.glsl"
-#include "wavelengthsource.common.glsl"
+#include "lightsource/common.glsl"
+#include "wavelengthsource/common.glsl"
 
 #include "rng.glsl"
 #include "light.glsl"
 #include "photon.glsl"
-#include "util.sample.glsl"
+#include "util/sample.glsl"
 
 struct Result {
     vec3 observer;

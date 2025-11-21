@@ -1,7 +1,7 @@
 #ifndef _INCLUDE_LIGHTSOURCE_TARGET_DISK
 #define _INCLUDE_LIGHTSOURCE_TARGET_DISK
 
-#include "util.sample.glsl"
+#include "util/sample.glsl"
 
 uniform LightTargetParams {
     vec3 position;

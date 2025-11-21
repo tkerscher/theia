@@ -4,7 +4,7 @@
 #include "math.glsl"
 #include "material.glsl"
 
-#include "lightsource.cherenkov.common.glsl"
+#include "lightsource/cherenkov/common.glsl"
 
 struct TrackVertex {
     vec3 pos;

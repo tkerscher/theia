@@ -5,7 +5,7 @@
 #error "CAMERA_QUEUE_SIZE not defined"
 #endif
 
-#include "camera.common.glsl"
+#include "camera/common.glsl"
 
 struct CameraQueue {
     float posX[CAMERA_QUEUE_SIZE];

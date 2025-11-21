@@ -2,7 +2,7 @@
 #define _INCLUDE_LIGHTSOURCE_GUIDED
 
 #ifdef LIGHTSOURCE_GUIDED_CHECK_VIS
-#include "scene.intersect.glsl"
+#include "scene/intersect.glsl"
 #endif
 
 //on the Python side we will prepend the source code of the principal light

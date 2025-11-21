@@ -186,7 +186,7 @@ class EmptyResponse(HitResponse):
         super().__init__()
 
     # sourceCode via descriptor
-    sourceCode = ShaderLoader("response.empty.glsl")
+    sourceCode = ShaderLoader("response/empty.glsl")
 
 
 class HitRecorder(HitResponse):
@@ -208,7 +208,7 @@ class HitRecorder(HitResponse):
     polarization reference will be the null vector.
     """
 
-    _sourceCode = ShaderLoader("response.record.glsl")
+    _sourceCode = ShaderLoader("response/record.glsl")
 
     def __init__(self, *, capacity: int = 0, polarized: bool = False) -> None:
         super().__init__()
@@ -349,7 +349,7 @@ class HitReplay(PipelineStage):
                 "response.glsl": response.sourceCode,
                 "rng.glsl": rng.sourceCode if rng is not None else "",
             }
-            code = compileShader("response.replay.glsl", preamble, headers)
+            code = compileShader("response/replay.glsl", preamble, headers)
         self._code = code
         self._program = hp.Program(self._code)
         # calculate number of workgroups
@@ -493,7 +493,7 @@ class UniformValueResponse(ValueResponse):
         super().__init__()
 
     # property via descriptor
-    sourceCode = ShaderLoader("response.uniform.glsl")
+    sourceCode = ShaderLoader("response/uniform.glsl")
 
 
 class CustomValueResponse(ValueResponse):
@@ -556,7 +556,7 @@ class StoreValueHitResponse(HitResponse):
 
     name = "Store Value Response"
 
-    _sourceCode = ShaderLoader("response.value.store.glsl")
+    _sourceCode = ShaderLoader("response/value.store.glsl")
 
     def __init__(
         self,
@@ -689,7 +689,7 @@ class StoreTimeHitResponse(HitResponse):
 
     name = "Store Time Hit Response"
 
-    _sourceCode = ShaderLoader("response.time.store.glsl")
+    _sourceCode = ShaderLoader("response/time.store.glsl")
 
     def __init__(
         self,
@@ -825,7 +825,7 @@ class IntegratingHitResponse(HitResponse):
 
     name = "Integrating Hit Response"
 
-    _sourceCode = ShaderLoader("response.value.integrate.glsl")
+    _sourceCode = ShaderLoader("response/value.integrate.glsl")
 
     def __init__(
         self,
@@ -911,7 +911,7 @@ class SampleValueResponse(HitResponse):
 
     name = "Sample Value Response"
 
-    _sourceCode = ShaderLoader("response.value.sample.glsl")
+    _sourceCode = ShaderLoader("response/value.sample.glsl")
 
     def __init__(self, response: ValueResponse, *, updateResponse: bool = True) -> None:
         super().__init__(nRNGSamples=response.nRNGSamples)
@@ -1074,7 +1074,7 @@ class CameraHitResponseSampler(PipelineStage):
                 "rng.glsl": "" if rng is None else rng.sourceCode,
                 "response.glsl": response.sourceCode,
             }
-            code = compileShader("camera.response.sample.glsl", preamble, headers)
+            code = compileShader("camera/response.sample.glsl", preamble, headers)
         self._code = code
         self._program = hp.Program(self._code)
         # calculate group size
@@ -1221,7 +1221,7 @@ class HistogramReducer(PipelineStage):
 
         # create code if needed
         if HistogramReducer.byte_code is None:
-            HistogramReducer.byte_code = compileShader("estimator.reduce.glsl")
+            HistogramReducer.byte_code = compileShader("estimator/reduce.glsl")
         # create specialization
         spec = HistogramReducer.Constants(blockSize=blockSize, nBins=nBins)
         # compile
@@ -1339,7 +1339,7 @@ class HistogramHitResponse(HitResponse):
     name = "Histogram Hit Response"
 
     # lazily load source code
-    _sourceCode = ShaderLoader("response.histogram.glsl")
+    _sourceCode = ShaderLoader("response/histogram.glsl")
 
     class Params(Structure):
         _fields_ = [("t0", c_float), ("binSize", c_float)]
@@ -1579,7 +1579,7 @@ class KernelHistogramHitResponse(HitResponse):
     name = "Kernel Histogram Hit Response"
 
     # lazily load source code
-    _sourceCode = ShaderLoader("response.histogram.kernel.glsl")
+    _sourceCode = ShaderLoader("response/histogram.kernel.glsl")
 
     class Params(Structure):
         _fields_ = [
@@ -1894,7 +1894,7 @@ class HistogramEstimator(Estimator):
                 N_BINS=nBins,
                 VALUE_QUEUE_SIZE=queue.capacity,
             )
-            code = compileShader("estimator.hist.glsl", preamble)
+            code = compileShader("estimator/hist.glsl", preamble)
         self._code = code
         # create program
         self._program = hp.Program(code)

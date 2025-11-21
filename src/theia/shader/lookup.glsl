@@ -26,9 +26,9 @@ layout(buffer_reference, scalar, buffer_reference_align=4) readonly buffer Table
 };
 
 //include interpolation implementation
-#include "lookup.linear.glsl"
-#include "lookup.cubic.glsl"
-#include "lookup.steffen.glsl"
+#include "lookup/linear.glsl"
+#include "lookup/cubic.glsl"
+#include "lookup/steffen.glsl"
 
 //common code
 float lookUp(const Table1D table, float u, float nullValue) {

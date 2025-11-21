@@ -2,14 +2,14 @@ layout(local_size_x = 32) in;
 
 #include "math.glsl"
 
-#include "camera.common.glsl"
-#include "wavelengthsource.common.glsl"
+#include "camera/common.glsl"
+#include "wavelengthsource/common.glsl"
 
 #include "rng.glsl"
 #include "camera.glsl"
 #include "photon.glsl"
 
-#include "util.sample.glsl"
+#include "util/sample.glsl"
 
 struct Result{
     float wavelength;

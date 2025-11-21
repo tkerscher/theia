@@ -147,7 +147,7 @@ class BackwardLightSampler(PipelineStage):
             "photon.glsl": wavelengthSource.sourceCode,
             **self._materials.header,
         }
-        code = compileShader("lightsource.sample.bwd.glsl", preamble, headers)
+        code = compileShader("lightsource/sample.bwd.glsl", preamble, headers)
         self._program = hp.Program(code)
         self._program.bindParams(ResultBuffer=self._tensor)
         self._materials.bindParams(self._program)
@@ -313,7 +313,7 @@ class CameraDirectSampler(PipelineStage):
             "photon.glsl": wavelengthSource.sourceCode,
             "rng.glsl": rng.sourceCode,
         }
-        code = compileShader("camera.direct.sample.glsl", preamble, headers)
+        code = compileShader("camera/direct.sample.glsl", preamble, headers)
         self._program = hp.Program(code)
         self._program.bindParams(ResultBuffer=self._tensor)
 
@@ -415,7 +415,7 @@ class LightSourceTargetSampler(PipelineStage):
             "photon.glsl": wavelengthSource.sourceCode,
             "rng.glsl": rng.sourceCode,
         }
-        code = compileShader("lightsource.target.sample.glsl", preamble, headers)
+        code = compileShader("lightsource/target.sample.glsl", preamble, headers)
         self._program = hp.Program(code)
         self._program.bindParams(ResultBuffer=self._tensor)
 
@@ -524,7 +524,7 @@ class TargetGuideSampler(PipelineStage):
             "rng.glsl": rng.sourceCode,
             "target_guide.glsl": guide.sourceCode,
         }
-        code = compileShader("target_guide.sample.glsl", preamble, headers)
+        code = compileShader("target_guide/sample.glsl", preamble, headers)
         self._program = hp.Program(code)
         self._program.bindParams(ResultBuffer=self._tensor)
 
@@ -628,7 +628,7 @@ class TargetSampler(PipelineStage):
             "rng.glsl": rng.sourceCode,
             "target.glsl": target.sourceCode,
         }
-        code = compileShader("target.sample.glsl", preamble, headers)
+        code = compileShader("target/sample.glsl", preamble, headers)
         self._program = hp.Program(code)
         self._program.bindParams(ResultBuffer=self._tensor)
 

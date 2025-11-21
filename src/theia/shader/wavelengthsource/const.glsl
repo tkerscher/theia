@@ -1,7 +1,7 @@
 #ifndef _INCLUDE_WAVELENGTHSOURCE_CONST
 #define _INCLUDE_WAVELENGTHSOURCE_CONST
 
-#include "wavelengthsource.common.glsl"
+#include "wavelengthsource/common.glsl"
 
 uniform WavelengthParams {
     float lambda;

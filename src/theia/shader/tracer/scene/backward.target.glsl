@@ -12,13 +12,13 @@ layout(local_size_x = BLOCK_SIZE) in;
 #define SCENE_TRAVERSE_DISABLE_MIS
 #endif
 
-#include "ray.propagate.glsl"
+#include "ray/propagate.glsl"
 #define SCENE_TRAVERSE_BACKWARD
-#include "scene.traverse.glsl"
+#include "scene/traverse.glsl"
 
-#include "camera.common.glsl"
-#include "response.common.glsl"
-#include "wavelengthsource.common.glsl"
+#include "camera/common.glsl"
+#include "response/common.glsl"
+#include "wavelengthsource/common.glsl"
 //user provided code
 #include "rng.glsl"
 #include "callback.glsl"
@@ -26,7 +26,7 @@ layout(local_size_x = BLOCK_SIZE) in;
 #include "camera.glsl"
 #include "response.glsl"
 
-#include "callback.util.glsl"
+#include "callback/util.glsl"
 
 uniform DispatchParams {
     uint batchSize;

@@ -2,8 +2,8 @@
 #define _INCLUDE_TRACER_VOLUME_PHOTON_COMMON
 
 #include "math.glsl"
-#include "ray.propagate.glsl"
-#include "tracer.photon.queue.glsl"
+#include "ray/propagate.glsl"
+#include "tracer/photon.queue.glsl"
 
 uniform TraceParams {
     uint mediumIdx;
@@ -17,22 +17,22 @@ uniform TraceParams {
 uint getMediumIdx() {
     return params.mediumIdx;
 }
-#include "ray.medium.glsl"
+#include "ray/medium.glsl"
 
-#include "ray.response.glsl"
-#include "ray.scatter.glsl"
+#include "ray/response.glsl"
+#include "ray/scatter.glsl"
 #include "result.glsl"
-#include "util.sample.glsl"
+#include "util/sample.glsl"
 
-#include "response.common.glsl"
-#include "target.common.glsl"
+#include "response/common.glsl"
+#include "target/common.glsl"
 //user provided code
 #include "rng.glsl"
 #include "callback.glsl"
 #include "response.glsl"
 #include "target.glsl"
 
-#include "callback.util.glsl"
+#include "callback/util.glsl"
 
 ResultCode trace(
     inout ForwardRay ray,

@@ -1,7 +1,7 @@
 layout(local_size_x = 32) in;
 
 #include "math.glsl"
-#include "wavelengthsource.common.glsl"
+#include "wavelengthsource/common.glsl"
 
 #include "rng.glsl"
 #include "photon.glsl"

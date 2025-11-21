@@ -8,7 +8,7 @@
 
 layout(local_size_x = BLOCK_SIZE) in;
 
-#include "tracer.volume.photon.common.glsl"
+#include "tracer/volume/photon.common.glsl"
 
 layout(scalar, push_constant) uniform Push {
     uint pathOffset;

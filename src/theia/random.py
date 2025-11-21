@@ -140,7 +140,7 @@ class RNGBufferSink(PipelineStage):
                 PARALLEL_STREAMS=blockSize[0],
             )
             headers = {"rng.glsl": generator.sourceCode}
-            code = compileShader("random.sink.glsl", preamble, headers)
+            code = compileShader("random/sink.glsl", preamble, headers)
         self._code = code
         self._program = hp.Program(self._code)
         # calculate dispatch size (ceil division)
@@ -264,7 +264,7 @@ class PhiloxRNG(RNG):
         self.setParams(key=key, offset=offset, autoAdvance=autoAdvance)
 
     # sourceCode via descriptor
-    sourceCode = ShaderLoader("random.philox.glsl")
+    sourceCode = ShaderLoader("random/philox.glsl")
 
     @property
     def autoAdvance(self) -> int:
@@ -330,7 +330,7 @@ class SobolQRNG(RNG):
             warnings.warn(f"Random RNG seed generated: 0x{seed:04X}")
         self.setParams(seed=seed, offset=offset, advanceSeed=advanceSeed)
 
-    sourceCode = ShaderLoader("random.sobol.glsl")
+    sourceCode = ShaderLoader("random/sobol.glsl")
 
     @property
     def advanceSeed(self) -> int | None:

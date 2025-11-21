@@ -1,10 +1,10 @@
 #ifndef _INCLUDE_LIGHTSOURCE_PARTICLES_MUON
 #define _INCLUDE_LIGHTSOURCE_PARTICLES_MUON
 
-#include "lightsource.common.glsl"
-#include "lightsource.particles.common.glsl"
+#include "lightsource/common.glsl"
+#include "lightsource/particles/common.glsl"
 #include "material.glsl"
-#include "util.sample.glsl"
+#include "util/sample.glsl"
 
 /**
  * Parameterization of the light yield from a muon track and its secondary

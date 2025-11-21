@@ -1,8 +1,8 @@
 layout(local_size_x = 32) in;
 
 #include "ray.glsl"
-#include "ray.propagate.glsl"
-#include "ray.surface.glsl"
+#include "ray/propagate.glsl"
+#include "ray/surface.glsl"
 #include "scatter.surface.glsl"
 
 #include "rng.glsl"

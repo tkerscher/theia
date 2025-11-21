@@ -1,9 +1,9 @@
 #ifndef _INCLUDE_RAY
 #define _INCLUDE_RAY
 
-#include "camera.common.glsl"
-#include "lightsource.common.glsl"
-#include "wavelengthsource.common.glsl"
+#include "camera/common.glsl"
+#include "lightsource/common.glsl"
+#include "wavelengthsource/common.glsl"
 
 #include "material.glsl"
 

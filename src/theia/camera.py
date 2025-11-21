@@ -193,7 +193,7 @@ class CameraRaySampler(PipelineStage):
                 "photon.glsl": wavelengthSource.sourceCode,
                 **materials.header,
             }
-            code = compileShader("camera.sample.glsl", preamble, headers)
+            code = compileShader("camera/sample.glsl", preamble, headers)
         self._code = code
         self._program = hp.Program(self._code)
         materials.bindParams(self._program)
@@ -301,7 +301,7 @@ class HostCamera(Camera):
 
     name = "Host Camera"
 
-    _sourceCode = ShaderLoader("camera.host.glsl")
+    _sourceCode = ShaderLoader("camera/host.glsl")
 
     def __init__(
         self,
@@ -473,7 +473,7 @@ class PencilCamera(Camera):
         )
 
     # source code via descriptor
-    sourceCode = ShaderLoader("camera.pencil.glsl")
+    sourceCode = ShaderLoader("camera/pencil.glsl")
 
 
 class FlatCamera(Camera):
@@ -560,7 +560,7 @@ class FlatCamera(Camera):
         self.setParams(width=width, length=length, position=position)
 
     # source code via descriptor
-    sourceCode = ShaderLoader("camera.flat.glsl")
+    sourceCode = ShaderLoader("camera/flat.glsl")
 
     @property
     def direction(self) -> tuple[float, float, float]:
@@ -640,7 +640,7 @@ class ConeCamera(Camera):
         )
 
     # source code via descriptor
-    sourceCode = ShaderLoader("camera.cone.glsl")
+    sourceCode = ShaderLoader("camera/cone.glsl")
 
 
 class SphereCamera(Camera):
@@ -700,7 +700,7 @@ class SphereCamera(Camera):
         self.setParams(position=position, radius=radius, timeDelta=timeDelta)
 
     # source code via descriptor
-    sourceCode = ShaderLoader("camera.sphere.glsl")
+    sourceCode = ShaderLoader("camera/sphere.glsl")
 
     def _finishParams(self, i: int) -> None:
         r = self.getParam("radius")
@@ -751,7 +751,7 @@ class PointCamera(Camera):
         self.setParams(position=position, timeDelta=timeDelta)
 
     # source code via descriptor
-    sourceCode = ShaderLoader("camera.point.glsl")
+    sourceCode = ShaderLoader("camera/point.glsl")
 
 
 class MeshCamera(Camera):
@@ -846,4 +846,4 @@ class MeshCamera(Camera):
         )
 
     # source code via descriptor
-    sourceCode = ShaderLoader("camera.mesh.glsl")
+    sourceCode = ShaderLoader("camera/mesh.glsl")

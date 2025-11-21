@@ -1,7 +1,7 @@
 #ifndef _PHILOX_INCLUDE
 #define _PHILOX_INCLUDE
 
-#include "random.util.glsl"
+#include "random/util.glsl"
 
 #define PHILOX_ITERATION 10
 

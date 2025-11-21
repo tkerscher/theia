@@ -1,7 +1,7 @@
 layout(local_size_x = 32) in;
 
 #include "random.glsl"
-#include "random.gamma.glsl"
+#include "random/gamma.glsl"
 
 writeonly buffer Result{ float x[]; };
 

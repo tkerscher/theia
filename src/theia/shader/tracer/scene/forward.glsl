@@ -12,14 +12,14 @@
 
 layout(local_size_x = BLOCK_SIZE) in;
 
-#include "ray.propagate.glsl"
-#include "scene.intersect.glsl"
+#include "ray/propagate.glsl"
+#include "scene/intersect.glsl"
 #define SCENE_TRAVERSE_FORWARD
-#include "scene.traverse.glsl"
+#include "scene/traverse.glsl"
 
-#include "wavelengthsource.common.glsl"
-#include "lightsource.common.glsl"
-#include "response.common.glsl"
+#include "wavelengthsource/common.glsl"
+#include "lightsource/common.glsl"
+#include "response/common.glsl"
 //user provided code
 #include "rng.glsl"
 #include "callback.glsl"
@@ -27,7 +27,7 @@ layout(local_size_x = BLOCK_SIZE) in;
 #include "photon.glsl"
 #include "response.glsl"
 
-#include "callback.util.glsl"
+#include "callback/util.glsl"
 
 uniform DispatchParams {
     uint batchSize;

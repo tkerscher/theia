@@ -2,12 +2,12 @@
 #define _INCLUDE_SCENE_TRAVERSE_BACKWARD
 
 #include "ray.glsl"
-#include "ray.combine.glsl"
-#include "ray.propagate.glsl"
-#include "ray.scatter.glsl"
-#include "ray.surface.glsl"
+#include "ray/combine.glsl"
+#include "ray/propagate.glsl"
+#include "ray/scatter.glsl"
+#include "ray/surface.glsl"
 #include "result.glsl"
-#include "scene.intersect.glsl"
+#include "scene/intersect.glsl"
 
 //user provided code
 #include "rng.glsl"

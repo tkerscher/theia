@@ -5,7 +5,7 @@
 #error "PHOTON_QUEUE_SIZE not defined"
 #endif
 
-#include "wavelengthsource.common.glsl"
+#include "wavelengthsource/common.glsl"
 
 struct WavelengthQueue {
     float wavelength[PHOTON_QUEUE_SIZE];

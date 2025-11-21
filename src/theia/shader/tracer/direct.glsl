@@ -6,7 +6,7 @@
 layout(local_size_x = BLOCK_SIZE) in;
 
 #include "ray.glsl"
-#include "ray.propagate.glsl"
+#include "ray/propagate.glsl"
 
 uniform DispatchParams {
     uint batchSize;
@@ -30,16 +30,16 @@ uniform accelerationStructureEXT tlas;
 uint getMediumIdx() {
     return params.mediumIdx;
 }
-#include "ray.medium.glsl"
+#include "ray/medium.glsl"
 
-#include "ray.combine.glsl"
-#include "ray.response.glsl"
+#include "ray/combine.glsl"
+#include "ray/response.glsl"
 #include "result.glsl"
 
-#include "lightsource.common.glsl"
-#include "camera.common.glsl"
-#include "response.common.glsl"
-#include "wavelengthsource.common.glsl"
+#include "lightsource/common.glsl"
+#include "camera/common.glsl"
+#include "response/common.glsl"
+#include "wavelengthsource/common.glsl"
 //user provided code
 #include "rng.glsl"
 #include "callback.glsl"
@@ -48,9 +48,9 @@ uint getMediumIdx() {
 #include "response.glsl"
 #include "photon.glsl"
 
-#include "callback.util.glsl"
+#include "callback/util.glsl"
 
-#include "tracer.direct.common.glsl"
+#include "tracer/direct.common.glsl"
 
 void main() {
     uint dim = 0;

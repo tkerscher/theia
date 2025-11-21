@@ -4,7 +4,7 @@
 #include "math.glsl"
 #include "material.glsl"
 #include "ray.glsl"
-#include "scene.types.glsl"
+#include "scene/types.glsl"
 
 /**
  * Struct holding all necessary properties of a surface interaction needed for

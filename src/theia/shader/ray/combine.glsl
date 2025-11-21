@@ -2,9 +2,9 @@
 #define _INCLUDE_RAY_COMBINE
 
 #include "ray.glsl"
-#include "ray.scatter.glsl"
+#include "ray/scatter.glsl"
 #include "result.glsl"
-#include "response.common.glsl"
+#include "response/common.glsl"
 
 #ifdef POLARIZATION
 
