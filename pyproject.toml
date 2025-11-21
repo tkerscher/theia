@@ -24,7 +24,7 @@ dependencies = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-"theia.shader" = ["*.glsl"]
+"theia.shader" = ["**/*.glsl"]
 "theia.data" = ["*.*"]
 
 [project.optional-dependencies]
