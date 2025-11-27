@@ -5,14 +5,16 @@ writeonly buffer ValueQueueOut {
     uint count;
     float value[VALUE_QUEUE_SIZE];
     float time[VALUE_QUEUE_SIZE];
+    //int objectId[VALUE_QUEUE_SIZE];
 } valueQueueOut;
 
 void initResponse() {}
 
 void response(HitItem item, uint idx, inout uint dim) {
-    // uint idx = atomicAdd(valueQueueOut.count, 1);
-    valueQueueOut.value[idx] = responseValue(item, idx, dim);
-    valueQueueOut.time[idx] = item.time;
+    uint i = atomicAdd(valueQueueOut.count, 1);
+    valueQueueOut.value[i] = responseValue(item, idx, dim);
+    valueQueueOut.time[i] = item.time;
+    //valueQueueOut.objectId[i] = item.objectId;
 }
 
 void finalizeResponse() {}
