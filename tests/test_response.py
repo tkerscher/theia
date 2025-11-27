@@ -285,3 +285,29 @@ def test_StoreTimeHitResponse(storeObjectId: bool, rng) -> None:
         assert np.all(result["time"] == result["objectId"])
     else:
         assert "objectId" not in result.fields
+
+
+@pytest.mark.parametrize("integrateAll", [True, False])
+def test_IntegratingHitResponse(rng, integrateAll: bool) -> None:
+    N = 8192
+    detCount = None if integrateAll else 3
+
+    value = theia.response.UniformValueResponse()
+    response = theia.response.IntegratingHitResponse(value, detectorCount=detCount)
+    replay = theia.response.HitReplay(N, response)
+
+    samples = replay.queue.view(0)
+    samples["contrib"] = rng.random((N,)) * 50.0
+    samples["objectId"] = rng.integers(0, 3, N)
+
+    runPipeline(replay.collectStages())
+
+    results = response.result(0)
+
+    if integrateAll:
+        exp = samples["contrib"].sum()
+    else:
+        exp = np.array(
+            [samples["contrib"][samples["objectId"] == i].sum() for i in range(3)]
+        )
+    assert np.allclose(results, exp)

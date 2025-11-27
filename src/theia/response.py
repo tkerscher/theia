@@ -36,6 +36,7 @@ __all__ = [
     "HitResponse",
     "HitTimeAndIdItem",
     "HitTimeItem",
+    "IntegratingHitResponse",
     "KernelHistogramHitResponse",
     "PolarizedCameraHitResponseItem",
     "PolarizedHitItem",
@@ -795,6 +796,93 @@ class StoreTimeHitResponse(HitResponse):
             ]
         else:
             return []
+
+
+class IntegratingHitResponse(HitResponse):
+    """
+    Response function summing up all created hits.
+
+    Parameters
+    ----------
+    response: ValueResponse
+        Value response processing hits.
+    detectorCount: int | None, default=None
+        Number of distinct detectors as identified by their `objectId`. None of
+        them must be larger than `objectId` minus one, but you may leave gaps.
+        If `None`, all hits will be integrated into one value regardless of
+        their `objectId`.
+    updateResponse: bool, default=True
+        If True, when this stage is requested to update by e.g. a pipeline it
+        will also cause the response to update.
+
+    Note
+    ----
+    During the update step in a pipeline, if `updateResponse` is True the
+    response gets also updated making it unnecessary to include as a separate
+    step in most cases. This stage, however, ignores any commands produced by
+    response.run() as it is not clear where to put them chronologically.
+    """
+
+    name = "Integrating Hit Response"
+
+    _sourceCode = ShaderLoader("response.value.integrate.glsl")
+
+    def __init__(
+        self,
+        response: ValueResponse,
+        *,
+        detectorCount: int | None = None,
+        updateResponse: bool = True,
+    ) -> None:
+        super().__init__()
+        self._response = response
+        self._detectorCount = detectorCount
+        self._updateResponse = updateResponse
+
+        size = detectorCount or 1
+        self._tensor = hp.FloatTensor(size)
+        self._buffers = [hp.FloatBuffer(size), hp.FloatBuffer(size)]
+        hp.execute(hp.clearTensor(self._tensor))
+
+    @property
+    def response(self) -> ValueResponse:
+        """Value response function processing hits."""
+        return self._response
+
+    @property
+    def sourceCode(self) -> str:
+        # assemble source code
+        guardStart = "#ifndef _INCLUDE_RESPONSE\n#define _INCLUDE_RESPONSE\n"
+        guardEnd = "#endif\n"
+        preamble = createPreamble(
+            RESPONSE_INTEGRATE_ALL=self._detectorCount is None,
+        )
+        return "\n".join(
+            [guardStart, preamble, self.response.sourceCode, self._sourceCode, guardEnd]
+        )
+
+    def result(self, i: int) -> NDArray:
+        """Returns the result of the last run using the i-th configuration"""
+        return self._buffers[i].numpy()
+
+    def prepare(self, config: TraceConfig) -> None:
+        self.response.prepare(config)
+
+    def bindParams(self, program: hp.Program, i: int) -> None:
+        super().bindParams(program, i)
+        program.bindParams(ValueOut=self._tensor)
+        self.response.bindParams(program, i)
+
+    def update(self, i: int) -> None:
+        super().update(i)
+        if self._updateResponse:
+            self.response.update(i)
+
+    def run(self, i: int) -> list[hp.Command]:
+        return [
+            hp.retrieveTensor(self._tensor, self._buffers[i]),
+            hp.clearTensor(self._tensor),
+        ]
 
 
 class SampleValueResponse(HitResponse):
