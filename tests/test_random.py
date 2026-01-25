@@ -5,6 +5,7 @@ import hephaistos as hp
 import hephaistos.pipeline as pl
 import theia.random
 import theia.util
+from theia.compiler import compileShader
 
 from ctypes import Structure, c_float
 from scipy.stats import kstest
@@ -90,7 +91,7 @@ def test_philox():
 
 
 @pytest.mark.parametrize("alpha,gamma", [(1.0, 1.0), (0.5, 2.2), (4.8, 0.6)])
-def test_gamma(alpha: float, gamma: float, shaderUtil):
+def test_gamma(alpha: float, gamma: float):
     R = 32 * 1024
     N = 32 * R
     tensor = hp.FloatTensor(N)
@@ -102,7 +103,7 @@ def test_gamma(alpha: float, gamma: float, shaderUtil):
         _fields_ = [("alpha", c_float), ("gamma", c_float)]
 
     headers = {"random.glsl": philox.sourceCode}
-    program = shaderUtil.createTestProgram("random.gamma.test.glsl", headers=headers)
+    program = hp.Program(compileShader("random.gamma.test.glsl", headers=headers))
     program.bindParams(Result=tensor)
     philox.bindParams(program, 0)
     philox.update(0)

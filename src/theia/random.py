@@ -8,7 +8,7 @@ from os import urandom
 import warnings
 
 from hephaistos.pipeline import PipelineStage, SourceCodeMixin
-from theia.util import ShaderLoader, compileShader, createPreamble
+from theia.compiler import compileShader, createPreamble, loadShader
 
 
 __all__ = [
@@ -194,7 +194,7 @@ class RNGBufferSink(PipelineStage):
         return self._tensor
 
     def run(self, i: int) -> list[hp.Command]:
-        self._bindParams(self._program, i)
+        self.bindParams(self._program, i)
         self.generator.bindParams(self._program, i)
         return [self._program.dispatch(*self._dispatchSize)]
 
@@ -263,17 +263,18 @@ class PhiloxRNG(RNG):
             warnings.warn(f"Random RNG key generated: 0x{key:08X}")
         self.setParams(key=key, offset=offset, autoAdvance=autoAdvance)
 
-    # sourceCode via descriptor
-    sourceCode = ShaderLoader("random/philox.glsl")
-
     @property
     def autoAdvance(self) -> int:
         """Amount the offset gets incremented with each update call."""
         return self._autoAdvance
 
     @autoAdvance.setter
-    def autoAdvance(self, value: int) -> int:
+    def autoAdvance(self, value: int) -> None:
         self._autoAdvance = value
+
+    @property
+    def sourceCode(self) -> str:
+        return loadShader("random/philox.glsl")
 
     def _finishParams(self, i: int) -> None:
         if self.autoAdvance != 0:
@@ -330,8 +331,6 @@ class SobolQRNG(RNG):
             warnings.warn(f"Random RNG seed generated: 0x{seed:04X}")
         self.setParams(seed=seed, offset=offset, advanceSeed=advanceSeed)
 
-    sourceCode = ShaderLoader("random/sobol.glsl")
-
     @property
     def advanceSeed(self) -> int | None:
         """
@@ -344,6 +343,10 @@ class SobolQRNG(RNG):
     def advanceSeed(self, value: int | None) -> None:
         self._advanceSeed = value
         self._hostRNG = None if value is None else np.random.default_rng(value)
+
+    @property
+    def sourceCode(self) -> str:
+        return loadShader("random/sobol.glsl")
 
     def _finishParams(self, i: int) -> None:
         if self._hostRNG is not None:
