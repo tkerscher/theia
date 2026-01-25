@@ -3,22 +3,26 @@ import hephaistos as hp
 import importlib.resources
 import os
 import os.path
-import sys
+import pathlib
 import pytest
+import sys
 
-from theia.util import PREAMBLE
+import theia
+import theia.compiler
 
 # needed to discover common package...
 sys.path.append(os.path.dirname(os.path.realpath(__file__)))
+# add test shader to include dirs
+theia.compiler.addIncludeDir(pathlib.Path(os.path.basename(__file__) + "/shader/"))
 
 
-@pytest.fixture(scope="session", autouse=True)
-def gpu():
-    if hp.isRaytracingSupported():
-        # raise RuntimeError("This system does not support ray tracing!")
-        hp.enableRaytracing()
-    # force device initialization
-    hp.getCurrentDevice()
+# @pytest.fixture(scope="session", autouse=True)
+# def gpu():
+#     if hp.isRaytracingSupported():
+#         # raise RuntimeError("This system does not support ray tracing!")
+#         hp.enableRaytracing()
+#     # force device initialization
+#     hp.getCurrentDevice()
 
 
 @pytest.fixture(scope="function", autouse=True)
@@ -28,36 +32,6 @@ def cleanup_gpu():
 
     # cleanup
     hp.destroyResources()
-
-
-class ShaderUtil:
-    """Collections of helper functions"""
-
-    def __init__(self) -> None:
-        shader_dir = str(importlib.resources.files("theia").joinpath("shader"))
-        compiler = hp.Compiler()
-        compiler.addIncludeDir(shader_dir)
-        self.compiler = compiler
-
-    def getTestShader(self, shader) -> str:
-        path = os.path.join(os.path.dirname(__file__), "shader")
-        path = os.path.join(path, shader)
-        with open(path, "r") as file:
-            return file.read()
-
-    def compileTestShader(self, shader, preamble="", headers={}) -> bytes:
-        source = "\n".join([PREAMBLE, preamble, self.getTestShader(shader)])
-        code = self.compiler.compile(source, headers)
-        return code
-
-    def createTestProgram(self, shader, preamble="", headers={}) -> hp.Program:
-        code = self.compileTestShader(shader, preamble, headers)
-        return hp.Program(code)
-
-
-@pytest.fixture(scope="session")
-def shaderUtil():
-    return ShaderUtil()
 
 
 @pytest.fixture(scope="session")

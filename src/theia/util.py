@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import numpy as np
-import hephaistos as hp
 import importlib.resources
 
 from ctypes import Structure, c_uint32
@@ -9,7 +8,6 @@ from hephaistos.glsl import uvec4, uvec2
 from numpy.ctypeslib import as_array
 
 from numpy.typing import NDArray
-from typing import Any
 
 
 class classproperty:
@@ -56,98 +54,6 @@ def viewSoA(address: int, item: type[Structure], count: int) -> NDArray:
         _fields_ = [(name, t * count) for name, t in item._fields_]
 
     return as_array(SoA.from_address(address))
-
-
-def getCompiler() -> hp.Compiler:
-    """Returns a lazy singleton compiler with lib shader code include dir"""
-    if not hasattr(getCompiler, "_compiler"):
-        shader_dir = str(importlib.resources.files("theia").joinpath("shader"))
-        compiler = hp.Compiler()
-        compiler.addIncludeDir(shader_dir)
-        getCompiler._compiler = compiler
-    return getCompiler._compiler
-
-
-def getShaderPath(file: str) -> str:
-    """Returns the path to the given shader file"""
-    return str(importlib.resources.files("theia").joinpath(f"shader/{file}"))
-
-
-def loadShader(file: str) -> str:
-    """Loads the given shader file and returns its source code"""
-    with open(getShaderPath(file), "r") as file:
-        return file.read()
-
-
-class ShaderLoader:
-    """Descriptor for lazily loading shader code from the shader folder"""
-
-    def __init__(self, path: str) -> None:
-        self.path = path
-        self.code = None
-
-    def __get__(self, obj, objtype=None) -> str:
-        if obj is None:
-            # accessed from class
-            return self
-        if self.code is None:
-            self.code = loadShader(self.path)
-        return self.code
-
-
-# load preamble. We will always need it
-PREAMBLE = loadShader("preamble.glsl")
-"""Contains code shared by all shader, usually enabling extensions"""
-# append ray tracing specific preamble if enabled
-if hp.isRaytracingEnabled():
-    PREAMBLE += loadShader("preamble.raytracing.glsl")
-
-
-def compileShader(file: str, preamble: str = "", headers: dict[str, str] = {}) -> bytes:
-    """
-    Compiles the given shader code stored inside the libs shader folder.
-
-    Parameters
-    ----------
-    file: str
-        path to file containing the shader source code
-    preamble: str, default=""
-        text to prepend the source code
-    headers: { str: str }, default={}
-        map of runtime header files mapping file name to source code
-    """
-    # headers may contain user data
-    # quick sanity check to generate a more meaningfull error
-    for header, content in headers.items():
-        if not isinstance(content, str):
-            raise ValueError(f'Header "{header}" does not contain a string!')
-
-    code = "\n".join([PREAMBLE, preamble, loadShader(file)])
-    try:
-        return getCompiler().compile(code, headers)
-    except RuntimeError as err:
-        # Add preamble size to make line numbers useful
-        size = PREAMBLE.count("\n") + 1
-        size += preamble.count("\n") + 1
-        newTxt = f"(Preamble size: {size})"
-        newTxt += "\n" + str(err)
-        raise RuntimeError(newTxt) from err
-
-
-def createPreamble(**macros: Any) -> str:
-    """
-    Creates preamble containing macros defining the values as defined in the
-    provided dictionary. If macro is of type bool, defines it without value
-    if and only if it is True. Other types are used as value for the macro.
-    """
-    preamble = ""
-    for macro, value in macros.items():
-        if type(value) is not bool:
-            preamble += f"#define {macro} {value}\n"
-        elif value:
-            preamble += f"#define {macro}\n"
-        # ignore macros defined with value False
-    return preamble
 
 
 def uvec4ToInt(value: uvec4) -> int:
