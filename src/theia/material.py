@@ -17,6 +17,7 @@ from struct import pack, unpack
 from types import SimpleNamespace
 from zipfile import ZipFile, Path as ZipPath
 
+from theia.compiler import createPreamble
 from theia.lookup import createTableFromFunction, Interpolation
 from theia.property import (
     FloatProperty,
@@ -30,7 +31,9 @@ from theia.property import (
     saveTable,
     saveTableEntry,
 )
-from theia.util import classproperty, createPreamble, intersectRange, loadCSV
+from theia.surface import SurfaceModel
+from theia.volume import Transparent, VolumeModel
+from theia.util import classproperty, intersectRange, loadCSV
 import theia.units as u
 
 from collections.abc import Callable, Iterable, Iterator, Mapping
@@ -94,6 +97,8 @@ class Medium:
     """Wavelength range for which the optical properties are defined"""
     properties: dict[str, Property] = field(default_factory=dict)
     """Optical properties describing the medium"""
+    physicModel: VolumeModel = field(default_factory=Transparent)
+    """Physical model describing the physical interaction of rays within this medium"""
 
 
 def _createTableEntryFromMedium(medium: Medium) -> PropertyTableEntry:
@@ -415,6 +420,7 @@ class Material:
         name: str,
         inside: Medium | str | None,
         outside: Medium | str | None,
+        physicModel: SurfaceModel,
         *,
         flags: (
             tuple[MaterialFlags | str, MaterialFlags | str] | MaterialFlags | str
@@ -424,6 +430,7 @@ class Material:
         self.name = name
         self.inside = inside
         self.outside = outside
+        self.physicModel = physicModel
         if isinstance(flags, tuple):
             self.flagsInward = flags[0]
             self.flagsOutward = flags[1]
@@ -443,6 +450,11 @@ class Material:
     """
     Medium in the outside of the geometry. Either stored directly or referenced
     by its name. A value of `None` corresponds to vacuum.
+    """
+    physicModel: SurfaceModel
+    """
+    Model describing the physical interaction of rays as they interact with a
+    surface of this material.
     """
     flagsOutward: MaterialFlagsParsingDescriptor = MaterialFlagsParsingDescriptor()
     """
@@ -508,24 +520,27 @@ def saveMaterials(
             )
 
     # save all media
-    map = _createTableEntryFromMedium
-    media_props = {name: map(m) for name, m in media_dict.items()}
-    saveTable(file.joinpath("media/"), media_props)
+    for name, med in media_dict.items():
+        med_path = file.joinpath(f"media/{name}")
+        # write properties
+        prop_path = med_path.joinpath("properties/")
+        saveTableEntry(prop_path, _createTableEntryFromMedium(med))
+        # write volume model
+        med.physicModel.save(med_path.joinpath(f"physicmodel/{med.physicModel.name}"))
 
     # save all material
-    file = file.joinpath("material/")
     getName = lambda m: m.name if isinstance(m, Medium) else m
     printName = lambda m: m if (m := getName(m)) is not None else ""
     for mat in material:
-        mat_path = file.joinpath(f"{mat.name}/")
+        mat_path = file.joinpath(f"material/{mat.name}/")
         # write material description
         with mat_path.joinpath("material").open("w") as mat_file:
-            name_inside = printName(mat.inside)
-            name_outside = printName(mat.outside)
-            mat_file.write(f"{str(int(mat.flagsInward))},{name_inside}\n")
-            mat_file.write(f"{str(int(mat.flagsOutward))},{name_outside}\n")
-        # optionally, write additional properties
+            mat_file.write(f"{str(int(mat.flagsInward))},{printName(mat.inside)}\n")
+            mat_file.write(f"{str(int(mat.flagsOutward))},{printName(mat.outside)}\n")
+        # write properties
         saveTableEntry(mat_path.joinpath("properties/"), mat.properties)
+        # write surface model
+        mat.physicModel.save(mat_path.joinpath(f"physicmodel/{mat.physicModel.name}"))
 
 
 def loadMaterials(
@@ -555,44 +570,72 @@ def loadMaterials(
     if isinstance(path, ZipFile):
         path = ZipPath(path)
 
+    def getPhysicModelFile(dir: ZipPath) -> ZipPath:
+        content = list(dir.iterdir())
+        if len(content) != 1 or not content[0].is_file():
+            raise ValueError(
+                f'Unsupported file structure in "{dir}". Expected single file'
+            )
+        return content[0]
+
     # load media
-    def convert(name: str, media: PropertyTableEntry) -> Medium:
-        properties = dict(media)
-        wavelength_range = properties.pop("wavelength_range")
-        if not isinstance(wavelength_range, FloatProperty):
+    med_dict = {}
+    for med_path in path.joinpath("media/").iterdir():
+        if not med_path.is_dir():
+            raise ValueError(f'Unexpected file "{med_path}"')
+        name = med_path.name
+        # load properties
+        props = dict(loadTableEntry(med_path.joinpath("properties/")))
+        if "wavelength_range" not in props:
+            raise ValueError(
+                f'Media "{name}" is missing required property "wavelength_range"'
+            )
+        wavelengthRange = props.pop("wavelength_range")
+        if not isinstance(wavelengthRange, FloatProperty):
             raise ValueError(
                 f'Property "wavelength_range" of media "{name}" has wrong type!'
             )
-        return Medium(name, wavelength_range.value, properties)
+        wavelengthRange = wavelengthRange.value
+        # load volume model
+        physic_file = getPhysicModelFile(med_path.joinpath("physicmodel/"))
+        physic = VolumeModel.from_file(physic_file)
+        # create and save loaded medium
+        med_dict[name] = Medium(name, wavelengthRange, props, physic)
 
-    mediaTable = loadTable(path.joinpath("media/"))
-    media_dict = {name: convert(name, med) for name, med in mediaTable.items()}
-
-    # load material
     def parseLine(line: str):
         flags, med = line.split(",", 1)
         flags = MaterialFlags(int(flags))
         med = med[:-1] or None  # remove new line and replace empty with None
-        if med in media_dict:
-            med = media_dict[med]
+        if med in med_dict:
+            med = med_dict[med]
         return (flags, med)
 
+    # load materials
     mat_dict = {}
     for mat_path in path.joinpath("material/").iterdir():
         if not mat_path.is_dir():
             raise ValueError(f'Unexpected file "{mat_path}"')
+        name = mat_path.name
         # load material description file
-        with mat_path.joinpath("material").open("r") as file:
+        desc_file = mat_path.joinpath("material")
+        if not desc_file.exists() or not desc_file.is_file():
+            raise ValueError(f'Material "{name}" misses description file')
+        with desc_file.open("r") as file:
             flagsIn, medIn = parseLine(file.readline())
             flagsOut, medOut = parseLine(file.readline())
-        name = mat_path.name
         flags = (flagsIn, flagsOut)
-        # load optional additional properties
+        # load properties
         props = loadTableEntry(mat_path.joinpath("properties/"))
-        mat_dict[name] = Material(name, medIn, medOut, flags=flags, properties=props)
+        # load surface model
+        physic_file = getPhysicModelFile(mat_path.joinpath("physicmodel/"))
+        physic = SurfaceModel.from_file(physic_file)
+        # create and save loaded material
+        mat_dict[name] = Material(
+            name, medIn, medOut, physic, flags=flags, properties=props
+        )
 
     # done
-    return (mat_dict, media_dict)
+    return mat_dict, med_dict
 
 
 def getPropertySamples(src: Medium | Material, name: str) -> NDArray | None:
@@ -723,15 +766,34 @@ class MaterialStore:
         mediaSlots: Iterable[str] | None = DefaultMediaSlots,
         materialSlots: Iterable[str] | None = DefaultMaterialSlots,
     ) -> None:
+        # add mandatory slots
+        mediaSlots = set() if mediaSlots is None else set(mediaSlots)
+        mediaSlots.add("wavelength_range")
+        materialSlots = set() if materialSlots is None else set(materialSlots)
+        materialSlots.update("inwards", "outwards")
         # collect all media
-        mediaDict = {m.name: _createTableEntryFromMedium(m) for m in media}
+        mediaDict = {m.name: m for m in media}
         for med in chain.from_iterable((m.inside, m.outside) for m in material):
             if isinstance(med, Medium) and med.name not in mediaDict:
-                mediaDict[med.name] = _createTableEntryFromMedium(med)
+                mediaDict[med.name] = med
+        # collect all volume models
+        # in order to handle vacuum more easily in the tracer,
+        # ensure the transparent model is always present at index 0
+        volModelSet = {m.physicModel for m in mediaDict.values()}
+        volModelSet.discard(Transparent())  # add later at index 0
+        self._volumeModels = [Transparent(), *volModelSet]
+        idxMap = {model: i for i, model in enumerate(self._volumeModels)}
+        self._volumeModelIndices = [idxMap[m.physicModel] for m in mediaDict.values()]
         # create media table
-        self._mediaTable = PropertyTable(mediaDict, requiredSlots=mediaSlots)
+        mediaProps = {n: _createTableEntryFromMedium(m) for n, m in mediaDict.items()}
+        self._mediaTable = PropertyTable(mediaProps, requiredSlots=mediaSlots)
 
-        # create all materials
+        # collect surface models
+        material = list(material)
+        self._surfaceModels = list({m.physicModel for m in material})
+        idxMap = {model: i for i, model in enumerate(self._surfaceModels)}
+        self._surfaceModelIndices = [idxMap[m.physicModel] for m in material]
+        # create material table
         _map = _createTableEntryFromMaterial
         materialDict = {m.name: _map(m, self._mediaTable) for m in material}
         self._materialTable = PropertyTable(materialDict, requiredSlots=materialSlots)
@@ -752,11 +814,45 @@ class MaterialStore:
         return self._materialTable
 
     @property
+    def surfaceModels(self) -> list[SurfaceModel]:
+        """Ordered list of surface models referenced by the materials"""
+        return self._surfaceModels
+
+    @property
+    def surfaceModelMap(self) -> list[int]:
+        """Mapping from material index to surface model index"""
+        return self._surfaceModelIndices
+
+    @property
+    def volumeModels(self) -> list[VolumeModel]:
+        """Ordered list of volume models referenced by the media"""
+        return self._volumeModels
+
+    @property
+    def volumeModelMap(self) -> list[int]:
+        """Mapping from medium index to volume model index"""
+        return self._volumeModelIndices
+
+    @property
     def slotMacros(self) -> dict[str, int]:
         """Dictionary containing the slot names to be used in shaders"""
         mediaSlots = createSlotMacros(self.media, "MEDIA_SLOT")
         materialSlots = createSlotMacros(self.materials, "MATERIAL_SLOT")
         return mediaSlots | materialSlots
+
+    def getSurfaceModel(self, material: str | int) -> SurfaceModel:
+        """Returns the surface model referenced by the given surface"""
+        if isinstance(material, str):
+            material = self.materials[material]
+        idx = self.surfaceModelMap[material]
+        return self.surfaceModels[idx]
+
+    def getVolumeModel(self, medium: str | int) -> VolumeModel:
+        """Returns the volume model referenced by the given volume"""
+        if isinstance(medium, str):
+            medium = self.media[medium]
+        idx = self.volumeModelMap[medium]
+        return self.volumeModels[idx]
 
     def bindParams(self, program: hp.Program) -> None:
         program.bindParams(
@@ -994,6 +1090,7 @@ class MediumModel:
         wavelengthRange: tuple[float, float] | None = None,
         numSamples: int = 1024,
         name: str | None = None,
+        physicModel: VolumeModel = Transparent(),
     ) -> Medium:
         if wavelengthRange is None:
             wavelengthRange = self.wavelengthRange
@@ -1017,7 +1114,7 @@ class MediumModel:
                     self, wavelengthRange, numSamples, const
                 )
 
-        return Medium(name, wavelengthRange, props)
+        return Medium(name, wavelengthRange, props, physicModel)
 
 
 class NumericalPhaseSamplingMixin(MediumModel):

@@ -3,20 +3,26 @@ import pytest
 import numpy as np
 import hephaistos as hp
 import os.path
-import theia.material
-import theia.units as u
 import warnings
-from ctypes import Structure, c_uint32, c_float
+
+from hephaistos.queue import QueueBuffer, QueueTensor
+from ctypes import c_float
 from scipy.integrate import quad
 
+from theia.compiler import compileShader
 from theia.lookup import Table
+from theia.material import PureWaterModel
 from theia.property import FloatProperty, TableProperty
-from theia.testing import WaterTestModel
-from theia.util import createPreamble
+from theia.util import createCType
+
+import theia.material
+import theia.surface
+import theia.volume
+import theia.units as u
 
 
 def test_checkMedium():
-    medium = WaterTestModel().createMedium()
+    medium = PureWaterModel().createMedium()
     assert theia.material.checkMedium(medium)
     # TODO: Ideally, we would check if faulty media would trigger this,
     #       but that's for a later day (maybe)
@@ -191,223 +197,78 @@ def test_FournierForand(testDataDir, rng):
     assert abs(integratePhase(model) - 1.0) < 1e-5
 
 
-def test_MediumShader(shaderUtil, rng):
-    N = 32 * 256
+def test_MaterialStore():
+    N = 32 * 64
+    lam_range = (400.0, 700.0) * u.nm
 
-    model = WaterTestModel()
-    water = model.createMedium()
-    store = theia.material.MaterialStore([], media=[water])
-
-    # let's define the structs used in the shader
-    class Query(Structure):
-        _fields_ = [
-            ("wavelength", c_float),
-            ("theta", c_float),
-            ("eta", c_float),
-        ]
-
-    class Result(Structure):
-        _fields_ = [
-            ("n", c_float),
-            ("vg", c_float),
-            ("mu_s", c_float),
-            ("mu_e", c_float),
-            ("log_phase", c_float),
-            ("angle", c_float),
-        ]
-
-    class Push(Structure):
-        _fields_ = [("medium", c_uint32)]
-
-    push = Push(medium=store.media["water"])
-
-    # reserve memory for shader
-    query_tensor = hp.ArrayTensor(Query, N)
-    query_buffer = hp.ArrayBuffer(Query, N)
-    result_tensor = hp.ArrayTensor(Result, N)
-    result_buffer = hp.ArrayBuffer(Result, N)
-    # fill query structures with random parameters
-    queries = query_buffer.numpy()
-    lambda_min, lambda_max = water.wavelengthRange
-    dLam = lambda_max - lambda_min
-    queries["wavelength"] = (rng.random(N, np.float32) * dLam + lambda_min) * u.nm
-    queries["theta"] = 1.0 - 2 * rng.random(N, np.float32)  # [-1,1]
-    queries["eta"] = rng.random(N, np.float32)  # [0,1]
-
-    # create program
-    program = shaderUtil.createTestProgram("medium.test.glsl", headers=store.header)
-    program.bindParams(QueryBuffer=query_tensor, Results=result_tensor)
-    store.bindParams(program)
-    # run it
-    (
-        hp.beginSequence()
-        .And(hp.updateTensor(query_buffer, query_tensor))
-        .Then(program.dispatchPush(bytes(push), N // 32))
-        .Then(hp.retrieveTensor(result_tensor, result_buffer))
-        .Submit()
-        .wait()
-    )
-
-    # recreate expected result
-    n = model.refractive_index(queries["wavelength"])
-    vg = model.group_velocity(queries["wavelength"])
-    mu_a = model.absorption_coef(queries["wavelength"])
-    mu_s = model.scattering_coef(queries["wavelength"])
-    mu_e = mu_a + mu_s
-    log_phase = model.log_phase_function(queries["theta"])
-    angle = model.phase_sampling(queries["eta"])
-    # test results
-    results = result_buffer.numpy()
-    assert np.allclose(results["n"], n, 1e-4)
-    assert np.allclose(results["vg"], vg, 1e-4)
-    assert np.allclose(results["mu_s"], mu_s, 5e-3)
-    assert np.allclose(results["mu_e"], mu_e, 5e-3)
-    # assert np.allclose(results["log_phase"], log_phase, 1e-4)
-    assert np.abs(results["log_phase"] - log_phase).max() < 5e-5
-    assert np.allclose(results["angle"], angle, 1e-4, 1e-5)
-
-
-def test_MaterialShader(shaderUtil, rng):
-    N = 32 * 1000  # amount of samples/shader calls
-
-    water_model = WaterTestModel()
-    water = water_model.createMedium()
+    # create material store
+    water_model = PureWaterModel()
+    water = water_model.createMedium(wavelengthRange=lam_range)
     glass_model = theia.material.BK7Model()
-    glass = glass_model.createMedium(name="glass", numSamples=4096)
+    glass = glass_model.createMedium(
+        name="glass", numSamples=4096, wavelengthRange=lam_range
+    )
     f = ("TRVB", "BDL")
-    mat_water_glass = theia.material.Material("water_glass", water, glass, flags=f)
-    mat_vac_glass = theia.material.Material("vac_glass", None, glass)
-    mat_store = theia.material.MaterialStore([mat_water_glass, mat_vac_glass])
+    surface_model = theia.surface.DielectricSurface()
+    mat_water_glass = theia.material.Material(
+        "water_glass", water, glass, surface_model, flags=f
+    )
+    mat_vac_glass = theia.material.Material("vac_glass", None, glass, surface_model)
+    mat_store = theia.material.MaterialStore([mat_vac_glass, mat_water_glass])
 
-    # let's define the structs used in the shader
-    class Query(Structure):
-        _fields_ = [
-            ("materialIdx", c_uint32),
-            ("lam", c_float),  # wavelength
-            ("theta", c_float),
-            ("eta", c_float),
-            ("padding", c_float),
-        ]
-
-    class Result(Structure):
-        _fields_ = [
-            ("n", c_float),
-            ("vg", c_float),
-            ("mu_s", c_float),
-            ("mu_e", c_float),
-            ("log_phase", c_float),
-            ("angle", c_float),
-            ("m12", c_float),
-            ("m22", c_float),
-            ("m33", c_float),
-            ("m34", c_float),
-        ]
-
-    # reserve memory for shader
-    query_tensor = hp.ArrayTensor(Query, N)
-    query_buffer = hp.ArrayBuffer(Query, N)
-    result_tensor = hp.ArrayTensor(Result, 2 * N)  # both inside and outside
-    result_buffer = hp.ArrayBuffer(Result, 2 * N)
+    # allocate memory
+    queue_fields = [
+        ("u", c_float),
+        ("i_n", c_float),
+        ("i_vg", c_float),
+        ("i_mu_s", c_float),
+        ("i_log_phase", c_float),
+        ("i_angle", c_float),
+        ("o_n", c_float),
+        ("o_vg", c_float),
+        ("o_mu_s", c_float),
+        ("o_log_phase", c_float),
+        ("o_angle", c_float),
+    ]
+    queueItem = createCType("Item", queue_fields)
+    queue_tensor = QueueTensor(queueItem, N, skipCounter=True)
+    queue_buffer = QueueBuffer(queueItem, N, skipCounter=True)
     flag_tensor = hp.UnsignedIntTensor(2)
     flag_buffer = hp.UnsignedIntBuffer(2)
-    # fill query structures with random parameters
-    queries = query_buffer.numpy()
-    queries["materialIdx"] = [
-        mat_store["water_glass"],
-    ] * (N // 2) + [
-        mat_store["vac_glass"],
-    ] * (N // 2)
-    queries["lam"] = (rng.random(N, np.float32) * 550.0 + 250.0) * u.nm
-    queries["theta"] = 1.0 - 2 * rng.random(N, np.float32)  # [-1,1]
-    queries["eta"] = rng.random(N, np.float32)  # [0,1]
 
-    # create program
-    program = shaderUtil.createTestProgram(
-        "material.test.glsl", headers=mat_store.header
-    )
-    program.bindParams(
-        QueryBuffer=query_tensor, Results=result_tensor, Flags=flag_tensor
-    )
+    # create test program
+    program = hp.Program(compileShader("material.test.glsl", headers=mat_store.header))
+    program.bindParams(Result=queue_tensor, Flags=flag_tensor)
     mat_store.bindParams(program)
     # run it
     (
         hp.beginSequence()
-        .And(hp.updateTensor(query_buffer, query_tensor))
-        .Then(program.dispatch(N // 32))
-        .Then(hp.retrieveTensor(result_tensor, result_buffer))
+        .And(program.dispatch(32))
+        .Then(hp.retrieveTensor(queue_tensor, queue_buffer))
         .And(hp.retrieveTensor(flag_tensor, flag_buffer))
         .Submit()
         .wait()
     )
 
-    # recreate expected result
-    gpu = result_buffer.numpy()
-    cpu = np.empty((N * 2, 10))
-    # refractive index
-    cpu[:N:2, 0] = water_model.refractive_index(queries["lam"][: N // 2])
-    cpu[1:N:2, 0] = glass_model.refractive_index(queries["lam"][: N // 2])
-    cpu[N::2, 0] = 1.0  # vacuum
-    cpu[N + 1 :: 2, 0] = glass_model.refractive_index(queries["lam"][N // 2 :])
-    # group velocity
-    cpu[:N:2, 1] = water_model.group_velocity(queries["lam"][: N // 2])
-    cpu[1:N:2, 1] = glass_model.group_velocity(queries["lam"][: N // 2])
-    cpu[N::2, 1] = 1.0 * u.c  # vacuum
-    cpu[N + 1 :: 2, 1] = glass_model.group_velocity(queries["lam"][N // 2 :])
-    # scattering coef
-    cpu[:N:2, 2] = water_model.scattering_coef(queries["lam"][: N // 2])
-    cpu[1:N:2, 2] = 0.0  # glass does not (volume) scatter
-    cpu[N::2, 2] = 0.0  # vacuum
-    cpu[N + 1 :: 2, 2] = 0.0  # glass does not (volume) scatter
-    # absorption coef
-    cpu[:N:2, 3] = water_model.absorption_coef(queries["lam"][: N // 2])
-    cpu[1:N:2, 3] = glass_model.absorption_coef(queries["lam"][: N // 2])
-    cpu[N::2, 3] = 0.0  # vacuum
-    cpu[N + 1 :: 2, 3] = glass_model.absorption_coef(queries["lam"][N // 2 :])
-    # extinction coef
-    cpu[:, 3] += cpu[:, 2]
-    # phase
-    cpu[:N:2, 4] = water_model.log_phase_function(queries["theta"][: N // 2])
-    cpu[1:N:2, 4] = 0.0  # glass does not (volume) scatter
-    cpu[N::2, 4] = 0.0  # vacuum
-    cpu[N + 1 :: 2, 4] = 0.0  # glass does not (volume) scatter
-    # angle
-    cpu[:N:2, 5] = water_model.phase_sampling(queries["eta"][: N // 2])
-    cpu[1:N:2, 5] = 0.0  # glass does not (volume) scatter
-    cpu[N::2, 5] = 0.0  # vacuum
-    cpu[N + 1 :: 2, 5] = 0.0  # glass does not (volume) scatter
-    # m12
-    cpu[:N:2, 6] = water_model.phase_m12(queries["theta"][: N // 2])
-    cpu[1:N:2, 6] = 0.0  # glass does not (volume) scatter
-    cpu[N::2, 6] = 0.0  # vacuum
-    cpu[N + 1 :: 2, 6] = 0.0  # glass does not (volume) scatter
-    # m22
-    cpu[:N:2, 7] = water_model.phase_m22(queries["theta"][: N // 2])
-    cpu[1:N:2, 7] = 0.0  # glass does not (volume) scatter
-    cpu[N::2, 7] = 0.0  # vacuum
-    cpu[N + 1 :: 2, 7] = 0.0  # glass does not (volume) scatter
-    # m33
-    cpu[:N:2, 8] = water_model.phase_m33(queries["theta"][: N // 2])
-    cpu[1:N:2, 8] = 0.0  # glass does not (volume) scatter
-    cpu[N::2, 8] = 0.0  # vacuum
-    cpu[N + 1 :: 2, 8] = 0.0  # glass does not (volume) scatter
-    # m34
-    cpu[:N:2, 9] = 0.0  # no m34 for water
-    cpu[1:N:2, 9] = 0.0  # glass does not (volume) scatter
-    cpu[N::2, 9] = 0.0  # vacuum
-    cpu[N + 1 :: 2, 9] = 0.0  # glass does not (volume) scatter
-
     # check result
-    assert np.allclose(gpu["n"], cpu[:, 0], 1e-4)
-    assert np.allclose(gpu["vg"], cpu[:, 1], 1e-4)
-    assert np.allclose(np.exp(-gpu["mu_s"]), np.exp(-cpu[:, 2]), 1e-5, 1e-3)
-    assert np.allclose(np.exp(-gpu["mu_e"]), np.exp(-cpu[:, 3]), 1e-5, 1e-3)
-    # assert np.allclose(gpu["log_phase"], cpu[:, 4], 1e-4)
-    assert np.abs(gpu["log_phase"] - cpu[:, 4]).max() < 5e-4
-    assert np.allclose(gpu["angle"], cpu[:, 5], 1e-4, 1e-5)
-    assert np.abs(gpu["m12"] - cpu[:, 6]).max() < 1e-3
-    assert np.abs(gpu["m22"] - cpu[:, 7]).max() < 1e-3
-    assert np.abs(gpu["m33"] - cpu[:, 8]).max() < 1e-3
-    assert np.abs(gpu["m34"] - cpu[:, 9]).max() < 1e-3
+    result = queue_buffer.view
+    v = result["u"]
+    assert np.all((v >= 0.0) & (v < 1.0))
+    lam = v * (lam_range[1] - lam_range[0]) + lam_range[0]
+    theta = 2.0 * v - 1.0
+    # test inside medium
+    assert np.allclose(result["i_n"], water_model.refractive_index(lam))
+    assert np.allclose(result["i_vg"], water_model.group_velocity(lam))
+    assert np.allclose(result["i_mu_s"], water_model.scattering_coef(lam))
+    assert np.allclose(result["i_log_phase"], water_model.log_phase_function(theta))
+    assert np.allclose(result["i_angle"], water_model.phase_sampling(v), atol=1e-6)
+    # test outside medium
+    assert np.allclose(result["o_n"], glass_model.refractive_index(lam))
+    assert np.allclose(result["o_vg"], glass_model.group_velocity(lam))
+    assert np.allclose(result["o_mu_s"], -10.0)  # glass does not scatter
+    assert np.allclose(result["o_log_phase"], -10.0)
+    assert np.allclose(result["o_angle"], -10.0)
+    # test flags
     assert flag_buffer.numpy()[0] == mat_water_glass.flagsInward
     assert flag_buffer.numpy()[1] == mat_water_glass.flagsOutward
 
@@ -415,6 +276,8 @@ def test_MaterialShader(shaderUtil, rng):
 def test_serializeMaterial(tmp_path, rng):
     """create some dummy media/material and try to save/load them"""
     # create dummy media
+    transparent = theia.volume.Transparent()
+    attenuating = theia.volume.Attenuating(absorb=True)
     rand = lambda n: rng.random(n, dtype=np.float32)
     table = lambda n, a: TableProperty(Table(rand(n) * a))
     med1 = theia.material.Medium(
@@ -426,6 +289,7 @@ def test_serializeMaterial(tmp_path, rng):
             "scattering_coef": table(199, 30.0),
             "phase_sampling": table(648, 3.14),
         },
+        transparent,
     )
     med2 = theia.material.Medium(
         "med2",
@@ -438,6 +302,7 @@ def test_serializeMaterial(tmp_path, rng):
             "log_phase_function": table(105, 1.0),
             "phase_sampling": table(156, 1.0),
         },
+        attenuating,
     )
     medExtra = theia.material.Medium(
         "extra",
@@ -450,10 +315,12 @@ def test_serializeMaterial(tmp_path, rng):
             "log_phase_function": table(107, 1.0),
             "phase_sampling": table(108, 1.0),
         },
+        attenuating,
     )
     # dummy material
-    mat1 = theia.material.Material("mat1", "med1", med2, flags=("R", "Tfb"))
-    mat2 = theia.material.Material("mat2", med1, None, flags=("B", "RbTf"))
+    des = theia.surface.DielectricSurface()
+    mat1 = theia.material.Material("mat1", "med1", med2, des, flags=("R", "Tfb"))
+    mat2 = theia.material.Material("mat2", med1, None, des, flags=("B", "RbTf"))
     mat2.properties = {
         "albedo": FloatProperty((1.0, 0.5)),
         "anisotropy": table(165, 1.0),
@@ -470,6 +337,7 @@ def test_serializeMaterial(tmp_path, rng):
         assert test.name == true.name
         assert test.wavelengthRange == true.wavelengthRange
         assert test.properties.keys() == true.properties.keys()
+        assert test.physicModel == true.physicModel
         for name, prop in true.properties.items():
             # for now we only do table properties
             test_prop = test.properties[name]
@@ -489,10 +357,12 @@ def test_serializeMaterial(tmp_path, rng):
     assert mat["mat1"].outside == med["med2"]
     assert mat["mat1"].flagsInward == mat1.flagsInward
     assert mat["mat1"].flagsOutward == mat1.flagsOutward
+    assert mat["mat1"].physicModel == mat1.physicModel
     assert mat["mat2"].inside == med["med1"]
     assert mat["mat2"].outside == None
     assert mat["mat2"].flagsInward == mat2.flagsInward
     assert mat["mat2"].flagsOutward == mat2.flagsOutward
+    assert mat["mat2"].physicModel == mat2.physicModel
     assert mat["mat2"].properties.keys() == mat2.properties.keys()
     assert mat["mat2"].properties["albedo"].value == mat2.properties["albedo"].value
     t1 = mat["mat2"].properties["anisotropy"].table.samples
