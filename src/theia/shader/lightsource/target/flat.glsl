@@ -8,24 +8,30 @@ uniform LightTargetParams {
     vec3 normal;
 
     float contrib;
-    mat3 objToWorld;
-} lsTargetParams;
+    uint mediumIdx;
 
-float sampleLightTarget(
+    mat3 objToWorld;
+} lightTargetParams;
+
+LightTargetSample sampleLightTarget(
     float wavelength,
-    out vec3 samplePos, out vec3 sampleNrm,
     uint idx, inout uint dim
 ) {
     //sample point on flat
     vec2 u = random2D(idx, dim);
-    float localX = lsTargetParams.width * (u.x - 0.5);
-    float localY = lsTargetParams.height * (u.y - 0.5);
+    float localX = lightTargetParams.width * (u.x - 0.5);
+    float localY = lightTargetParams.height * (u.y - 0.5);
     vec3 localPos = vec3(localX, localY, 0.0);
     //transform to world coordinates
-    samplePos = lsTargetParams.objToWorld * localPos + lsTargetParams.offset;
-    sampleNrm = lsTargetParams.normal;
+    vec3 samplePos = lightTargetParams.objToWorld * localPos + lightTargetParams.offset;
+    vec3 sampleNrm = lightTargetParams.normal;
 
-    return lsTargetParams.contrib;
+    return LightTargetSample(
+        samplePos,
+        sampleNrm,
+        lightTargetParams.mediumIdx,
+        lightTargetParams.contrib
+    );
 }
 
 #endif

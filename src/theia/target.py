@@ -4,12 +4,12 @@ import numpy as np
 from hephaistos.pipeline import SourceCodeMixin
 
 from theia.camera import Camera
-from theia.light import LightSource
+from theia.compiler import loadShader
+from theia.light import LightSource, WavelengthSource
 from theia.scene import Transform
-from theia.util import ShaderLoader
 import theia.units as u
 
-from ctypes import Structure, c_float
+from ctypes import Structure, c_float, c_uint32
 from hephaistos.glsl import mat3, vec3
 
 __all__ = [
@@ -124,8 +124,9 @@ class SphereTarget(Target):
             radius=radius,
         )
 
-    # source code via descriptor
-    sourceCode = ShaderLoader("target/sphere.glsl")
+    @property
+    def sourceCode(self) -> str:
+        return loadShader("target/sphere.glsl")
 
     def _finishParams(self, i):
         r = self.getParam("radius")
@@ -184,8 +185,9 @@ class InnerSphereTarget(Target):
         # save params
         self.setParams(position=position, radius=radius)
 
-    # source code via descriptor
-    sourceCode = ShaderLoader("target/sphere.inner.glsl")
+    @property
+    def sourceCode(self) -> str:
+        return loadShader("target/sphere.inner.glsl")
 
     def _finishParams(self, i):
         r = self.getParam("radius")
@@ -285,8 +287,9 @@ class FlatTarget(Target):
         self.up = up
         self.setParams(width=width, length=length, position=position)
 
-    # source code via descriptor
-    sourceCode = ShaderLoader("target/flat.glsl")
+    @property
+    def sourceCode(self) -> str:
+        return loadShader("target/flat.glsl")
 
     @property
     def direction(self) -> tuple[float, float, float]:
@@ -387,8 +390,9 @@ class DiskTarget(Target):
         )
         self.setParams(position=position, radius=radius, normal=normal, up=up)
 
-    # source code via descriptor
-    sourceCode = ShaderLoader("target/disk.glsl")
+    @property
+    def sourceCode(self) -> str:
+        return loadShader("target/disk.glsl")
 
     @property
     def normal(self) -> tuple[float, float, float]:
@@ -516,8 +520,9 @@ class SphereTargetGuide(TargetGuide):
             radius=radius,
         )
 
-    # source code via descriptor
-    sourceCode = ShaderLoader("target_guide/sphere.glsl")
+    @property
+    def sourceCode(self) -> str:
+        return loadShader("target_guide/sphere.glsl")
 
     def _finishParams(self, i):
         r = self.getParam("radius")
@@ -600,8 +605,9 @@ class FlatTargetGuide(TargetGuide):
         self.up = up
         self.setParams(width=width, height=height, position=position)
 
-    # source code via descriptor
-    sourceCode = ShaderLoader("target_guide/flat.glsl")
+    @property
+    def sourceCode(self) -> str:
+        return loadShader("target_guide/flat.glsl")
 
     @property
     def normal(self) -> tuple[float, float, float]:
@@ -697,8 +703,9 @@ class DiskTargetGuide(TargetGuide):
             normal=normal,
         )
 
-    # source code via descriptor
-    sourceCode = ShaderLoader("target_guide/disk.glsl")
+    @property
+    def sourceCode(self) -> str:
+        return loadShader("target_guide/disk.glsl")
 
     @property
     def normal(self) -> tuple[float, float, float]:
@@ -775,6 +782,8 @@ class DiskLightSourceTarget(LightSourceTarget):
 
     Parameters
     ----------
+    mediumIdx: int
+        Index of the medium the target lies in.
     position: (float, float, float), default=(0.0, 0.0, 0.0)
         Center of the circle
     radius: float, default=1.0m
@@ -788,6 +797,8 @@ class DiskLightSourceTarget(LightSourceTarget):
 
     Stage Parameters
     ----------------
+    mediumIdx: int
+        Index of the medium the target lies in.
     position: (float, float, float), default=(0.0, 0.0, 0.0)
         Center of the circle
     radius: float, default=1.0m
@@ -808,12 +819,14 @@ class DiskLightSourceTarget(LightSourceTarget):
             ("radius", c_float),
             ("_normal", vec3),
             ("_contrib", c_float),
+            ("mediumIdx", c_uint32),
             ("_objToWorld", mat3),
         ]
 
     def __init__(
         self,
         *,
+        mediumIdx: int,
         position: tuple[float, float, float] = (0.0, 0.0, 0.0),
         radius: float = 1.0 * u.m,
         normal: tuple[float, float, float] = (0.0, 0.0, 1.0),
@@ -824,10 +837,17 @@ class DiskLightSourceTarget(LightSourceTarget):
             params={"LightTargetParams": self.LightTargetParams},
             extra={"normal", "up"},
         )
-        self.setParams(position=position, radius=radius, normal=normal, up=up)
+        self.setParams(
+            mediumIdx=mediumIdx,
+            position=position,
+            radius=radius,
+            normal=normal,
+            up=up,
+        )
 
-    # source code via descriptor
-    sourceCode = ShaderLoader("lightsource/target/disk.glsl")
+    @property
+    def sourceCode(self) -> str:
+        return loadShader("lightsource/target/disk.glsl")
 
     @property
     def normal(self) -> tuple[float, float, float]:
@@ -869,6 +889,8 @@ class FlatLightSourceTarget(LightSourceTarget):
 
     Parameters
     ----------
+    mediumIdx: int
+        Index of the medium the target lies in.
     width: float, default=1cm
         Width of the target along the local x dimension.
     height: float, default=1cm
@@ -883,6 +905,8 @@ class FlatLightSourceTarget(LightSourceTarget):
 
     Stage Parameters
     ----------------
+    mediumIdx: int
+        Index of the medium the target lies in.
     width: float
         Width of the target along the local x dimension.
     height: float
@@ -910,12 +934,14 @@ class FlatLightSourceTarget(LightSourceTarget):
             ("position", vec3),
             ("_normal", vec3),
             ("_contrib", c_float),
+            ("mediumIdx", c_uint32),
             ("_objToWorld", mat3),
         ]
 
     def __init__(
         self,
         *,
+        mediumIdx: int,
         width: float = 1.0 * u.m,
         height: float = 1.0 * u.m,
         position: tuple[float, float, float] = (0.0, 0.0, 0.0),
@@ -930,10 +956,16 @@ class FlatLightSourceTarget(LightSourceTarget):
         # save params
         self.normal = normal
         self.up = up
-        self.setParams(width=width, height=height, position=position)
+        self.setParams(
+            mediumIdx=mediumIdx,
+            width=width,
+            height=height,
+            position=position,
+        )
 
-    # source code via descriptor
-    sourceCode = ShaderLoader("lightsource/target/flat.glsl")
+    @property
+    def sourceCode(self) -> str:
+        return loadShader("lightsource/target/flat.glsl")
 
     @property
     def normal(self) -> tuple[float, float, float]:
@@ -974,11 +1006,15 @@ class PointLightSourceTarget(LightSourceTarget):
 
     Parameters
     ----------
+    mediumIdx: int
+        Index of the medium the target lies in.
     position: (float, float, float), default=(0.0, 0.0, 0.0)
         Position of the target point
 
     Stage Parameters
     ----------------
+    mediumIdx: int
+        Index of the medium the target lies in.
     position: (float, float, float), default=(0.0, 0.0, 0.0)
         Position of the target point
     """
@@ -986,21 +1022,26 @@ class PointLightSourceTarget(LightSourceTarget):
     name = "Point Light Source Target"
 
     class LightTargetParams(Structure):
-        _fields_ = [("position", vec3)]
+        _fields_ = [("position", vec3), ("mediumIdx", c_uint32)]
 
     def __init__(
         self,
         *,
+        mediumIdx: int,
         position: tuple[float, float, float] = (0.0, 0.0, 0.0),
     ) -> None:
         super().__init__(
             nRNGSamples=0,
             params={"LightTargetParams": self.LightTargetParams},
         )
-        self.setParams(position=position)
+        self.setParams(
+            mediumIdx=mediumIdx,
+            position=position,
+        )
 
-    # source code via descriptor
-    sourceCode = ShaderLoader("lightsource/target/point.glsl")
+    @property
+    def sourceCode(self) -> str:
+        return loadShader("lightsource/target/point.glsl")
 
 
 class TargetLightSource(LightSource):
@@ -1015,8 +1056,6 @@ class TargetLightSource(LightSource):
         Principal light source producing light rays. Must support backward mode.
     target: LightSourceTarget | Camera
         Target used to subsample the light source.
-    checkVisibility: bool, default=True
-        If True, checks for produced rays whether they can reach the guide.
     updateLightSource: bool, default=True
         If True, update requests to this light source are delegated to the
         principal light source.
@@ -1031,18 +1070,24 @@ class TargetLightSource(LightSource):
         light: LightSource,
         target: LightSourceTarget | Camera,
         *,
-        checkVisibility: bool = True,
+        wavelengthSource: WavelengthSource | None = None,
         updateLightSource: bool = True,
         updateTarget: bool = True,
     ) -> None:
         # light source must be able to direct sample
         if not light.supportBackward:
             raise ValueError("Light source does not support backward mode!")
+        # we need a valid wavelength source
+        if wavelengthSource is None:
+            wavelengthSource = light.wavelengthSource
+        if wavelengthSource is None:
+            raise ValueError("Need to provide a wavelength source!")
         # camera (if provided) must support direct mode
         if isinstance(target, Camera) and not target.supportDirect:
             raise ValueError("Provided target camera does not support direct mode!")
 
         nRNG = light.nRNGBackward
+        nRNG += wavelengthSource.nRNGSamples
         if isinstance(target, Camera):
             nRNG += target.nRNGDirect
         else:
@@ -1051,20 +1096,13 @@ class TargetLightSource(LightSource):
             supportForward=True,
             supportBackward=False,
             nRNGForward=nRNG,
+            wavelengthSource=wavelengthSource,
         )
 
         self._light = light
         self._target = target
-        self._checkVisibility = checkVisibility
         self._updateLight = updateLightSource
         self._updateTarget = updateTarget
-
-    _sourceCode = ShaderLoader("lightsource/guided.glsl")
-
-    @property
-    def checkVisibility(self) -> bool:
-        """Whether visibility checks are enabled"""
-        return self._checkVisibility
 
     @property
     def principalLight(self) -> LightSource:
@@ -1079,17 +1117,17 @@ class TargetLightSource(LightSource):
     @property
     def sourceCode(self) -> str:
         useCam = isinstance(self.target, Camera)
+        code = loadShader("lightsource/guided.glsl")
         # encapsulate dependencies in renaming macros
         # fmt: off
         return "\n".join([
-            '#include "camera/common.glsl"',  # needed for camera target
             "#define sampleLight principal_sampleLight",
             self.principalLight.sourceCode,
             "#undef sampleLight",
+            '#include "lightsource/target/common.glsl"',
             self.target.sourceCode,
-            "#define LIGHTSOURCE_GUIDED_CHECK_VIS" if self.checkVisibility else "",
             "#define LIGHTSOURCE_GUIDED_USE_CAM" if useCam else "",
-            self._sourceCode,
+            code,
         ])
         # fmt: on
 

@@ -1,32 +1,39 @@
-layout(local_size_x = 32) in;
+layout(local_size_x = 512) in;
 
-#include "math.glsl"
-#include "wavelengthsource/common.glsl"
+#include "lightsource/target/common.glsl"
+#include "util/buffers.glsl"
 
 #include "rng.glsl"
 #include "photon.glsl"
 #include "target.glsl"
 
-struct Result {
-    float wavelength;
-    vec3 position;
-    vec3 normal;
-    float contrib;
-};
-writeonly buffer ResultBuffer { Result r[]; };
+uniform SamplerParams {
+    uvec2 queueAdr;
+    uint queueSize;
+} samplerParams;
 
 void main() {
-    uint idx = gl_GlobalInvocationID.x;
-    if (idx >= BATCH_SIZE) return;
     uint dim = 0;
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= samplerParams.queueSize) return;
 
     //sample wavelength
-    WavelengthSample photon = sampleWavelength(idx, dim);
-    float lambda = photon.wavelength;
+    float wavelength = sampleWavelength(idx, dim);
     //sample target
-    vec3 samplePos, sampleNrm;
-    float contrib = sampleLightTarget(lambda, samplePos, sampleNrm, idx, dim);
+    LightTargetSample targetSample = sampleLightTarget(wavelength, idx, dim);
 
     //save result
-    r[idx] = Result(lambda, samplePos, sampleNrm, contrib);
+    uint queueSize = samplerParams.queueSize;
+    FloatBuffer floats = FloatBuffer(samplerParams.queueAdr);
+    UIntBuffer uints = UIntBuffer(samplerParams.queueAdr);
+
+    #define _saveFloat(v) floats.values[idx] = (v); idx += queueSize
+    #define _saveVec3(v) _saveFloat(v.x); _saveFloat(v.y); _saveFloat(v.z)
+    #define _saveUInt(v) uints.values[idx] = (v); idx += queueSize
+
+    _saveFloat(wavelength);
+    _saveVec3(targetSample.position);
+    _saveVec3(targetSample.normal);
+    _saveUint(targetSample.mediumIdx);
+    _saveFloat(targetSample.contrib);
 }

@@ -3,16 +3,19 @@
 
 uniform LightTargetParams {
     vec3 position;
+    uint mediumIdx;
 } lightTargetParams;
 
-float sampleLightTarget(
+LightTargetSample sampleLightTarget(
     float wavelength,
-    out vec3 samplePos, out vec3 sampleNrm,
     uint idx, inout uint dim
 ) {
-    samplePos = lightTargetParams.position;
-    sampleNrm = vec3(0.0);
-    return 1.0;
+    return LightTargetSample(
+        lightTargetParams.position,
+        vec3(0.0),
+        lightTargetParams.mediumIdx,
+        1.0
+    );
 }
 
 #endif

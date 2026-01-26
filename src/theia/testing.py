@@ -5,19 +5,46 @@ import hephaistos as hp
 from hephaistos.pipeline import PipelineStage
 from hephaistos.queue import IOQueue
 
-from ctypes import Structure, c_float, c_uint32
+from ctypes import Structure, c_float, c_int32, c_uint32
 from hephaistos.glsl import buffer_reference, vec3
 from theia.util import createCType
 
 from theia.compiler import createPreamble, compileShader
-from theia.light import LightSource
+from theia.light import LightSource, WavelengthSource
 from theia.material import MaterialStore, VACUUM_IDX
 from theia.random import RNG
 from theia.ray import RayModel
+from theia.scene import RectBBox
+from theia.target import LightSourceTarget, Target
 import theia.units as u
 
 
 class BackwardLightSampler(PipelineStage):
+    """
+    Samples the given light source in backward mode.
+
+    Parameters
+    ----------
+    batchSize: int
+        Number of rays to sample per run
+    source: LightSource
+        Light source to sampler
+    ray: RayModel
+        Ray model to use
+    rng: RNG
+        Random number generator
+    materials: MaterialStore | None, default = None
+        Optional material store containing required medium properties.
+    medium: str | int | None, default = None
+        Medium from which to sample the light source. Can be specified by either
+        its index or its name. Defaults to vacuum if `None`.
+    observer: (float, float, float) | None, default=None
+        Optional fixed observer position. If `None`, a random observer position
+        for each sample will be drawn.
+    box_size: float, default=100.0m
+        Side length of the cube centered at the origin used to sample the target
+        position delegated to the light source.
+    """
 
     class SamplerParams(Structure):
         _fields_ = [
@@ -159,4 +186,216 @@ class BackwardLightSampler(PipelineStage):
         return [
             self._program.dispatch(groups),
             *self.queue.run(i),
+        ]
+
+
+class LightSourceTargetSampler(PipelineStage):
+    """
+    Sampler for light source targets.
+
+    Parameters
+    ----------
+    batchSize: int
+        Number of samples to draw per run
+    target: LightSourceTarget
+        Target to sample
+    wavelengthSource: WavelengthSource
+        Source producing wavelengths
+    rng: RNG
+        Random number generator
+    """
+
+    class Item(Structure):
+        _fields_ = [
+            ("wavelength", c_float),
+            ("position", c_float * 3),
+            ("normal", c_float * 3),
+            ("mediumIdx", c_uint32),
+            ("contrib", c_float),
+        ]
+
+    class SamplerParams(Structure):
+        _fields_ = [
+            ("_queueAdr", buffer_reference),
+            ("_queueSize", c_uint32),
+        ]
+
+    def __init__(
+        self,
+        batchSize: int,
+        target: LightSourceTarget,
+        wavelengthSource: WavelengthSource,
+        *,
+        rng: RNG,
+    ) -> None:
+        super().__init__({"SamplerParams": LightSourceTargetSampler.SamplerParams})
+
+        self._batchSize = batchSize
+        self._target = target
+        self._photons = wavelengthSource
+        self._rng = rng
+        self._queue = IOQueue(
+            LightSourceTargetSampler.Item, batchSize, mode="retrieve", skipCounter=True
+        )
+        assert self._queue.tensor is not None
+        self.setParams(
+            _queueAdr=self._queue.tensor.address,
+            _queueSize=batchSize,
+        )
+
+        headers = {
+            "target.glsl": target.sourceCode,
+            "photon.glsl": wavelengthSource.sourceCode,
+            "rng.glsl": rng.sourceCode,
+        }
+        code = compileShader("lightsource/target/sample.glsl", "", headers)
+        self._program = hp.Program(code)
+
+    @property
+    def batchSize(self) -> int:
+        """Number of samples to draw per batch"""
+        return self._batchSize
+
+    @property
+    def queue(self) -> IOQueue:
+        """Queue containing the samples"""
+        return self._queue
+
+    @property
+    def rng(self) -> RNG:
+        """Generator for creating random numbers"""
+        return self._rng
+
+    @property
+    def target(self) -> LightSourceTarget:
+        """Target being sampled"""
+        return self._target
+
+    @property
+    def wavelengthSource(self) -> WavelengthSource:
+        """Source used to sample wavelengths"""
+        return self._photons
+
+    def collectStages(self) -> list[PipelineStage]:
+        """Returns a list of all used pipeline stages in correct order"""
+        return [self.rng, self.wavelengthSource, self.target, self]
+
+    def run(self, i: int) -> list[hp.Command]:
+        for stage in self.collectStages():
+            stage.bindParams(self._program, i)
+        groups = -(self.batchSize // -512)
+        return [
+            self._program.dispatch(groups),
+            *self.queue.run(i),
+        ]
+
+
+class TargetSampler(PipelineStage):
+    """
+    Sampler for targets.
+
+    Parameters
+    ----------
+    batchSize: int
+        Number of samples to draw per run
+    target: Target
+        Target to draw samples from
+    rng: RNG
+        Random number generator
+    sampleBox: RectBBox
+        Rectangular box from which the observer position will be sampled.
+    """
+
+    class Item(Structure):
+        _fields_ = [
+            ("observer", c_float * 3),
+            ("direction", c_float * 3),
+            ("samplePos", c_float * 3),
+            ("sampleNrm", c_float * 3),
+            ("sampleProb", c_float),
+            ("sampleValid", c_uint32),
+            ("sampleError", c_int32),
+            ("hitPos", c_float * 3),
+            ("hitNrm", c_float * 3),
+            ("hitProb", c_float),
+            ("hitValid", c_uint32),
+            ("hitError", c_int32),
+            ("occluded", c_uint32),
+        ]
+
+    class SamplerParams(Structure):
+        _fields_ = [
+            ("_queueAdr", buffer_reference),
+            ("_queueSize", c_uint32),
+            ("_dimMin", vec3),
+            ("_dimMax", vec3),
+        ]
+
+    def __init__(
+        self,
+        batchSize: int,
+        target: Target,
+        *,
+        rng: RNG,
+        sampleBox: RectBBox | None = None,
+    ) -> None:
+        super().__init__({"SamplerParams": TargetSampler.SamplerParams})
+        if sampleBox is None:
+            sampleBox = RectBBox((-20.0, -20.0, -20.0) * u.m, (20.0, 20.0, 20.0) * u.m)
+
+        self._target = target
+        self._rng = rng
+        self._batch = batchSize
+        self._queue = IOQueue(
+            TargetSampler.Item, batchSize, mode="retrieve", skipCounter=True
+        )
+        assert self._queue.tensor is not None
+        self.setParams(
+            _queueAdr=self._queue.tensor.address,
+            _queueSize=batchSize,
+            _dimMin=sampleBox.lowerCorner,
+            _dimMax=sampleBox.upperCorner,
+        )
+
+        headers = {
+            "rng.glsl": rng.sourceCode,
+            "target.glsl": target.sourceCode,
+        }
+        code = compileShader("target/sample.glsl", "", headers)
+        self._program = hp.Program(code)
+
+    @property
+    def batchSize(self) -> int:
+        """Number of samples to draw per run"""
+        return self._queueSize
+
+    @property
+    def queue(self) -> IOQueue:
+        """Queue containing samples"""
+        return self._queue
+
+    @property
+    def rng(self) -> RNG:
+        """Random number generator"""
+        return self._rng
+
+    @property
+    def target(self) -> Target:
+        """Target to sample"""
+        return self._target
+
+    def collectStages(self) -> list[PipelineStage]:
+        """
+        Returns a list of all stages involved with this sampler in the correct
+        order suitable for creating a pipeline.
+        """
+        return [self.rng, self.target, self]
+
+    def run(self, i: int) -> list[hp.Command]:
+        for stage in self.collectStages():
+            stage.bindParams(self._program, i)
+        groups = -(self.batchSize // -512)
+        return [
+            self._program.dispatch(groups),
+            *self._queue.run(i),
         ]

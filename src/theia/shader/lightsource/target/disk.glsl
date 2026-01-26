@@ -9,12 +9,13 @@ uniform LightTargetParams {
     vec3 normal;
 
     float contrib;
+    uint mediumIdx;
+
     mat3 objToWorld;
 } lightTargetParams;
 
-float sampleLightTarget(
+LightTargetSample sampleLightTarget(
     float wavelength,
-    out vec3 samplePos, out vec3 sampleNrm,
     uint idx, inout uint dim
 ) {
     //sample point on disk
@@ -23,7 +24,12 @@ float sampleLightTarget(
     samplePos = lightTargetParams.objToWorld * localPos + lightTargetParams.position;
     sampleNrm = lightTargetParams.normal;
 
-    return lightTargetParams.contrib;
+    return LightTargetSample(
+        samplePos,
+        sampleNrm,
+        lightTargetParams.mediumIdx,
+        lightTargetParams.contrib
+    );
 }
 
 #endif

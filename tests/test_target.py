@@ -4,16 +4,16 @@ import numpy as np
 from hephaistos.pipeline import runPipeline
 
 import theia.target
-from theia.camera import FlatCamera
 from theia.light import ConstWavelengthSource, LightSampler, SphericalLightSource
-from theia.material import Material, MaterialStore
+from theia.material import VACUUM_IDX
 from theia.random import PhiloxRNG
-from theia.scene import MeshStore, RectBBox, Scene, Transform
-from theia.testing import TargetSampler, WaterTestModel
+from theia.ray import UnpolarizedRay
+from theia.scene import RectBBox, Transform
+from theia.testing import TargetSampler
 import theia.units as u
 
 
-def test_diskTarget():
+def test_DiskTarget():
     N = 32 * 256
 
     # params
@@ -34,10 +34,10 @@ def test_diskTarget():
     philox = PhiloxRNG(key=0xC0FFEE)
     sampler = TargetSampler(N, target, rng=philox)
     # run
-    runPipeline([philox, target, sampler])
+    runPipeline(sampler.collectStages())
 
     # check results
-    r = sampler.getResults(0)
+    r = sampler.queue.view(0)
     objObs = w2o.apply(r["observer"])
     objDir = w2o.applyVec(r["direction"])
     nrm = np.zeros((N, 3))
@@ -67,7 +67,7 @@ def test_diskTarget():
     assert np.allclose(r["hitProb"][hit], 1.0 / area)
 
 
-def test_flatTarget():
+def test_FlatTarget():
     N = 32 * 256
 
     # params
@@ -90,10 +90,10 @@ def test_flatTarget():
     philox = PhiloxRNG(key=0xC0FFEE)
     sampler = TargetSampler(N, target, rng=philox)
     # run
-    runPipeline([philox, target, sampler])
+    runPipeline(sampler.collectStages())
 
     # check result
-    r = sampler.getResults(0)
+    r = sampler.queue.view(0)
     objObs = w2o.apply(r["observer"])
     objDir = w2o.applyVec(r["direction"])
     nrm = np.zeros((N, 3))
@@ -122,7 +122,7 @@ def test_flatTarget():
     assert np.allclose(r["hitProb"][hit], 1.0 / area)
 
 
-def test_innerSphereTarget():
+def test_InnerSphereTarget():
     N = 32 * 256
 
     # params
@@ -135,10 +135,10 @@ def test_innerSphereTarget():
     philox = theia.random.PhiloxRNG(key=0xC0FFEE)
     sampler = TargetSampler(N, target, rng=philox, sampleBox=box)
     # run
-    runPipeline([philox, target, sampler])
+    runPipeline(sampler.collectStages())
 
     # check result
-    r = sampler.getResults(0)
+    r = sampler.queue.view(0)
     od = np.sqrt(np.square(r["observer"] - pos).sum(-1))
     assert np.all((od >= radius) == r["occluded"])
     oclMask = r["occluded"] == 0  # ignore occluded samples
@@ -163,7 +163,7 @@ def test_innerSphereTarget():
     assert np.allclose(-hn, r["hitNrm"][hitMask])
 
 
-def test_sphereTarget():
+def test_SphereTarget():
     N = 32 * 256
 
     # params
@@ -175,10 +175,10 @@ def test_sphereTarget():
     philox = PhiloxRNG(key=0xC0FFEE)
     sampler = TargetSampler(N, target, rng=philox)
     # run
-    runPipeline([philox, target, sampler])
+    runPipeline(sampler.collectStages())
 
     # check result
-    r = sampler.getResults(0)
+    r = sampler.queue.view(0)
     od = np.sqrt(np.square(r["observer"] - pos).sum(-1))
     assert np.all((od <= radius) == r["occluded"])
     oclMask = r["occluded"] == 0  # ignore occluded samples
@@ -203,7 +203,7 @@ def test_sphereTarget():
     assert np.allclose(hn, r["hitNrm"][hitMask])
 
 
-def test_pointLightTarget():
+def test_PointLightTarget():
     N = 32 * 256
     light_pos = (4.0, -2.0, 3.0) * u.m
     budget = 50.0
@@ -211,19 +211,27 @@ def test_pointLightTarget():
     t_range = (10.0, 10.0) * u.ns
 
     # create pipeline
+    ray = UnpolarizedRay()
     philox = PhiloxRNG(key=0xC0FFEE)
     photons = ConstWavelengthSource(wavelength=450.0 * u.nm)
     principal = SphericalLightSource(
-        position=light_pos, timeRange=t_range, budget=budget
+        photons,
+        mediumIdx=VACUUM_IDX,
+        position=light_pos,
+        timeRange=t_range,
+        budget=budget,
     )
-    target = theia.target.PointLightSourceTarget(position=target_pos)
-    light = theia.target.TargetLightSource(principal, target, checkVisibility=False)
-    sampler = LightSampler(light, photons, N, rng=philox)
+    target = theia.target.PointLightSourceTarget(
+        mediumIdx=VACUUM_IDX,
+        position=target_pos,
+    )
+    light = theia.target.TargetLightSource(principal, target)
+    sampler = LightSampler(N, light, ray, rng=philox)
     # run
     runPipeline(sampler.collectStages())
-    result = sampler.lightQueue.view(0)
 
     # check results
+    result = sampler.queue.view(0)
     exp_dir = np.subtract(target_pos, light_pos)
     dist = np.sqrt(np.square(exp_dir).sum(-1))
     exp_dir /= dist
@@ -234,7 +242,7 @@ def test_pointLightTarget():
     assert np.allclose(exp_contrib, result["contrib"])
 
 
-def test_diskLightTarget():
+def test_DiskLightTarget():
     N = 32 * 256
     light_pos = (4.0, -2.0, 3.0) * u.m
     budget = 50.0
@@ -247,26 +255,30 @@ def test_diskLightTarget():
     w2o = o2w.inverse()
 
     # create pipeline
+    ray = UnpolarizedRay()
     philox = PhiloxRNG(key=0x01DBEEF)
     photons = ConstWavelengthSource(wavelength=450.0 * u.nm)
     principal = SphericalLightSource(
+        photons,
+        mediumIdx=VACUUM_IDX,
         position=light_pos,
         timeRange=t_range,
         budget=budget,
     )
     target = theia.target.DiskLightSourceTarget(
+        mediumIdx=VACUUM_IDX,
         position=target_pos,
         radius=radius,
         normal=target_dir,
         up=target_up,
     )
-    light = theia.target.TargetLightSource(principal, target, checkVisibility=False)
-    sampler = LightSampler(light, photons, N, rng=philox)
+    light = theia.target.TargetLightSource(principal, target)
+    sampler = LightSampler(N, light, ray, rng=philox)
     # run
     runPipeline(sampler.collectStages())
-    result = sampler.lightQueue.view(0)
 
     # check results
+    result = sampler.queue.view(0)
     objPos = w2o.apply(np.array(light_pos))
     objDir = w2o.applyVec(result["direction"])
     t = -objPos[2] / objDir[:, 2]
@@ -278,7 +290,7 @@ def test_diskLightTarget():
     assert np.allclose(exp_contrib, result["contrib"])
 
 
-def test_flatLightTarget():
+def test_FlatLightTarget():
     N = 32 * 256
     light_pos = (4.0, -2.0, 3.0) * u.m
     budget = 50.0
@@ -291,27 +303,31 @@ def test_flatLightTarget():
     w2o = o2w.inverse()
 
     # create pipeline
+    ray = UnpolarizedRay()
     philox = PhiloxRNG(key=0xC0FFEE)
     photons = ConstWavelengthSource(wavelength=450.0 * u.nm)
     principal = SphericalLightSource(
+        photons,
+        mediumIdx=VACUUM_IDX,
         position=light_pos,
         timeRange=t_range,
         budget=budget,
     )
     target = theia.target.FlatLightSourceTarget(
+        mediumIdx=VACUUM_IDX,
         width=width,
         height=height,
         position=target_pos,
         normal=target_dir,
         up=target_up,
     )
-    light = theia.target.TargetLightSource(principal, target, checkVisibility=False)
-    sampler = LightSampler(light, photons, N, rng=philox)
+    light = theia.target.TargetLightSource(principal, target)
+    sampler = LightSampler(N, light, ray, rng=philox)
     # run
     runPipeline(sampler.collectStages())
-    result = sampler.lightQueue.view(0)
 
     # check results
+    result = sampler.queue.view(0)
     objDir = w2o.applyVec(result["direction"])
     objPos = w2o.apply(np.array(light_pos))
     t = -objPos[2] / objDir[:, 2]
@@ -321,69 +337,3 @@ def test_flatLightTarget():
     cos_nrm = np.abs(objDir[:, 2])  # normal in obj is z
     exp_contrib = width * height * budget * cos_nrm / (4.0 * np.pi * t**2)
     assert np.allclose(exp_contrib, result["contrib"])
-
-
-@pytest.mark.parametrize("checkVisibility", [True, False])
-def test_targetLightSource(checkVisibility: bool):
-    N = 32 * 256
-    light_pos = (0.0, 0.0, 3.0) * u.m
-    timeRange = (10.0, 10.0) * u.ns
-    budget = 50.0
-    cam_pos = (0.0, 0.0, -1.1) * u.m  # slightly below scene cube
-    cam_dir = (0.0, 0.0, 1.0)
-    cam_up = (0.0, 1.0, 0.0)
-    width, height = (1.0, 1.0) * u.m
-    o2w = Transform.View(position=cam_pos, direction=cam_dir, up=cam_up)
-    w2o = o2w.inverse()
-
-    # create materials
-    water = WaterTestModel().createMedium()
-    mat = Material("mat", None, water, flags="B")
-    matStore = MaterialStore([mat])
-    # create scene
-    store = MeshStore({"cube": "assets/cube.ply"})
-    trafo = Transform.TRS(translate=(1.0, 0.0, 0.0))
-    inst = store.createInstance("cube", "mat", trafo)
-    scene = Scene([inst], matStore, medium="water")
-
-    # create pipeline
-    philox = PhiloxRNG(key=0xC0FFEE)
-    photons = ConstWavelengthSource(wavelength=450.0 * u.nm)
-    principal = SphericalLightSource(
-        position=light_pos,
-        timeRange=timeRange,
-        budget=budget,
-    )
-    camera = FlatCamera(
-        width=width,
-        length=height,
-        position=cam_pos,
-        direction=cam_dir,
-        up=cam_up,
-    )
-    light = theia.target.TargetLightSource(
-        principal,
-        camera,
-        checkVisibility=checkVisibility,
-    )
-    sampler = LightSampler(light, photons, N, rng=philox, scene=scene)
-    # run
-    runPipeline(sampler.collectStages())
-    result = sampler.lightQueue.view(0)
-
-    # check results
-    objDir = w2o.applyVec(result["direction"])
-    objPos = w2o.apply(np.array(light_pos))
-    t = -objPos[2] / objDir[:, 2]
-    objHit = objPos + objDir * t[:, None]
-    invalid = np.isnan(result["contrib"])
-    hit = (t > 0) & (2.0 * np.abs(objHit[:, :2]) <= (width, height)).min(-1)
-    assert np.all(hit[~invalid])
-    cos_nrm = np.abs(objDir[:, 2])  # normal in obj is z
-    exp_contrib = width * height * budget * cos_nrm / (4.0 * np.pi * t**2)
-    assert np.allclose(exp_contrib[~invalid], result["contrib"][~invalid])
-    # check occlusion
-    if checkVisibility:
-        assert objHit[~invalid][:, 0].max() <= 0.0
-    else:
-        assert objHit[~invalid][:, 0].max() > 0.0
