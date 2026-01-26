@@ -8,6 +8,15 @@
 #define SPEED_OF_LIGHT 0.299792458 // m/ns
 #define INV_SPEED_OF_LIGHT 3.335640951981521 // ns / m
 
+//Medium id corresponding to missing (vacuum) medium
+const uint VACUUM_MEDIUM_IDX = 0xFFFFFFFFu;
+//Checks whether the given idx references vacuum
+//We use a special idx to denote this. In order to not copy this magic value
+//everywhere, use this function instead.
+bool isVacuum(uint mediumIdx) {
+    return mediumIdx == VACUUM_MEDIUM_IDX;
+}
+
 readonly buffer MediaTable {
     uint stride;    //stride between slots
     //padding to ensure a single uvec2 data entry is not split across two banks
@@ -23,58 +32,20 @@ readonly buffer MediaTable {
 #define loadMediaSlot_vec2(slot, idx) uintBitsToFloat(mediaTable.data[mediaTable.stride * MEDIA_SLOT_##slot + idx])
 #define loadMediaSlot_uvec2(slot, idx) mediaTable.data[mediaTable.stride * MEDIA_SLOT_##slot + idx]
 
-//Medium id corresponding to missing (vacuum) medium
-const uint VACUUM_MEDIUM_IDX = 0xFFFFFFFFu;
-//Checks whether the given idx references vacuum
-//We use a special idx to denote this. In order to not copy this magic value
-//everywhere, use this function instead.
-bool isVacuum(uint mediumIdx) {
-    return mediumIdx == VACUUM_MEDIUM_IDX;
+float lookUpMediaTable1D_imp(uint slotIdx, uint mediumIdx, float u, float def) {
+    if (isVacuum(mediumIdx)) return def;
+
+    Table1D table = Table1D(mediaTable.data[mediaTable.stride * slotIdx + mediumIdx]);
+    return lookUp(table, u, def);
 }
+#define lookUpMediaTable1D(slot, idx, u, def) lookUpMediaTable1D_imp(MEDIA_SLOT_##slot, idx, u, def)
 
 //util function for mapping wavelength to unit range
 float normalize_lambda(uint mediumIdx, float wavelength) {
+    if (isVacuum(mediumIdx)) return 0.0;
+
     vec2 range = loadMediaSlot_vec2(WAVELENGTH_RANGE, mediumIdx);
     return clamp((wavelength - range.x) / (range.y - range.x), 0.0, 1.0);
-}
-
-//TODO: Make this user definable
-//We'll keep the current constants in memory, so we don't have to constantly
-//look up the same values over and over
-struct MediumConstants {
-    float n;    //refractive index
-    float vg;   //group velocity
-    float mu_s; //scattering coefficient
-    float mu_e; //extinction coefficient
-};
-MediumConstants lookUpMedium(const uint mediumIdx, float lambda) {
-    if (isVacuum(mediumIdx)) {
-        return MediumConstants(
-            1.0,            //refractive index
-            SPEED_OF_LIGHT, //group velocity
-            0.0,            //scattering coefficient
-            0.0             //extinction coefficient
-        );
-    }
-
-    //Fetch tables
-    Table1D refractive_index = loadMediaSlot_Table1D(REFRACTIVE_INDEX, mediumIdx);
-    Table1D group_velocity = loadMediaSlot_Table1D(GROUP_VELOCITY, mediumIdx);
-    Table1D absorption = loadMediaSlot_Table1D(ABSORPTION_COEF, mediumIdx);
-    Table1D scattering = loadMediaSlot_Table1D(SCATTERING_COEF, mediumIdx);
-    //normalize lambda once
-    float u = normalize_lambda(mediumIdx, lambda);
-    //look coefficients
-    float mu_a = lookUp(absorption, u, 0.0);   //absorption
-    float mu_s = lookUp(scattering, u, 0.0);   //scattering
-    float mu_e = mu_a + mu_s;                   // extinction
-
-    //look up constants in tables; last argument is default value
-    return MediumConstants(
-        lookUp(refractive_index,  u, 1.0),
-        lookUp(group_velocity, u, SPEED_OF_LIGHT),
-        mu_s, mu_e
-    );
 }
 
 readonly buffer MaterialTable {
