@@ -45,7 +45,10 @@ def loadCSV(file: str, *, delimiter: str | None = ",", skiprows: int = 1) -> NDA
     )
 
 
-def createCType(name: str, fields: Sequence[_SimpleCData | Array]) -> type[Structure]:
+def createCType(
+    name: str,
+    fields: Sequence[tuple[str, type[_SimpleCData | Array]]],
+) -> type[Structure]:
     """Util function for dynamically creating ctypes structures"""
     return type(name, (Structure,), {"_fields_": fields})
 
