@@ -3,11 +3,12 @@ from __future__ import annotations
 import numpy as np
 import importlib.resources
 
-from ctypes import Structure, c_uint32
+from ctypes import _SimpleCData, Array, Structure, c_uint32
 from hephaistos.glsl import uvec4, uvec2
 from numpy.ctypeslib import as_array
 
 from numpy.typing import NDArray
+from typing import Sequence
 
 
 class classproperty:
@@ -42,6 +43,11 @@ def loadCSV(file: str, *, delimiter: str | None = ",", skiprows: int = 1) -> NDA
         delimiter=delimiter,
         skiprows=skiprows,
     )
+
+
+def createCType(name: str, fields: Sequence[_SimpleCData | Array]) -> type[Structure]:
+    """Util function for dynamically creating ctypes structures"""
+    return type(name, (Structure,), {"_fields_": fields})
 
 
 def viewSoA(address: int, item: type[Structure], count: int) -> NDArray:
