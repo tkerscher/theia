@@ -1,15 +1,30 @@
 #ifndef _INCLUDE_WAVELENGTHSOURCE_HOST
 #define _INCLUDE_WAVELENGTHSOURCE_HOST
 
-#include "wavelengthsource/queue.glsl"
+#include "util/buffers.glsl"
 
-readonly buffer WavelengthQueueIn {
-    WavelengthQueue queue;
-} wavelengthQueueIn;
+uniform WavelengthParams {
+    uvec2 queueAdr;
+    uint queueSize;
+} wavelengthParams;
 
-WavelengthSample sampleWavelength(uint idx, uint dim) {
-    LOAD_PHOTON(photon, wavelengthQueueIn.queue, idx)
-    return photon;
+#ifdef WAVELENGTH_SOURCE_EMIT_PARTICLE
+
+float sampleWavelength(uint idx, inout uint dim) {
+    FloatBuffer floats = FloatBuffer(wavelengthParams.queueAdr);
+    return floats.values[idx];
 }
+
+#else
+
+float sampleWavelength(out float contrib, uint idx, inout uint dim) {
+    FloatBuffer floats = FloatBuffer(wavelengthParams.queueAdr);
+    float lambda = floats.values[idx];
+    idx += wavelengthParams.queueSize;
+    contrib = floats.values[idx];
+    return lambda;
+}
+
+#endif
 
 #endif

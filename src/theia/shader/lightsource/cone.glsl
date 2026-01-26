@@ -2,11 +2,14 @@
 #define _INCLUDE_LIGHTSOURCE_CONE
 
 #include "math.glsl"
+#include "util/jacobian.glsl"
 
 uniform LightParams {
-    vec3 position;
     vec3 direction;
     float cosOpeningAngle;
+    vec3 position;
+
+    uint mediumIdx;
 
     float contribFwd;
     float contribBwd;
@@ -14,16 +17,17 @@ uniform LightParams {
     float t_min;
     float t_max;
 
-    //always keep polarization info to make things easier on the python side
-    vec3 polRef;
-    vec4 stokes;
 } lightParams;
 
-SourceRay sampleLight(
-    float wavelength,
-    const MediumConstants medium,
-    uint idx, inout uint dim
-) {
+ForwardRay sampleLight(uint idx, inout uint dim) {
+    //sample wavelength using wavelength source
+    #ifdef LIGHT_SOURCE_EMIT_PARTICLE
+    float wavelength = sampleWavelength(idx, dim);
+    #else
+    float contrib;
+    float wavelength = sampleWavelength(contrib, idx, dim);
+    #endif
+
     //sample cone
     vec2 u = random2D(idx, dim);
     float phi = TWO_PI * u.x;
@@ -43,38 +47,25 @@ SourceRay sampleLight(
     float v = random(idx, dim);
     float startTime = mix(lightParams.t_min, lightParams.t_max, v);
 
-    #ifdef LIGHTSOURCE_POLARIZED
-    //make polRef orthogonal to light ray direction
-    //Obviously fails for rayDir || polRef
-    // -> Check this on the python side
-    vec3 polRef = lightParams.polRef;
-    polRef -= dot(polRef, rayDir) * rayDir;
-    polRef = normalize(polRef);
-
-    //assemble source ray
-    return createSourceRay(
+    //assemble forward ray
+    return createForwardRay(
         lightParams.position,
         rayDir,
-        lightParams.stokes,
-        polRef,
-        startTime,
-        lightParams.contribFwd
+        wavelength,
+        lightParams.mediumIdx,
+        startTime
+        #ifndef LIGHT_SOURCE_EMIT_PARTICLE
+        , contrib * lightParams.contribFwd
+        #endif
     );
-    #else
-    //assemble source ray
-    return createSourceRay(
-        lightParams.position,
-        rayDir,
-        startTime,
-        lightParams.contribFwd
-    );
-    #endif
 }
 
-SourceRay sampleLight(
+#ifndef LIGHT_SOURCE_EMIT_PARTICLE
+
+ForwardRay sampleLight(
     vec3 observer, vec3 normal,
     float wavelength,
-    const MediumConstants medium,
+    uint mediumIdx,
     uint idx, inout uint dim
 ) {
     //get direction
@@ -87,31 +78,17 @@ SourceRay sampleLight(
     float u = random(idx, dim);
     float startTime = mix(lightParams.t_min, lightParams.t_max, u);
 
-    #ifdef LIGHTSOURCE_POLARIZED
-    //TODO: Check if edge case rayDir || polRef causes problems
-    //      (contrib should be zero)
-    vec3 polRef = lightParams.polRef;
-    polRef -= dot(polRef, rayDir) * rayDir;
-    polRef = normalize(polRef);
-
-    //assemble source ray
-    return createSourceRay(
+    //assemble forward ray
+    return createForwardRay(
         lightParams.position,
         rayDir,
-        lightParams.stokes,
-        polRef,
+        wavelength,
+        lightParams.mediumIdx,
         startTime,
         contrib
     );
-    #else
-    //assemble source ray
-    return createSourceRay(
-        lightParams.position,
-        rayDir,
-        startTime,
-        contrib
-    );
-    #endif
 }
+
+#endif
 
 #endif

@@ -10,9 +10,13 @@ uniform WavelengthParams {
     float contrib;
 } wavelengthParams;
 
-WavelengthSample sampleWavelength(uint idx, inout uint i) {
-    float lam = lookUp(wavelengthParams.table, random(idx, i), 0.0);
-    return WavelengthSample(lam, wavelengthParams.contrib);
+float sampleWavelength(uint idx, inout uint dim) {
+    return lookUp(wavelengthParams.table, random(idx, dim), 0.0);
+}
+
+float sampleWavelength(out float contrib, uint idx, inout uint dim) {
+    contrib = wavelengthParams.contrib;
+    return lookUp(wavelengthParams.table, random(idx, dim), 0.0);
 }
 
 #endif

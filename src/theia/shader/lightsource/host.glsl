@@ -1,21 +1,13 @@
 #ifndef _INCLUDE_LIGHTSOURCE_HOST
 #define _INCLUDE_LIGHTSOURCE_HOST
 
-#include "lightsource/queue.glsl"
+uniform LightParams {
+    uvec2 queueAdr;
+    uint queueSize;
+} lightParams;
 
-//read and return rays from a buffer
-
-readonly buffer LightQueueIn {
-    LightSourceQueue queue;
-} lightQueueIn;
-
-SourceRay sampleLight(
-    float wavelength,
-    const MediumConstants medium,    
-    uint idx, uint dim
-) {
-    LOAD_SAMPLE(ray, lightQueueIn.queue, idx)
-    return ray;
+ForwardRay sampleLight(uint idx, inout uint dim) {
+    return loadForwardRay(lightParams.queueAdr, lightParams.queueSize, idx);
 }
 
 #endif

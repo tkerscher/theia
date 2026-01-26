@@ -6,31 +6,35 @@ uniform LightParams {
     vec3 direction;
     float budget;
 
+    uint mediumIdx;
+
     float t_min;
     float t_max;
-
-    //always keep polarization params
-    //makes it easier on the python side
-    vec4 stokes;
-    vec3 polRef;
 } lightParams;
 
-SourceRay sampleLight(
-    float wavelength,
-    const MediumConstants medium,
-    uint idx, inout uint dim
-) {
+ForwardRay sampleLight(uint idx, inout uint dim) {
+    //sample wavelength using wavelength source
+    #ifdef LIGHT_SOURCE_EMIT_PARTICLE
+    float wavelength = sampleWavelength(idx, dim);
+    #else
+    float contrib;
+    float wavelength = sampleWavelength(contrib, idx, dim);
+    #endif
+
     //sample startTime
     float u = random(idx, dim);
     float startTime = mix(lightParams.t_min, lightParams.t_max, u);
-    //assemble source and return
-    return createSourceRay(
+
+    //assemble forward ray
+    return createForwardRay(
         lightParams.position,
         lightParams.direction,
-        lightParams.stokes,
-        lightParams.polRef,
-        startTime,
-        lightParams.budget
+        wavelength,
+        lightParams.mediumIdx,
+        startTime
+        #ifndef LIGHT_SOURCE_EMIT_PARTICLE
+        , contrib * lightParams.budget
+        #endif
     );
 }
 
