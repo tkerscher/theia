@@ -13,7 +13,9 @@ import theia.compiler
 # needed to discover common package...
 sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 # add test shader to include dirs
-theia.compiler.addIncludeDir(pathlib.Path(os.path.basename(__file__) + "/shader/"))
+theia.compiler.addIncludeDir(
+    pathlib.Path(__file__).parent.resolve().joinpath("shader/")
+)
 
 
 # @pytest.fixture(scope="session", autouse=True)
