@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from ctypes import Structure, c_float, c_int32, c_uint32
 from theia.compiler import createPreamble, loadShader
+from theia.util import createCType
 
 __all__ = [
     "RayModel",
@@ -140,27 +141,20 @@ class UnpolarizedRay(RayModel):
             forwardFields.append(("contrib", c_float))
             backwardFields.append(("contrib", c_float))
 
-        class HitItem(Structure):
-            _fields_ = hitFields
-
-        class ForwardItem(Structure):
-            _fields_ = forwardFields
-
-        class BackwardItem(Structure):
-            _fields_ = backwardFields
-        
-        class CameraItem(Structure):
-            _fields_ = backwardFields + cameraHitFields
-
-        self._hitItem = HitItem
-        self._forwardItem = ForwardItem
-        self._backwardItem = BackwardItem if not particle else None
-        self._cameraItem = CameraItem if not particle else None
+        self._hitItem = createCType("HitItem", hitFields)
+        self._forwardItem = createCType("ForwardItem", forwardFields)
+        if particle:
+            self._backwardItem = None
+            self._cameraItem = None
+        else:
+            self._backwardItem = createCType("BackwardItem", backwardFields)
+            cameraFields = backwardFields + cameraHitFields
+            self._cameraItem = createCType("CameraItem", cameraFields)
 
     @property
     def backwardItem(self) -> type[Structure] | None:
         return self._backwardItem
-    
+
     @property
     def cameraItem(self) -> type[Structure] | None:
         return self._cameraItem
