@@ -1,5 +1,5 @@
-#ifndef _INCLUDE_CAMERARAYSOURCE_POINT
-#define _INCLUDE_CAMERARAYSOURCE_POINT
+#ifndef _INCLUDE_CAMERA_POINT
+#define _INCLUDE_CAMERA_POINT
 
 #include "math.glsl"
 #include "util/sample.glsl"
@@ -7,25 +7,31 @@
 uniform CameraParams {
     vec3 position;
     float timeDelta;
+
+    uint mediumIdx;
+    int objectId;
 } cameraParams;
 
-CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
-    //sample direction
+BackwardRay sampleCameraRay(
+    float wavelength,
+    out CameraHit hit,
+    uint idx, inout uint dim
+) {
     vec3 dir = sampleUnitSphere(random2D(idx, dim));
-    vec3 polRef = perpendicularTo(dir);
 
-    //assemble camera ray
-    return createCameraRay(
-        cameraParams.position,  //ray position
-        dir,                    //ray direction
-        polRef,                 //ray polRef
-        mat4(1.0),              //ray mueller matrix
-        FOUR_PI,                //contrib
-        cameraParams.timeDelta, //time delta
-        vec3(0.0, 0.0, 0.0),    //hit position
-        -dir,                   //hit direction
-        dir,                    //hit normal
-        polRef                  //hit polRef
+    hit = createCameraHit(
+        vec3(0.0),  //hit position
+        -dir,       //hit direction
+        dir,        //hit normal
+        cameraParams.objectId
+    );
+    return createBackwardRay(
+        cameraParams.position,
+        dir,
+        wavelength,
+        cameraParams.mediumIdx,
+        cameraParams.timeDelta,
+        FOUR_PI
     );
 }
 

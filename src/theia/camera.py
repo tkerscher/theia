@@ -2,33 +2,31 @@ from __future__ import annotations
 
 import numpy as np
 import hephaistos as hp
-from hephaistos.glsl import buffer_reference, mat3, mat4x3, vec3
 from hephaistos.pipeline import PipelineStage, SourceCodeMixin
 from hephaistos.queue import IOQueue
 
 from ctypes import Structure, c_float, c_int32, c_uint32
+from hephaistos.glsl import buffer_reference, mat3, mat4x3, vec3
 
-import theia.units as u
-from theia.light import WavelengthSampleItem, WavelengthSource
+from theia.compiler import createPreamble, compileShader, loadShader
+from theia.light import WavelengthSource
 from theia.material import MaterialStore
 from theia.random import RNG
+from theia.ray import RayModel
 from theia.scene import MeshInstance, Transform
-from theia.util import ShaderLoader, compileShader, createPreamble
+import theia.units as u
 
-from collections.abc import Callable
+from typing import Callable
 
 
 __all__ = [
     "Camera",
-    "CameraRayItem",
-    "CameraRaySampler",
     "ConeCamera",
     "FlatCamera",
     "HostCamera",
     "MeshCamera",
     "PencilCamera",
     "PointCamera",
-    "PolarizedCameraRayItem",
     "SphereCamera",
 ]
 
@@ -41,7 +39,6 @@ class Camera(SourceCodeMixin):
     """
     Base class for camera producing camera rays and samples used in backward,
     bidirectional and direct tracing.
-    Running this stage inside a pipeline updates its usage in following stages.
     """
 
     name = "Camera"
@@ -76,170 +73,114 @@ class Camera(SourceCodeMixin):
         return self._supportDirect
 
 
-class CameraRayItem(Structure):
-    _fields_ = [
-        ("position", c_float * 3),
-        ("direction", c_float * 3),
-        ("contrib", c_float),
-        ("timeDelta", c_float),
-        ("hitPosition", c_float * 3),
-        ("hitDirection", c_float * 3),
-        ("hitNormal", c_float * 3),
-        ("objectId", c_int32),
-    ]
-
-
-class PolarizedCameraRayItem(Structure):
-    _fields_ = [
-        ("position", c_float * 3),
-        ("direction", c_float * 3),
-        ("contrib", c_float),
-        ("timeDelta", c_float),
-        ("polarizationRef", c_float * 3),
-        ("mueller", c_float * 16),
-        ("hitPolRef", c_float * 3),
-        ("hitPosition", c_float * 3),
-        ("hitDirection", c_float * 3),
-        ("hitNormal", c_float * 3),
-        ("objectId", c_int32),
-    ]
-
-
-class CameraRaySampler(PipelineStage):
+class CameraSampler(PipelineStage):
     """
-    Utility class for sampling a camera rays from the given `Camera` and
-    storing the result in a queue.
+    Utility class for sampling rays from a given camera and storing the results
+    in a queue.
 
     Parameters
     ----------
+    batchSize: int
+        Number of samples to draw per run
     camera: Camera
         Camera to sample
     wavelengthSource: WavelengthSource
         Source to sample wavelengths from
-    capacity: int
-        Maximum number of samples that can be drawn per run
+    ray: RayModel
+        Model describing the structure of rays to sample
     rng: RNG | None, default=None
         The random number generator used for sampling. May be `None` if `camera`
         does not require random numbers.
     materials: MaterialStore | None, default=None
         Optional store containing material and medium properties the camera may
         reference. If `None`, creates an empty store.
-    polarized: bool, default=True
-        Whether to save polarization information.
-    batchSize: int
-        Number of samples to draw per run
-    code: bytes | None, default=None
-        Compiled source code. If `None`, the byte code get's compiled from
-        source. Note, that the compiled code is not checked. You must ensure
-        it matches the configuration.
-
-    Stage Parameters
-    ----------------
-    count: int, default=capacity
-        Number of samples to draw per run. Must be at most `capacity`.
-    baseCount: int, default=0
-        Offset into the sampling stream of the light source.
     """
 
-    name = "Camera Ray Sampler"
+    name = "Camera Sampler"
 
     class SampleParams(Structure):
-        _fields_ = [("count", c_uint32), ("baseCount", c_uint32)]
+        _fields_ = [
+            ("_queueAdr", buffer_reference),
+            ("_queueSize", c_uint32),
+            ("_batchSize", c_uint32),
+            ("baseCount", c_uint32),
+        ]
 
     def __init__(
         self,
+        batchSize: int,
         camera: Camera,
         wavelengthSource: WavelengthSource,
-        capacity: int,
+        ray: RayModel,
         *,
         rng: RNG | None = None,
         materials: MaterialStore | None = None,
-        polarized: bool = True,
-        batchSize: int = 128,
-        code: bytes | None = None,
     ) -> None:
+        super().__init__({"SampleParams": CameraSampler.SampleParams})
         # check if we have a rng if needed
         needRNG = camera.nRNGSamples > 0 or wavelengthSource.nRNGSamples > 0
         if needRNG and rng is None:
-            raise ValueError("camera requires a rng but none was given!")
-        # init stage
-        super().__init__({"SampleParams": self.SampleParams})
-
+            raise ValueError("camera requires a rng but none was given")
+        # create queue
+        if ray.cameraItem is None:
+            raise ValueError("Ray model does not define a camera sample")
+        self._queue = IOQueue(
+            ray.cameraItem, batchSize, mode="retrieve", skipCounter=True
+        )
+        assert self._queue.tensor is not None
+        # create empty material store if needed
         if materials is None:
-            materials = MaterialStore([])
-
+            materials = MaterialStore([], mediaSlots=ray.requiredMediumProperties)
         # save params
-        self._batchSize = batchSize
         self._camera = camera
-        self._capacity = capacity
-        self._polarized = polarized
+        self._ray = ray
         self._rng = rng
         self._materials = materials
         self._wavelengthSource = wavelengthSource
-        self.setParams(count=capacity, baseCount=0)
-
-        # create code if needed
-        if code is None:
-            preamble = createPreamble(
-                BATCH_SIZE=batchSize,
-                CAMERA_QUEUE_SIZE=capacity,
-                CAMERA_QUEUE_POLARIZED=polarized,
-                PHOTON_QUEUE_SIZE=capacity,
-                POLARIZATION=polarized,
-            )
-            headers = {
-                "camera.glsl": camera.sourceCode,
-                "rng.glsl": rng.sourceCode if rng is not None else "",
-                "photon.glsl": wavelengthSource.sourceCode,
-                **materials.header,
-            }
-            code = compileShader("camera/sample.glsl", preamble, headers)
-        self._code = code
-        self._program = hp.Program(self._code)
-        materials.bindParams(self._program)
-        # calculate group size
-        self._groups = -(capacity // -batchSize)
-
-        # create queue holding samples
-        item = PolarizedCameraRayItem if polarized else CameraRayItem
-        self._camQueue = IOQueue(item, capacity, mode="retrieve")
-        item = WavelengthSampleItem
-        self._lamQueue = IOQueue(item, capacity, mode="retrieve")
-        # bind memory
-        self._program.bindParams(
-            CameraQueueOut=self._camQueue.tensor,
-            PhotonQueueOut=self._lamQueue.tensor,
+        self.setParams(
+            _queueAdr=self._queue.tensor.address,
+            _queueSize=batchSize,
+            _batchSize=batchSize,
+            baseCount=0,
         )
+
+        # create program
+        headers = {
+            "rng.glsl": "" if rng is None else rng.sourceCode,
+            "ray.glsl": ray.sourceCode,
+            "photon.glsl": wavelengthSource.sourceCode,
+            "camera.glsl": camera.sourceCode,
+            **materials.header,
+        }
+        code = compileShader("camera/sample.glsl", "", headers)
+        self._program = hp.Program(code)
+        # bind materials
+        materials.bindParams(self._program)
 
     @property
     def batchSize(self) -> int:
-        """Number of samples drawn per work group"""
+        """Number of samples drawn per run"""
         return self._batchSize
 
     @property
     def camera(self) -> Camera:
-        """Camera that is sampled"""
+        """Camera being sampled"""
         return self._camera
 
     @property
-    def cameraQueue(self) -> IOQueue:
-        """Queue holding the samples camera rays"""
-        return self._camQueue
+    def materials(self) -> MaterialStore:
+        """Optional material store in use"""
+        return self._materials
 
     @property
-    def capacity(self) -> int:
-        """Maximum number of samples that can be drawn per run"""
-        return self._capacity
+    def queue(self) -> IOQueue:
+        """Queue holding the sampled light rays"""
+        return self._queue
 
     @property
-    def code(self) -> bytes:
-        """Compiled source code. Can be used for caching"""
-        return self._code
-
-    @property
-    def polarized(self) -> bool:
-        """Whether to save polarization information"""
-        return self._polarized
+    def rayModel(self) -> RayModel:
+        """Ray model used for sampling"""
+        return self._ray
 
     @property
     def rng(self) -> RNG | None:
@@ -248,87 +189,79 @@ class CameraRaySampler(PipelineStage):
 
     @property
     def wavelengthSource(self) -> WavelengthSource:
-        """Source used to sample wavelengths"""
+        """Source producing wavelength samples"""
         return self._wavelengthSource
-
-    @property
-    def wavelengthQueue(self) -> IOQueue:
-        """Queue holding the wavelength samples"""
-        return self._lamQueue
 
     def collectStages(self) -> list[PipelineStage]:
         """
         Returns a list of all stages involved with this sampler in the correct
         order suitable for creating a pipeline.
         """
-        stages = [] if self.rng is None else [self.rng]
+        stages: list[PipelineStage] = []
+        if self.rng is not None:
+            stages.append(self.rng)
         stages.extend([self.wavelengthSource, self.camera, self])
         return stages
 
     def run(self, i: int) -> list[hp.Command]:
-        self._bindParams(self._program, i)
-        self.camera.bindParams(self._program, i)
-        self.wavelengthSource.bindParams(self._program, i)
-        if self.rng is not None:
-            self.rng.bindParams(self._program, i)
-        return [
-            self._program.dispatch(self._groups),
-            *self.cameraQueue.run(i),
-            *self.wavelengthQueue.run(i),
-        ]
+        for stage in self.collectStages():
+            stage.bindParams(self._program, i)
+        groups = -(self.batchSize // -512)
+        return [self._program.dispatch(groups), *self.queue.run(i)]
 
 
 class HostCamera(Camera):
     """
-    Camera passing camera ray samples from the CPU to the GPU.
+    Camera passing rays from the CPU to the GPU.
 
     Parameters
     ----------
     capacity: int
-        Maximum number of samples that can be drawn per run
-    polarized: bool, default=False
-        Whether the host also provides polarization information
+        Capacity of the underlying queue feeding the GPU.
+    ray: RayModel
+        Model describing the structure of rays.
+    overrideWavelength: bool, default=True
+        Whether to use the wavelength from the queue instead of the one passed
+        to the camera when sampling.
     updateFn: (HostCamera, int) -> None | None, default=None
         Optional update function called before the pipeline processes a task.
         `i` is the i-th configuration the update should affect.
         Can be used to stream in new samples on demand.
-
-    Note
-    ----
-    To comply with API requirements the shader code expects a wavelength,
-    which gets ignored.
     """
 
     name = "Host Camera"
 
-    _sourceCode = ShaderLoader("camera/host.glsl")
+    class CameraParams(Structure):
+        _fields_ = [
+            ("_queueAdr", buffer_reference),
+            ("_queueSize", c_uint32),
+        ]
 
     def __init__(
         self,
         capacity: int,
+        ray: RayModel | type[Structure],
         *,
-        polarized: bool = False,
+        overrideWavelength: bool = True,
         updateFn: Callable[[HostCamera, int], None] | None = None,
+        extra: set[str] = set(),
     ) -> None:
-        super().__init__(nRNGSamples=0, supportDirect=False)
+        super().__init__(
+            nRNGSamples=0,
+            params={"CameraParams": HostCamera.CameraParams},
+            extra=extra,
+        )
+
+        if isinstance(ray, RayModel):
+            if ray.cameraItem is None:
+                raise ValueError("ray model does not provide a camera item")
+            ray = ray.cameraItem
+        self._queue = IOQueue(ray, capacity, mode="update", skipCounter=True)
+        assert self._queue.tensor is not None
         # save params
-        self._capacity = capacity
-        self._polarized = polarized
+        self._overrideLambda = overrideWavelength
         self._updateFn = updateFn
-
-        # allocate memory
-        item = PolarizedCameraRayItem if polarized else CameraRayItem
-        self._queue = IOQueue(item, capacity, mode="update", skipCounter=True)
-
-    @property
-    def capacity(self) -> int:
-        """Maximum number of samples that can be drawn per run"""
-        return self._capacity
-
-    @property
-    def polarized(self) -> bool:
-        """Whether the host also provides polarization information"""
-        return self._polarized
+        self.setParams(_queueAdr=self._queue.tensor.address, _queueSize=capacity)
 
     @property
     def queue(self) -> IOQueue:
@@ -337,17 +270,9 @@ class HostCamera(Camera):
 
     @property
     def sourceCode(self) -> str:
-        preamble = createPreamble(
-            CAMERA_QUEUE_SIZE=self.capacity,
-            CAMERA_QUEUE_POLARIZED=self.polarized,
-        )
-        return preamble + self._sourceCode
-
-    def bindParams(self, program: hp.Program, i: int) -> None:
-        super().bindParams(program, i)
-        program.bindParams(CameraQueueIn=self.queue.tensor)
-
-    # PipelineStage API
+        preamble = createPreamble(CAMERA_OVERRIDE_WAVELENGTH=self._overrideLambda)
+        code = loadShader("camera/host.glsl")
+        return preamble + code
 
     def update(self, i: int) -> None:
         if self._updateFn is not None:
@@ -365,14 +290,12 @@ class PencilCamera(Camera):
 
     Parameters
     ----------
+    mediumIdx: int
+        Index of the medium the camera is submerged in.
     rayPosition: (float, float, float), default=(0.0, 0.0, 0.0)
         Start point of the camera ray
     rayDirection: (float, float, float), default=(0.0, 0.0, 1.0)
         Direction of the camera ray
-    polarizationRef: (float, float, float)|None, default=None
-        Reference frame of polarization indicating vertical polarized light.
-        Must be unit and orthogonal to the ray direction.
-        If None, creates an unspecified orthogonal one.
     timeDelta: float, default=0.0
         Extra time delay added on the ray
     hitPosition: (float, float, float), default=(0.0,0.0,0.0)
@@ -381,21 +304,17 @@ class PencilCamera(Camera):
         Ray direction at the hit position in the local frame of the detector
     hitNormal: (float, float, float), default=(0.0,0.0,1.0)
         Surface normal at the hit position in the local frame of the detector
-    hitPolarizationRef: (float, float, float)|None, default=None
-        Reference frame of polarization indicating vertical polarized light
-        defined in the object space of the hit/camera. Must be unit and
-        orthogonal to the ray direction. If None, creates an unspecified
-        orthogonal one.
+    objectId: int, default=-1
+        Id assigned to hits produced by this camera.
 
     Stage Parameters
     ----------------
+    mediumIdx: int
+        Index of the medium the camera is submerged in.
     rayPosition: (float, float, float), default=(0.0, 0.0, 0.0)
         Start point of the camera ray
     rayDirection: (float, float, float), default=(0.0, 0.0, 1.0)
         Direction of the camera ray
-    polarizationRef: (float, float, float)
-        Reference frame of polarization indicating vertical polarized light.
-        Must be unit and orthogonal to the ray direction.
     timeDelta: float, default=0.0
         Extra time delay added on the ray
     hitPosition: (float, float, float), default=(0.0,0.0,0.0)
@@ -404,76 +323,55 @@ class PencilCamera(Camera):
         Ray direction at the hit position in the local frame of the detector
     hitNormal: (float, float, float), default=(0.0,0.0,1.0)
         Surface normal at the hit position in the local frame of the detector
-    hitPolarizationRef: (float, float, float)|None, default=None
-        Reference frame of polarization indicating vertical polarized light
-        defined in the object space of the hit/camera. Must be unit and
-        orthogonal to the hit direction. If None, creates an unspecified
-        orthogonal one.
+    objectId: int, default=-1
+        Id assigned to hits produced by this camera.
     """
 
-    name = "Pencil Camera Beam"
+    name = "Pencil Camera"
 
     class CameraParams(Structure):
         _fields_ = [
             ("rayPosition", vec3),
             ("rayDirection", vec3),
-            ("polarizationRef", vec3),
             ("timeDelta", c_float),
+            ("mediumIdx", c_uint32),
+            ("objectId", c_int32),
             ("hitPosition", vec3),
             ("hitDirection", vec3),
             ("hitNormal", vec3),
-            ("hitPolarizationRef", vec3),
         ]
 
     def __init__(
         self,
         *,
+        mediumIdx: int,
         rayPosition: tuple[float, float, float] = (0.0, 0.0, 0.0),
         rayDirection: tuple[float, float, float] = (0.0, 0.0, 1.0),
-        polarizationRef: tuple[float, float, float] | None = None,
         timeDelta: float = 0.0,
         hitPosition: tuple[float, float, float] = (0.0, 0.0, 0.0),
         hitDirection: tuple[float, float, float] = (0.0, 0.0, -1.0),
         hitNormal: tuple[float, float, float] = (0.0, 0.0, 1.0),
-        hitPolarizationRef: tuple[float, float, float] | None = None,
+        objectId: int = -1,
     ) -> None:
         super().__init__(
             nRNGSamples=0,
             supportDirect=False,
             params={"CameraParams": self.CameraParams},
         )
-        # create polarization reference frame if not specified
-        if polarizationRef is None:
-            # take two cross products: with e_x and e_y
-            # both cant be parallel to dir at the same time
-            x, y, z = rayDirection
-            ref1 = np.array([0.0, -z, y])
-            ref2 = np.array([-z, 0.0, x])
-            # take the longe one and normalize
-            l1 = np.sqrt(np.square(ref1).sum())
-            l2 = np.sqrt(np.square(ref2).sum())
-            polarizationRef = tuple(ref1 / l1 if l1 > l2 else ref2 / l2)
-        if hitPolarizationRef is None:
-            x, y, z = hitDirection
-            ref1 = np.array([0.0, -z, y])
-            ref2 = np.array([-z, 0.0, x])
-            # take the longe one and normalize
-            l1 = np.sqrt(np.square(ref1).sum())
-            l2 = np.sqrt(np.square(ref2).sum())
-            hitPolarizationRef = tuple(ref1 / l1 if l1 > l2 else ref2 / l2)
         self.setParams(
+            mediumIdx=mediumIdx,
             rayPosition=rayPosition,
             rayDirection=rayDirection,
-            polarizationRef=polarizationRef,
             timeDelta=timeDelta,
+            objectId=objectId,
             hitPosition=hitPosition,
             hitDirection=hitDirection,
             hitNormal=hitNormal,
-            hitPolarizationRef=hitPolarizationRef,
         )
 
-    # source code via descriptor
-    sourceCode = ShaderLoader("camera/pencil.glsl")
+    @property
+    def sourceCode(self) -> str:
+        return loadShader("camera/pencil.glsl")
 
 
 class FlatCamera(Camera):
@@ -490,6 +388,8 @@ class FlatCamera(Camera):
 
     Parameters
     ----------
+    mediumIdx: int
+        Index of the medium the camera is submerged in.
     width: float, default=1cm
         Width of the detector. Corresponds in local space to the camera
         surface's extension in x direction.
@@ -504,9 +404,13 @@ class FlatCamera(Camera):
     up: (float, float, float), default=(0.0,1.0,0.0)
         Direction identifying where 'up' is for the camera. Corresponds in local
         space to the positive y direction.
+    objectId: int, default=-1
+        Id assigned to hits produced by this camera.
 
     Stage Parameters
     ----------------
+    mediumIdx: int
+        Index of the medium the camera is submerged in.
     width: float, default=1cm
         Width of the detector. Corresponds in local space to the camera
         surface's extension in x direction.
@@ -521,6 +425,8 @@ class FlatCamera(Camera):
     up: (float, float, float), default=(0.0,1.0,0.0)
         Direction identifying where 'up' is for the camera. Corresponds in local
         space to the positive y direction.
+    objectId: int, default=-1
+        Id assigned to hits produced by this camera.
 
     Note
     ----
@@ -533,6 +439,8 @@ class FlatCamera(Camera):
         _fields_ = [
             ("width", c_float),
             ("length", c_float),
+            ("objectId", c_int32),
+            ("mediumIdx", c_uint32),
             ("position", vec3),
             ("_view", mat3),
         ]
@@ -540,11 +448,13 @@ class FlatCamera(Camera):
     def __init__(
         self,
         *,
+        mediumIdx: int,
         width: float = 1.0 * u.cm,
         length: float = 1.0 * u.cm,
         position: tuple[float, float, float] = (0.0, 0.0, 0.0),
         direction: tuple[float, float, float] = (0.0, 0.0, 1.0),
         up: tuple[float, float, float] = (0.0, 1.0, 0.0),
+        objectId: int = -1,
     ) -> None:
         super().__init__(
             nRNGSamples=4,
@@ -557,10 +467,13 @@ class FlatCamera(Camera):
         self.position = position
         self.direction = direction
         self.up = up
-        self.setParams(width=width, length=length, position=position)
-
-    # source code via descriptor
-    sourceCode = ShaderLoader("camera/flat.glsl")
+        self.setParams(
+            width=width,
+            length=length,
+            position=position,
+            mediumIdx=mediumIdx,
+            objectId=objectId,
+        )
 
     @property
     def direction(self) -> tuple[float, float, float]:
@@ -580,6 +493,10 @@ class FlatCamera(Camera):
     def up(self, value: tuple[float, float, float]) -> None:
         self._up = value
 
+    @property
+    def sourceCode(self) -> str:
+        return loadShader("camera/flat.glsl")
+
     def _finishParams(self, i: int) -> None:
         super()._finishParams(i)
 
@@ -594,21 +511,29 @@ class ConeCamera(Camera):
 
     Parameters
     ----------
+    mediumIdx: int
+        Index of the medium the camera is submerged in.
     position: (float, float, float), default=(0.0,0.0,0.0)
         Cone position
     direction: (float, float, float), default=(0.0,0.0,1.0)
         Direction of the cone
     cosOpeningAngle: float, default=1.0
         Cosine of the cones opening angle
+    objectId: int, default=-1
+        Id assigned to hits produced by this camera.
 
     Stage Parameters
     ----------------
+    mediumIdx: int
+        Index of the medium the camera is submerged in.
     position: (float, float, float), default=(0.0,0.0,0.0)
         Cone position
     direction: (float, float, float), default=(0.0,0.0,1.0)
         Direction of the cone
     cosOpeningAngle: float, default=1.0
         Cosine of the cones opening angle
+    objectId: int, default=-1
+        Id assigned to hits produced by this camera.
     """
 
     name = "Cone Camera"
@@ -616,16 +541,20 @@ class ConeCamera(Camera):
     class CameraParams(Structure):
         _fields_ = [
             ("position", vec3),
-            ("direction", vec3),
             ("cosOpeningAngle", c_float),
+            ("direction", vec3),
+            ("mediumIdx", c_uint32),
+            ("objectId", c_int32),
         ]
 
     def __init__(
         self,
         *,
+        mediumIdx: int,
         position: tuple[float, float, float] = (0.0, 0.0, 0.0),
         direction: tuple[float, float, float] = (0.0, 0.0, 1.0),
         cosOpeningAngle: float = 1.0,
+        objectId: int = -1,
     ) -> None:
         super().__init__(
             nRNGSamples=2,
@@ -637,10 +566,13 @@ class ConeCamera(Camera):
             position=position,
             direction=direction,
             cosOpeningAngle=cosOpeningAngle,
+            mediumIdx=mediumIdx,
+            objectId=objectId,
         )
 
-    # source code via descriptor
-    sourceCode = ShaderLoader("camera/cone.glsl")
+    @property
+    def sourceCode(self) -> str:
+        return loadShader("camera/cone.glsl")
 
 
 class SphereCamera(Camera):
@@ -651,21 +583,29 @@ class SphereCamera(Camera):
 
     Parameters
     ----------
+    mediumIdx: int
+        Index of the medium the camera is submerged in.
     position: (float, float, float), default=(0.0, 0.0, 0.0)
         Center position of the detector sphere
     radius: float, default=1.0
         Radius of the detector sphere
     timeDelta: float, default=0.0
         Time offset applied to camera rays and this light paths.
+    objectId: int, default=-1
+        Id assigned to hits produced by this camera.
 
     Stage Parameters
     ----------------
+    mediumIdx: int
+        Index of the medium the camera is submerged in.
     position: (float, float, float), default=(0.0, 0.0, 0.0)
         Center position of the detector sphere
     radius: float, default=1.0
         Radius of the detector sphere
     timeDelta: float, default=0.0
         Time offset applied to camera rays and this light paths.
+    objectId: int, default=-1
+        Id assigned to hits produced by this camera.
 
     Note
     ----
@@ -680,6 +620,8 @@ class SphereCamera(Camera):
             ("position", vec3),
             ("radius", c_float),
             ("timeDelta", c_float),
+            ("mediumIdx", c_uint32),
+            ("objectId", c_int32),
             ("_contrib", c_float),
             ("_contribDirect", c_float),
         ]
@@ -687,9 +629,11 @@ class SphereCamera(Camera):
     def __init__(
         self,
         *,
+        mediumIdx: int,
         position: tuple[float, float, float] = (0.0, 0.0, 0.0),
         radius: float = 1.0,
         timeDelta: float = 0.0,
+        objectId: int = -1,
     ) -> None:
         super().__init__(
             nRNGSamples=4,
@@ -697,10 +641,17 @@ class SphereCamera(Camera):
             supportDirect=True,
             params={"CameraParams": self.CameraParams},
         )
-        self.setParams(position=position, radius=radius, timeDelta=timeDelta)
+        self.setParams(
+            position=position,
+            radius=radius,
+            timeDelta=timeDelta,
+            mediumIdx=mediumIdx,
+            objectId=objectId,
+        )
 
-    # source code via descriptor
-    sourceCode = ShaderLoader("camera/sphere.glsl")
+    @property
+    def sourceCode(self) -> str:
+        return loadShader("camera/sphere.glsl")
 
     def _finishParams(self, i: int) -> None:
         r = self.getParam("radius")
@@ -716,17 +667,25 @@ class PointCamera(Camera):
 
     Parameters
     ----------
+    mediumIdx: int
+        Index of the medium the camera is submerged in.
     position: (float, float, float), default=(0.0, 0.0, 0.0)
         Origin of camera rays.
     timeDelta: float, default=0.0
         Time offset applied to camera rays.
+    objectId: int, default=-1
+        Id assigned to hits produced by this camera.
 
     Stage Parameters
     ----------------
+    mediumIdx: int
+        Index of the medium the camera is submerged in.
     position: (float, float, float), default=(0.0, 0.0, 0.0)
         Origin of camera rays.
     timeDelta: float, default=0.0
         Time offset applied to camera rays.
+    objectId: int, default=-1
+        Id assigned to hits produced by this camera.
     """
 
     name = "Point Camera"
@@ -735,23 +694,33 @@ class PointCamera(Camera):
         _fields_ = [
             ("position", vec3),
             ("timeDelta", c_float),
+            ("mediumIdx", c_uint32),
+            ("objectId", c_int32),
         ]
 
     def __init__(
         self,
         *,
+        mediumIdx: int,
         position: tuple[float, float, float] = (0.0, 0.0, 0.0),
         timeDelta: float = 0.0,
+        objectId: int = -1,
     ) -> None:
         super().__init__(
             nRNGSamples=2,
             supportDirect=False,
             params={"CameraParams": self.CameraParams},
         )
-        self.setParams(position=position, timeDelta=timeDelta)
+        self.setParams(
+            position=position,
+            timeDelta=timeDelta,
+            mediumIdx=mediumIdx,
+            objectId=objectId,
+        )
 
-    # source code via descriptor
-    sourceCode = ShaderLoader("camera/point.glsl")
+    @property
+    def sourceCode(self) -> str:
+        return loadShader("camera/point.glsl")
 
 
 class MeshCamera(Camera):
@@ -762,6 +731,10 @@ class MeshCamera(Camera):
     ----------
     mesh: MeshInstance
         Mesh to produce rays from
+    mediumIdx: int
+        Index of the medium the camera is submerged in.
+    objectId: int, default=-1
+        Id assigned to hits produced by this camera.
     timeDelta: float, default=0.0
         Time offset applied to camera rays.
     inward: bool, default=False
@@ -772,6 +745,10 @@ class MeshCamera(Camera):
     ----------------
     mesh: MeshInstance
         Mesh to produce rays from
+    mediumIdx: int
+        Index of the medium the camera is submerged in.
+    objectId: int, default=-1
+        Id assigned to hits produced by this camera.
     timeDelta: float, default=0.0
         Time offset applied to camera rays.
     inward: bool, default=False
@@ -794,6 +771,8 @@ class MeshCamera(Camera):
             ("_triangleCount", c_uint32),
             ("_outward", c_float),
             ("timeDelta", c_float),
+            ("mediumIdx", c_uint32),
+            ("objectId", c_int32),
             ("_objToWorld", mat4x3),
             ("_worldToObj", mat4x3),
         ]
@@ -802,6 +781,8 @@ class MeshCamera(Camera):
         self,
         mesh: MeshInstance,
         *,
+        mediumIdx: int,
+        objectId: int = -1,
         timeDelta: float = 0.0,
         inward: bool = False,
     ) -> None:
@@ -816,6 +797,8 @@ class MeshCamera(Camera):
             inward=inward,
             timeDelta=timeDelta,
             mesh=mesh,
+            mediumIdx=mediumIdx,
+            objectId=objectId,
         )
 
     @property
@@ -845,5 +828,6 @@ class MeshCamera(Camera):
             _worldToObj=value.transform.inverse().numpy().T,
         )
 
-    # source code via descriptor
-    sourceCode = ShaderLoader("camera/mesh.glsl")
+    @property
+    def sourceCode(self) -> str:
+        return loadShader("camera/mesh.glsl")

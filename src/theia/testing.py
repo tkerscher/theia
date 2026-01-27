@@ -9,6 +9,7 @@ from ctypes import Structure, c_float, c_int32, c_uint32
 from hephaistos.glsl import buffer_reference, vec3
 from theia.util import createCType
 
+from theia.camera import Camera
 from theia.compiler import createPreamble, compileShader
 from theia.light import LightSource, WavelengthSource
 from theia.material import MaterialStore, VACUUM_IDX
@@ -17,6 +18,18 @@ from theia.ray import RayModel
 from theia.scene import RectBBox
 from theia.target import LightSourceTarget, Target
 import theia.units as u
+
+
+__all__ = [
+    "BackwardLightSampler",
+    "CameraDirectSampler",
+    "LightSourceTargetSampler",
+    "TargetSampler",
+]
+
+
+def __dir__():
+    return __all__
 
 
 class BackwardLightSampler(PipelineStage):
@@ -178,6 +191,132 @@ class BackwardLightSampler(PipelineStage):
             stages.append(self.source.wavelengthSource)
         stages.extend([self.source, self])
         return stages
+
+    def run(self, i: int) -> list[hp.Command]:
+        for stage in self.collectStages():
+            stage.bindParams(self._program, i)
+        groups = -(self.batchSize // -512)
+        return [
+            self._program.dispatch(groups),
+            *self.queue.run(i),
+        ]
+
+
+class CameraDirectSampler(PipelineStage):
+    """
+    Sampler for cameras in direct mode.
+
+    Parameters
+    ----------
+    batchSize: int
+        Number of samples to draw per batch.
+    ray: RayModel
+        Description of the structure of rays.
+    camera: Camera
+        Camera to sample
+    wavelengthSource: WavelengthSource
+        Source from which wavelengths are sampled
+    rng: RNG
+        Random number generator
+    materials: MaterialStore | None, default=None
+        Optional material store containing required medium properties. If
+        `None`, an empty one with the required slots will be created.
+    """
+
+    class SamplerParams(Structure):
+        _fields_ = [
+            ("_queueAdr", buffer_reference),
+            ("_queueSize", c_uint32),
+        ]
+
+    def __init__(
+        self,
+        batchSize: int,
+        ray: RayModel,
+        camera: Camera,
+        wavelengthSource: WavelengthSource,
+        *,
+        rng: RNG,
+        materials: MaterialStore | None = None,
+    ) -> None:
+        super().__init__({"SamplerParams": CameraDirectSampler.SamplerParams})
+        if ray.cameraItem is None:
+            raise ValueError("Ray does not define a camera item!")
+        if materials is None:
+            materials = MaterialStore([], mediaSlots=ray.requiredMediumProperties)
+
+        # allocate queue
+        resultFields = [
+            ("lightDir", c_float * 3),
+            ("samplePos", c_float * 3),
+            ("sampleNrm", c_float * 3),
+            ("sampleContrib", c_float),
+        ]
+        resultFields.extend(ray.cameraItem._fields_)
+        item = createCType("Item", resultFields)
+        self._queue = IOQueue(item, batchSize, mode="retrieve", skipCounter=True)
+        assert self._queue.tensor is not None
+        # save params
+        self._ray = ray
+        self._rng = rng
+        self._camera = camera
+        self._photons = wavelengthSource
+        self._materials = materials
+        self.setParams(_queueAdr=self._queue.tensor.address, _queueSize=batchSize)
+
+        # create program
+        headers = {
+            "camera.glsl": camera.sourceCode,
+            "ray.glsl": ray.sourceCode,
+            "rng.glsl": rng.sourceCode,
+            "photons.glsl": wavelengthSource.sourceCode,
+            **materials.header,
+        }
+        code = compileShader("camera/sample.direct.glsl", "", headers)
+        self._program = hp.Program(code)
+        materials.bindParams(self._program)
+
+    @property
+    def batchSize(self) -> int:
+        """Number of samples to draw per batch"""
+        return self.getParam("_queueSize")
+
+    @property
+    def camera(self) -> Camera:
+        """Camera to sampler"""
+        return self._camera
+
+    @property
+    def materials(self) -> MaterialStore:
+        """Optional material store in use"""
+        return self._materials
+
+    @property
+    def queue(self) -> IOQueue:
+        """Queue holding the sampled light rays"""
+        return self._queue
+
+    @property
+    def rayModel(self) -> RayModel:
+        """Ray model used for sampling"""
+        return self._ray
+
+    @property
+    def rng(self) -> RNG:
+        """Generator for creating random numbers"""
+        return self._rng
+
+    @property
+    def wavelengthSource(self) -> WavelengthSource:
+        """Source for wavelength sampling"""
+        return self._photons
+
+    def collectStages(self) -> list[PipelineStage]:
+        """
+        Returns a list of all stages involved with this sampler in the correct
+        order suitable for creating a pipeline.
+        """
+        return [self.rng, self.wavelengthSource, self.camera, self]
 
     def run(self, i: int) -> list[hp.Command]:
         for stage in self.collectStages():

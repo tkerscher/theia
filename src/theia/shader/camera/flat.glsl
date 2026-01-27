@@ -1,5 +1,5 @@
-#ifndef _INCLUDE_CAMERARAYSOURCE_FLAT
-#define _INCLUDE_CAMERARAYSOURCE_FLAT
+#ifndef _INCLUDE_CAMERA_FLAT
+#define _INCLUDE_CAMERA_FLAT
 
 #include "math.glsl"
 #include "util/sample.glsl"
@@ -7,11 +7,19 @@
 uniform CameraParams {
     float width;
     float height; //length
+
+    int objectId;
+    uint mediumIdx;
+
     vec3 offset;
     mat3 view;
 } cameraParams;
 
-CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
+BackwardRay sampleCameraRay(
+    float wavelength,
+    out CameraHit hit,
+    uint idx, inout uint dim
+) {
     mat3 objToWorld = transpose(cameraParams.view); // inverse, since it's orthogonal
     //sample position on detector
     vec2 u = random2D(idx, dim);
@@ -30,28 +38,29 @@ CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
     //calculate contribution
     float contrib = TWO_PI * cameraParams.width * cameraParams.height * cos_theta;
 
-    //polarization
-    vec3 hitPolRef, polRef;
-    #ifdef POLARIZATION
-    hitPolRef = perpendicularToZand(localDir);
-    //NOTE: This only works because objToWorld is orthogonal
-    polRef = objToWorld * hitPolRef;
-    #endif
-
-    //assemble ray
-    return createCameraRay(
-        rayPos,
-        rayDir,
-        polRef,
-        mat4(1.0),
-        contrib,
-        0.0,
+    //assemble camera hit
+    hit = createCameraHit(
         localPos,
         localDir,
         vec3(0.0, 0.0, 1.0),
-        hitPolRef
+        cameraParams.objectId
+    );
+    //assemble backward ray
+    return createBackwardRay(
+        rayPos,
+        rayDir,
+        wavelength,
+        cameraParams.mediumIdx,
+        0.0,
+        contrib
     );
 }
+
+struct CameraSample {
+    vec3 position;
+    vec3 normal;
+    float contrib;
+};
 
 CameraSample sampleCamera(float wavelength, uint idx, inout uint dim) {
     mat3 objToWorld = transpose(cameraParams.view); // inverse, since it's orthogonal
@@ -66,10 +75,15 @@ CameraSample sampleCamera(float wavelength, uint idx, inout uint dim) {
     //calculate contribution
     float contrib = cameraParams.width * cameraParams.height;
     //return sample
-    return createCameraSample(rayPos, rayNrm, contrib);
+    return CameraSample(rayPos, rayNrm, contrib);
 }
 
-CameraRay createCameraRay(CameraSample cam, vec3 lightDir, float wavelength) {
+BackwardRay createCameraRay(
+    const CameraSample cam,
+    vec3 lightDir,
+    float wavelength,
+    out CameraHit hit
+) {
     //get local coordinates
     vec3 localPos = cameraParams.view * (cam.position - cameraParams.offset);
     vec3 localDir = cameraParams.view * lightDir;
@@ -79,25 +93,20 @@ CameraRay createCameraRay(CameraSample cam, vec3 lightDir, float wavelength) {
     //check light comes from the right side
     contrib *= float(dot(cam.normal, lightDir) < 0.0);
 
-    //polarization
-    vec3 hitPolRef, polRef;
-    #ifdef POLARIZATION
-    hitPolRef = perpendicularToZand(localDir);
-    polRef = transpose(cameraParams.view) * hitPolRef;
-    #endif
-
-    //assemble camera ray
-    return createCameraRay(
-        cam.position,
-        -lightDir,
-        polRef,
-        mat4(1.0),
-        contrib,
-        0.0,
+    //assemble camera hit
+    hit = createCameraHit(
         localPos,
         localDir,
         vec3(0.0, 0.0, 1.0),
-        hitPolRef
+        cameraParams.objectId
+    );
+    return createBackwardRay(
+        cam.position,
+        -lightDir,
+        wavelength,
+        cameraParams.mediumIdx,
+        0.0,
+        contrib
     );
 }
 

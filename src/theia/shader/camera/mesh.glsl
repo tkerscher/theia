@@ -1,18 +1,10 @@
-#ifndef _INCLUDE_CAMERARAYSOURCE_MESH
-#define _INCLUDE_CAMERARAYSOURCE_MESH
+#ifndef _INCLUDE_CAMERA_MESH
+#define _INCLUDE_CAMERA_MESH
 
 #include "math.glsl"
-#include "ray/surface.glsl"
+#include "scene/geometry.glsl"
+#include "util/offset.glsl"
 #include "util/sample.glsl"
-
-layout(buffer_reference, scalar, buffer_reference_align=4) readonly buffer Vertex {
-    vec3 position;
-    vec3 normal;
-};
-// Indices of a triangle
-layout(buffer_reference, scalar, buffer_reference_align=4) readonly buffer Index {
-    ivec3 idx;
-};
 
 uniform CameraParams {
     uvec2 verticesAddress;
@@ -22,9 +14,21 @@ uniform CameraParams {
     float outward; // outward ? 1.0 : -1.0
     float timeDelta;
 
+    uint mediumIdx;
+    int objectId;
+
     mat4x3 objToWorld;
     mat4x3 worldToObj;
 } cameraParams;
+
+struct CameraSample {
+    vec3 position;
+    vec3 normal;
+    float contrib;
+
+    vec3 hitPosition;
+    vec3 hitNormal;
+};
 
 CameraSample sampleCamera(float wavelength, uint idx, inout uint dim) {
     //sample triangle
@@ -64,7 +68,7 @@ CameraSample sampleCamera(float wavelength, uint idx, inout uint dim) {
     float contrib = area * float(cameraParams.triangleCount);
 
     //assemble sample
-    return createCameraSample(
+    return CameraSample(
         rayPos,
         rayNrm,
         contrib,
@@ -73,49 +77,12 @@ CameraSample sampleCamera(float wavelength, uint idx, inout uint dim) {
     );
 }
 
-CameraRay sampleCameraRay(float wavelength, uint idx, inout uint dim) {
-    //sample position
-    CameraSample camSample = sampleCamera(wavelength, idx, dim);    
-
-    //sample ray direction (upper hemisphere)
-    vec3 localDir = sampleHemisphere(random2D(idx, dim));
-    float cos_theta = localDir.z;
-    //align direction with normal
-    localDir = createLocalCOSY(camSample.hitNormal) * localDir;
-    //transform from local to world
-    vec3 rayDir = normalize(mat3(cameraParams.objToWorld) * localDir);
-    //create polarization reference frame in plane of incidence
-    vec3 hitPolRef, polRef;
-    mat4 mueller;
-    #ifdef POLARIZATION
-    hitPolRef = perpendicularTo(localDir, camSample.hitNormal);
-    vec3 worldNormal = normalize(vec3(camSample.hitNormal * cameraParams.worldToObj));
-    polRef = perpendicularTo(rayDir, worldNormal);
-    //for non-orthogonal transformation the transformed polRef may not lie in
-    //the plane of incidence, but require a rotation of the stokes parameter
-    vec3 expPolRef = normalize(mat3(cameraParams.objToWorld) * hitPolRef);
-    mueller = alignPolRef(-rayDir, polRef, expPolRef);
-    #endif
-    
-    //calculate contribution
-    float contrib = cos_theta * TWO_PI * camSample.contrib;
-
-    //assemble camera ray
-    return createCameraRay(
-        camSample.position,         //ray position
-        rayDir,                     //ray direction
-        polRef,                     //ray polRef
-        mueller,                    //ray mueller matrix
-        contrib,                    //contribution
-        cameraParams.timeDelta,  //time delta
-        camSample.hitPosition,      //hit pos in object space
-        -localDir,                  //local (light) dir in object space
-        camSample.hitNormal,        //normal on unit sphere
-        hitPolRef                   //hit polRef
-    );
-}
-
-CameraRay createCameraRay(CameraSample cam, vec3 lightDir, float wavelength) {
+BackwardRay createCameraRay(
+    const CameraSample cam,
+    vec3 lightDir,
+    float wavelength,
+    out CameraHit hit
+) {
     //convert lightDir to object space
     vec3 hitDir = mat3(cameraParams.worldToObj) * lightDir;
     
@@ -125,31 +92,57 @@ CameraRay createCameraRay(CameraSample cam, vec3 lightDir, float wavelength) {
     //check light comes from the right side
     contrib *= float(dot(cam.normal, lightDir) < 0.0);
 
-    //create polarization reference frame in plane of incidence
-    vec3 hitPolRef, polRef;
-    mat4 mueller;
-    #ifdef POLARIZATION
-    hitPolRef = perpendicularTo(hitDir, cam.hitNormal);
-    vec3 worldNormal = normalize(vec3(cam.hitNormal * cameraParams.worldToObj));
-    polRef = perpendicularTo(lightDir, worldNormal);
-    //for non-orthogonal transformation the transformed polRef may not lie in
-    //the plane of incidence, but require a rotation of the stokes parameter
-    vec3 expPolRef = normalize(mat3(cameraParams.objToWorld) * hitPolRef);
-    mueller = alignPolRef(lightDir, polRef, expPolRef);
-    #endif
-
-    //assemble ray
-    return createCameraRay(
-        cam.position,
-        -lightDir,
-        polRef,
-        mueller,
-        contrib,
-        cameraParams.timeDelta,
+    //assemble camera hit
+    hit = createCameraHit(
         cam.hitPosition,
         hitDir,
         cam.hitNormal,
-        hitPolRef
+        cameraParams.objectId
+    );
+    //assemble backward ray
+    return createBackwardRay(
+        cam.position,
+        -lightDir,
+        wavelength,
+        cameraParams.mediumIdx,
+        cameraParams.timeDelta,
+        contrib
+    );
+}
+
+BackwardRay sampleCameraRay(
+    float wavelength,
+    out CameraHit hit,
+    uint idx, inout uint dim
+) {
+    //sample position
+    CameraSample camSample = sampleCamera(wavelength, idx, dim);    
+
+    //sample ray direction (upper hemisphere)
+    vec3 localDir = sampleHemisphere(random2D(idx, dim));
+    float cos_theta = localDir.z;
+    //align direction with normal
+    localDir = createLocalCOSY(camSample.hitNormal) * localDir;
+    //transform from local to world
+    vec3 rayDir = normalize(mat3(cameraParams.objToWorld) * localDir);    
+    //calculate contribution
+    float contrib = cos_theta * TWO_PI * camSample.contrib;
+
+    //assemble camera hit
+    hit = createCameraHit(
+        camSample.hitPosition,
+        -localDir,
+        camSample.hitNormal,
+        cameraParams.objectId
+    );
+    //assemble backward ray
+    return createBackwardRay(
+        camSample.position,
+        rayDir,
+        wavelength,
+        cameraParams.mediumIdx,
+        cameraParams.timeDelta,
+        contrib
     );
 }
 

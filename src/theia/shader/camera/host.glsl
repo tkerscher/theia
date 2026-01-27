@@ -1,14 +1,25 @@
-#ifndef _INCLUDE_CAMERARAYSOURCE_HOST
-#define _INCLUDE_CAMERARAYSOURCE_HOST
+#ifndef _INCLUDE_CAMERA_HOST
+#define _INCLUDE_CAMERA_HOST
 
-#include "camera/queue.glsl"
+uniform CameraParams {
+    uvec2 queueAdr;
+    uint queueSize;
+} cameraParams;
 
-readonly buffer CameraQueueIn {
-    CameraQueue queue;
-} cameraQueueIn;
+BackwardRay sampleCameraRay(
+    float wavelength,
+    out CameraHit hit,
+    uint idx, inout uint dim
+) {
+    //also populates hit
+    BackwardRay ray = loadBackwardRay(
+        cameraParams.queueAdr, cameraParams.queueSize, idx, hit
+    );
 
-CameraRay sampleCameraRay(float wavelength, uint idx, uint dim) {
-    LOAD_CAMERA(ray, cameraQueueIn.queue, idx)
+    #ifdef CAMERA_OVERRIDE_WAVELENGTH
+    ray.wavelength = wavelength;
+    #endif
+
     return ray;
 }
 
