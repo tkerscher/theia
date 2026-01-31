@@ -4,6 +4,7 @@ import theia.lookup
 import pytest
 from ctypes import Structure, c_int64, c_float
 from scipy.interpolate import RegularGridInterpolator
+from theia.compiler import compileShader
 
 
 @pytest.fixture(scope="module")
@@ -36,14 +37,15 @@ def test_sampleTable1D(sampleData1D):
     assert np.abs(y - sample).max() < 5e-3  # TODO: what is a sensible value?
 
 
-def test_lookUp1D_linear(sampleData1D, shaderUtil):
+def test_lookUp1D_linear(sampleData1D):
     N = 8192
     # prepare gpu
     table = theia.lookup.Table(sampleData1D[:, 1], interpolation="linear")
     gpu_table = table.upload()
     tensor = hp.FloatTensor(N)
     buffer = hp.FloatBuffer(N)
-    program = shaderUtil.createTestProgram("lookup.test.1D.glsl")
+    code = compileShader("lookup.test.1D.glsl")
+    program = hp.Program(code)
     program.bindParams(OutputBuffer=tensor)
 
     # run program
@@ -72,7 +74,7 @@ def test_lookUp1D_linear(sampleData1D, shaderUtil):
     assert np.abs(y - buffer.numpy()).max() < 1e-6
 
 
-def test_lookUp1D_cubic(shaderUtil):
+def test_lookUp1D_cubic():
     N = 8192
     # unfortunately, the specific kind of cubic interpolation we use is neither
     # part of numpy nor scipy. Instead we will use a 2nd degree polynomial to
@@ -86,7 +88,7 @@ def test_lookUp1D_cubic(shaderUtil):
     gpu_table = table.upload()
     tensor = hp.FloatTensor(N)
     buffer = hp.FloatBuffer(N)
-    program = shaderUtil.createTestProgram("lookup.test.1D.glsl")
+    program = hp.Program(compileShader("lookup.test.1D.glsl"))
     program.bindParams(OutputBuffer=tensor)
 
     # run program
@@ -114,7 +116,7 @@ def test_lookUp1D_cubic(shaderUtil):
     assert np.allclose(y, buffer.numpy())
 
 
-def test_lookUp1D_steffen(shaderUtil):
+def test_lookUp1D_steffen():
     # again, this interpolation method is not part of scipy, but luckily it's
     # part of gvar. We will use values that provoke undulation with cubic
     # interpolation as a test case
@@ -137,7 +139,7 @@ def test_lookUp1D_steffen(shaderUtil):
     N = len(y_out)
     tensor = hp.FloatTensor(N)
     buffer = hp.FloatBuffer(N)
-    program = shaderUtil.createTestProgram("lookup.test.1D.glsl")
+    program = hp.Program(compileShader("lookup.test.1D.glsl"))
     program.bindParams(OutputBuffer=tensor)
 
     # run program
@@ -197,7 +199,7 @@ def test_sampleTable2D(sampleData2D):
     assert np.abs(z.flatten() - sample).max() < 5e-3  # TODO: Find a reasonable value
 
 
-def test_lookUp2D_linear(shaderUtil):
+def test_lookUp2D_linear():
     N, Nx, Ny = 256, 32, 64
     # prepare gpu
     f = lambda x, y: 2.0 + np.cos(10.0 * x) * np.exp(y)
@@ -206,7 +208,7 @@ def test_lookUp2D_linear(shaderUtil):
 
     image = hp.Image(hp.ImageFormat.R32_SFLOAT, N, N)
     buffer = hp.FloatBuffer(N * N)
-    program = shaderUtil.createTestProgram("lookup.test.2D.glsl")
+    program = hp.Program(compileShader("lookup.test.2D.glsl"))
     program.bindParams(outputImage=image)
 
     # run program
@@ -240,7 +242,7 @@ def test_lookUp2D_linear(shaderUtil):
     assert np.abs(z - buffer.numpy()).max() < 5e-6
 
 
-def test_lookUp2D_cubic(shaderUtil):
+def test_lookUp2D_cubic():
     N, Nx, Ny = 512, 64, 48
     # again, no available Python implementation of the algo we use, so want to
     # interpolate a 2nd degree polynomial perfectly instead
@@ -249,7 +251,7 @@ def test_lookUp2D_cubic(shaderUtil):
     gpu_table = table.upload()
     image = hp.Image(hp.ImageFormat.R32_SFLOAT, N, N)
     buffer = hp.FloatBuffer(N * N)
-    program = shaderUtil.createTestProgram("lookup.test.2D.glsl")
+    program = hp.Program(compileShader("lookup.test.2D.glsl"))
     program.bindParams(outputImage=image)
 
     # run program
