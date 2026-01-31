@@ -1,8 +1,6 @@
 #ifndef _INCLUDE_CALLBACK_STAT
 #define _INCLUDE_CALLBACK_STAT
 
-#include "ray.glsl"
-
 writeonly buffer Statistics {
     uint64_t created;
     uint64_t scattered;
@@ -18,7 +16,7 @@ writeonly buffer Statistics {
     uint64_t mismatch;
 } stats;
 
-void onEvent(const RayState ray, ResultCode code, uint idx, uint i) {
+void onEvent(ResultCode code) {
     switch(code) {
     case RESULT_CODE_RAY_CREATED:
         atomicAdd(stats.created, 1);
@@ -60,5 +58,21 @@ void onEvent(const RayState ray, ResultCode code, uint idx, uint i) {
         atomicAdd(stats.error, 1);
     }
 }
+
+#ifdef ForwardRay
+
+void onEvent(const ForwardRay ray, ResultCode code, uint idx, uint i) {
+    onEvent(code);
+}
+
+#endif
+
+#ifdef BackwardRay
+
+void onEvent(const BackwardRay ray, ResultCode code, uint idx, uint i) {
+    onEvent(code);
+}
+
+#endif
 
 #endif

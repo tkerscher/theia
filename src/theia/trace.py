@@ -1,14 +1,27 @@
 from __future__ import annotations
 
+from abc import abstractmethod
+
 import hephaistos as hp
 from hephaistos import Program
-from hephaistos.pipeline import SourceCodeMixin
+from hephaistos.pipeline import PipelineStage, SourceCodeMixin
 
 from ctypes import Structure, c_float, c_int32, c_uint32, c_uint64
 from ctypes import addressof, memset, sizeof
+from hephaistos.glsl import vec3
 from numpy.ctypeslib import as_array
 
-from theia.util import ShaderLoader, createPreamble
+from theia.camera import Camera
+from theia.compiler import createPreamble, compileShader, loadShader
+from theia.light import LightSource
+from theia.material import MaterialStore
+from theia.random import RNG
+from theia.ray import RayModel
+from theia.response import HitResponse, TraceConfig
+from theia.scene import RectBBox
+from theia.target import Target
+from theia.volume import VolumeModel
+import theia.units as u
 
 from enum import IntEnum
 from numpy.typing import NDArray
@@ -19,7 +32,9 @@ __all__ = [
     "EventResultCode",
     "EventStatisticCallback",
     "TraceEventCallback",
+    "Tracer",
     "TrackRecordCallback",
+    "VolumeForwardTracer",
 ]
 
 
@@ -52,7 +67,9 @@ class EmptyEventCallback(TraceEventCallback):
     def __init__(self) -> None:
         super().__init__()
 
-    sourceCode = ShaderLoader("callback/empty.glsl")
+    @property
+    def sourceCode(self) -> str:
+        return loadShader("callback/empty.glsl")
 
 
 class EventStatisticCallback(TraceEventCallback):
@@ -88,9 +105,6 @@ class EventStatisticCallback(TraceEventCallback):
             raise RuntimeError("Could not create mapped tensor")
         self._stat = self.Statistic.from_address(self._tensor.memory)
         self.reset()
-
-    # sourceCode via descriptor
-    sourceCode = ShaderLoader("callback/stat.glsl")
 
     @property
     def absorbed(self) -> int:
@@ -152,6 +166,10 @@ class EventStatisticCallback(TraceEventCallback):
         """Number of traces aborted due to an error"""
         return self._stat.error
 
+    @property
+    def sourceCode(self) -> str:
+        return loadShader("callback/stat.glsl")
+
     def reset(self) -> None:
         """Resets the statistic"""
         memset(addressof(self._stat), 0, sizeof(self.Statistic))
@@ -178,9 +196,6 @@ class TrackRecordCallback(TraceEventCallback):
         Number of rays that can be recorded
     length: int
         Max number of points per track
-    polarized: bool, default=False
-        Whether to save polarization state. Save unpolarized state and zero
-        vector as reference frame if ray contains no polarization state.
     retrieve: bool, default=True
         Whether to retrieve the tracks from the device
     """
@@ -192,7 +207,6 @@ class TrackRecordCallback(TraceEventCallback):
         capacity: int,
         length: int,
         *,
-        polarized: bool = False,
         retrieve: bool = True,
     ) -> None:
         super().__init__()
@@ -200,11 +214,9 @@ class TrackRecordCallback(TraceEventCallback):
         self._capacity = capacity
         self._length = length
         self._retrieve = retrieve
-        self._polarized = polarized
 
         # allocate memory
-        self._cols = 11 if polarized else 4
-        words = capacity * length * self._cols + capacity * 2  # track + length + codes
+        words = (1 + 5 * length) * capacity
         self._tensor = hp.Tensor(words * 4)
         self._buffer = [hp.Buffer(words * 4) for _ in range(2)]
 
@@ -228,17 +240,14 @@ class TrackRecordCallback(TraceEventCallback):
         """Wether to retrieve the tracks from the device"""
         return self._retrieve
 
-    # sourceCode via descriptor
-    _sourceCode = ShaderLoader("callback/track.glsl")
-
     @property
     def sourceCode(self) -> str:
         preamble = createPreamble(
             TRACK_COUNT=self.capacity,
             TRACK_LENGTH=self.length,
-            TRACK_POLARIZED=self.polarized,
         )
-        return preamble + self._sourceCode
+        code = loadShader("callback/track.glsl")
+        return preamble + code
 
     @property
     def tensor(self) -> hp.Tensor:
@@ -259,20 +268,23 @@ class TrackRecordCallback(TraceEventCallback):
         lengths: NDArray
             Length of each recorded track stored in a numpy array of shape (track,)
         codes: NDArray
-            Last recorded result code per track
+            Recorded result codes for each track point of shape (track,pos)
         """
         # fetch each data structures
         adr = self._buffer[i].address
         pLengths = (c_uint32 * self.capacity).from_address(adr)
-        pCodes = (c_int32 * self.capacity).from_address(adr + 4 * self.capacity)
-        n = self.length * self.capacity * self._cols
-        pTracks = (c_float * n).from_address(adr + 8 * self.capacity)
-        # construct numpy array
+        adr += 4 * self.capacity
+        n = self.length * self.capacity
+        pTracks = (c_float * (4 * n)).from_address(adr)
+        adr += 4 * 4 * n
+        pCodes = (c_int32 * n).from_address(adr)
+        # construct numpy arrays
         lengths = as_array(pLengths)
-        codes = as_array(pCodes)
-        tracks = as_array(pTracks).reshape((self._cols, self.length, self.capacity))
+        tracks = as_array(pTracks).reshape((4, self.length, self.capacity))
+        codes = as_array(pCodes).reshape((self.length, self.capacity))
         # change from (coords, ray, event) -> (ray, event, coords)
         tracks = tracks.transpose(2, 1, 0)
+        codes = codes.transpose()
         return tracks, lengths, codes
 
     def bindParams(self, program: Program, i: int) -> None:
@@ -322,3 +334,412 @@ class EventResultCode(IntEnum):
     """Tracer encountered unexpected media"""
     ERROR_TRACE_ABORT = -12
     """Tracer reached a state it can't proceed from"""
+
+
+class Tracer(PipelineStage):
+    """
+    Base class for tracing algorithms sampling light paths connecting source
+    and target.
+    """
+
+    name = "Tracer"
+
+    def __init__(
+        self,
+        batchSize: int,
+        ray: RayModel,
+        response: HitResponse,
+        rng: RNG,
+        params: dict[str, type[Structure]] = {},
+        extra: set[str] = set(),
+        *,
+        capacity: int | None,
+        callback: TraceEventCallback,
+        maxPathLength: int,
+        nRNGSamples: int,
+        maxHitsPerRay: int,
+    ) -> None:
+        super().__init__(params, extra)
+
+        if maxPathLength < 1:
+            raise ValueError("Max path length must be at least 1")
+
+        self._ray = ray
+        self._response = response
+        self._rng = rng
+        self._capacity = batchSize if capacity is None else capacity
+        self._callback = callback
+        self._maxPathLength = maxPathLength
+        self._nRNGSamples = nRNGSamples
+        self._maxHitsPerRay = maxHitsPerRay
+        self.batchSize = batchSize
+        response.prepare(self._getTraceConfig(), ray)
+
+    @property
+    def batchSize(self) -> int:
+        """Number of rays to simulate per run"""
+        return self._batchSize
+
+    @batchSize.setter
+    def batchSize(self, value: int) -> None:
+        if value < 0:
+            raise ValueError("batchSize must be at least zero!")
+        if value > self.capacity:
+            raise ValueError("batchSize cannot be larger than capacity!")
+        self._batchSize = value
+
+    @property
+    def capacity(self) -> int:
+        """Maximal batch size"""
+        return self._capacity
+
+    @property
+    def callback(self) -> TraceEventCallback:
+        """Callback called for each tracing event"""
+        return self._callback
+
+    @property
+    def maxHits(self) -> int:
+        """Maximum number of hits per batch"""
+        return self.maxHitsPerRay * self.batchSize
+
+    @property
+    def maxHitsPerRay(self) -> int:
+        """Maximum amount of hits the tracer can produce per ray"""
+        return self._maxHitsPerRay
+
+    @property
+    def maxPathLength(self) -> int:
+        """Maximum length of ray paths sampled"""
+        return self._maxPathLength
+
+    @property
+    def normalization(self) -> float:
+        """
+        Normalization factor that must be applied to each sample to get a
+        correct estimate.
+        """
+        return 1.0 if self.ray.isParticle else 1.0 / self.batchSize
+
+    @property
+    def nRNGSamples(self) -> int:
+        """Amount of random numbers drawn per ray"""
+        return self._nRNGSamples
+
+    @property
+    def ray(self) -> RayModel:
+        """Physical model of the rays to be traced"""
+        return self._ray
+
+    @property
+    def response(self) -> HitResponse:
+        """Response function processing each simulated hit"""
+        return self._response
+
+    @property
+    def rng(self) -> RNG:
+        """Random number generator used"""
+        return self._rng
+
+    def collectStages(
+        self,
+        *,
+        useOriginalNames: bool = False,
+    ) -> list[tuple[str, PipelineStage]]:
+        """
+        Returns a list of all pipeline stages involved with this tracer in the
+        correct order suitable for creating a pipeline. If useOriginalNames is
+        False, stages will be named according to their function in the tracer,
+        instead of their original names.
+        """
+        stages = self._collectStages()
+        if useOriginalNames:
+            return [(s.name, s) for _, s in stages]
+        else:
+            return stages
+
+    @abstractmethod
+    def _collectStages(self) -> list[tuple[str, PipelineStage]]:
+        """
+        Internal implementation of collectStages() in derived classes returning
+        the list of renamed pipeline stages in correct order.
+        """
+        pass
+
+    def _getTraceConfig(self) -> TraceConfig:
+        return TraceConfig(
+            self.batchSize,
+            self.capacity,
+            self.maxHitsPerRay,
+            self.normalization,
+        )
+
+    def _finishParams(self, i: int) -> None:
+        super()._finishParams(i)
+        # give response a chance to respond to any changes
+        self.response.updateConfig(self._getTraceConfig())
+
+
+def _getVolumeRNGStride(
+    volume: VolumeModel,
+    response: HitResponse,
+    target: Target | None = None,
+) -> int:
+    """util func calculating number of rng draws per volume tracing"""
+    result = 0
+    result += max(1, volume.rngDraws.sampleInteractionLength)
+    result += volume.rngDraws.applyVolumeEffect
+    result += volume.rngDraws.sampleVolumeInteraction
+    result += response.nRNGSamples
+    if target is not None:
+        result += volume.rngDraws.sampleVolumeScattering
+        result += target.nRNGSamples
+        result += volume.rngDraws.applyVolumeEffect
+        result += response.nRNGSamples
+    return result
+
+
+class VolumeForwardTracer(Tracer):
+    """
+    Path tracer simulating rays traveling through media originating at a source
+    and ending at a detector. It does not contain a full scene, but only a
+    single target. Can be run on hardware without ray tracing support and may be
+    faster.
+
+    Parameters
+    ----------
+    batchSize: int
+        Number of rays to simulate per run.
+    ray: RayModel
+        Model of the ray to propagate
+    source: LightSource
+        Source producing rays
+    target: Target
+        Target model used to generate hits
+    response: HitResponse
+        Respose function processing each simulated hit
+    rng: RNG
+        Random number generator
+    materials: MaterialStore
+        MaterialStore containing the medium used by the tracer
+    volume: VolumeModel | str | int
+        Volume model used by the tracer. Can dynamically be fetched from the
+        material store using the corresponding medium's name or index.
+    capacity: int | None, default=None
+        Maximum batch size. If None, same as `batchSize`.
+    callback: TraceEventCallback, default=EmptyEventCallback()
+        Callback called for each tracing event. See `TraceEventCallback`
+    maxPathLength: int, default=64
+        Maximum length of paths to simulate
+    objectId: int, default=0
+        Object id to be used for creating hits.
+    sampleCoefficient: float, default=NaN
+        Optional coefficient used for sampling ray lengths. If the value is NaN
+        or negative, the volume will sample the ray length instead. Will always
+        be disabled, if the ray is a particle.
+    maxTime: float, default=inf
+        Rays exceeding this limit will aborted with code `decayed`.
+    traceBBox: RectBBox | None, default=None
+        Rays leaving the trace boundary box will get stopped and noted as lost.
+        If `None`, this defaults to a box with at the origin spanning 1km in
+        each direction, i.e. 2km side length.
+    disableDirectLighting: bool, default=False
+        Whether to ignore contributions from direct lighting, i.e. paths with
+        no scattering. Usefull if a dedicated tracer or estimator for direct
+        light contributions is additionally used.
+    disableTargetSampling: bool, default=False
+        Whether to sample the target after scattering events to create hits.
+        Disabling it means that targets will only be hit by chance.
+        Automatically disabled if the ray is a particle.
+
+    Stage Parameters
+    ----------------
+    batchSize: int
+        Number of rays to simulate per run.
+    objectId: int
+        Object id to use for creating hits.
+    maxTime: float
+        Max total time including delay from the source and travel time, after
+        which a ray gets stopped
+    """
+
+    class TraceParams(Structure):
+        _fields_ = [
+            ("_batchSize", c_uint32),
+            ("_mediumIdx", c_uint32),
+            ("objectId", c_int32),
+            ("sampleCoefficient", c_float),
+            ("lowerBBoxCorner", vec3),
+            ("upperBBoxCorner", vec3),
+            ("maxTime", c_float),
+            ("_maxDist", c_float),
+        ]
+
+    def __init__(
+        self,
+        batchSize: int,
+        ray: RayModel,
+        source: LightSource,
+        target: Target,
+        response: HitResponse,
+        rng: RNG,
+        materials: MaterialStore,
+        *,
+        volume: VolumeModel | str | int,
+        capacity: int | None = None,
+        callback: TraceEventCallback = EmptyEventCallback(),
+        maxPathLength: int = 64,
+        objectId: int = 0,
+        sampleCoefficient: float = float("NaN"),
+        maxTime: float = float("inf"),
+        traceBBox: RectBBox | None = None,
+        disableDirectLighting: bool = False,
+        disableTargetSampling: bool = False,
+    ) -> None:
+        # enforce params in particle mode
+        if ray.isParticle:
+            disableTargetSampling = True
+        # validate params compatability
+        if not isinstance(volume, VolumeModel):
+            volume = materials.getVolumeModel(volume)
+        if volume.forwardSourceCode is None:
+            raise ValueError(
+                f'Volume model "{volume.name}" does not support forward tracing'
+            )
+        if not ray.supportsForward:
+            raise ValueError("Ray model does not support forward tracing")
+        if ray.isParticle and not volume.supportsParticle:
+            raise ValueError("Volume has no particle support as required by ray")
+        if not source.supportForward:
+            raise ValueError("Light source does not support forward mode")
+        if not disableTargetSampling and not volume.supportsNEE:
+            raise ValueError("Volume supports no target sampling")
+        # calculate max hits per ray
+        if not disableTargetSampling:
+            maxHitsPerRay = 2 * (maxPathLength - 1)
+            if not disableDirectLighting:
+                maxHitsPerRay += 1
+        else:
+            maxHitsPerRay = 1
+        # NEE extends path length by one -> reduce path length by one
+        pathLength = maxPathLength if disableTargetSampling else maxPathLength - 1
+        # calculate amount of random numbers needed
+        rngInit = source.nRNGForward
+        if not disableDirectLighting:
+            rngInit += volume.rngDraws.applyVolumeEffect
+            rngInit += response.nRNGSamples
+        rngStride = _getVolumeRNGStride(volume, response, target)
+        nRNG = rngInit + pathLength * rngStride
+        super().__init__(
+            batchSize,
+            ray,
+            response,
+            rng,
+            {"TraceParams": VolumeForwardTracer.TraceParams},
+            capacity=capacity,
+            callback=callback,
+            maxPathLength=maxPathLength,
+            nRNGSamples=nRNG,
+            maxHitsPerRay=maxHitsPerRay,
+        )
+        # save params
+        if traceBBox is None:
+            traceBBox = RectBBox((-1.0, -1.0, -1.0) * u.km, (1.0, 1.0, 1.0) * u.km)
+        self._source = source
+        self._target = target
+        self._materials = materials
+        self._directLightingDisabled = disableDirectLighting
+        self._targetSamplingDisabled = disableTargetSampling
+        self.setParams(
+            sampleCoefficient=sampleCoefficient,
+            objectId=objectId,
+            maxTime=maxTime,
+            lowerBBoxCorner=traceBBox.lowerCorner,
+            upperBBoxCorner=traceBBox.upperCorner,
+            _maxDist=traceBBox.diagonal,
+        )
+        # compile code
+        preamble = createPreamble(
+            DISABLE_DIRECT_LIGHTING=disableDirectLighting,
+            DISABLE_NEE=disableTargetSampling,
+            PATH_LENGTH=pathLength,
+        )
+        photons = source.wavelengthSource
+        headers = {
+            "callback.glsl": callback.sourceCode,
+            "photon.glsl": "" if photons is None else photons.sourceCode,
+            "ray.glsl": ray.sourceCode,
+            "response.glsl": response.sourceCode,
+            "rng.glsl": rng.sourceCode,
+            "source.glsl": source.sourceCode,
+            "target.glsl": target.sourceCode,
+            "volume.glsl": volume.forwardSourceCode,
+            **materials.header,
+        }
+        code = compileShader("tracer/volume/forward.glsl", preamble, headers)
+        # create program
+        self._program = hp.Program(code)
+        materials.bindParams(self._program)
+
+    @Tracer.batchSize.setter
+    def batchSize(self, value) -> None:
+        assert Tracer.batchSize.fset is not None  # to make linter happy
+        Tracer.batchSize.fset(self, value)
+        self.setParam("_batchSize", value)
+
+    @property
+    def directLightingDisabled(self) -> bool:
+        """Whether direct lighting is disabled"""
+        return self._directLightingDisabled
+
+    @property
+    def materials(self) -> MaterialStore:
+        """MaterialStore containing the medium used by the tracer"""
+        return self._materials
+
+    @property
+    def source(self) -> LightSource:
+        """Source producing rays"""
+        return self._source
+
+    @property
+    def target(self) -> Target:
+        """Target model used to determine hits"""
+        return self._target
+
+    @property
+    def targetSamplingDisabled(self) -> bool:
+        """Whether target sampling is disabled"""
+        return self._targetSamplingDisabled
+
+    @property
+    def traceBBox(self) -> RectBBox:
+        """Boundary box of simulated rays"""
+        return RectBBox(
+            self.getParam("lowerBBoxCorner"), self.getParam("upperBBoxCorner")
+        )
+
+    def _collectStages(self) -> list[tuple[str, PipelineStage]]:
+        stages = [
+            ("rng", self.rng),
+            # ("photons", self.wavelengthSource),
+            ("lightSource", self.source),
+            ("target", self.target),
+            ("tracer", self),
+            ("callback", self.callback),
+            ("response", self.response),
+        ]
+        # wavelength sources are optional, but need to be before the light source
+        if self.source.wavelengthSource is not None:
+            stages.insert(1, ("photons", self.source.wavelengthSource))
+        return stages
+
+    def _finishParams(self, i: int) -> None:
+        super()._finishParams(i)
+        self.setParam("_maxDist", self.traceBBox.diagonal)
+
+    def run(self, i: int) -> list[hp.Command]:
+        for _, stage in self.collectStages():
+            stage.bindParams(self._program, i)
+        groups = -(self.capacity // -512)
+        return [self._program.dispatch(groups)]
