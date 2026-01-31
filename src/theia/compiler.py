@@ -3,7 +3,9 @@ from __future__ import annotations
 import importlib.resources
 import hephaistos as hp
 
-from theia.device import getEnabledRayTracingFeatures
+from functools import cache
+
+from theia.device import getEnabledAtomics, getEnabledRayTracingFeatures
 
 from importlib.resources.abc import Traversable
 from typing import Any
@@ -57,26 +59,39 @@ def findShader(file: str) -> Traversable:
     raise FileNotFoundError()
 
 
-def loadShader(file: str) -> str:
+def loadShader(file: str, preamble: str | None = None) -> str:
     """
     Tries to find the given shader file in the list of include dirs and returns
     the source code it contains. Raises `FileNotFoundError` if the file could
     not be found.
     """
     with findShader(file).open("r") as f:
-        return f.read()
+        code = f.read()
+    if preamble is None:
+        return code
+    else:
+        return "\n".join([preamble, f'#line 1 "{file}"', code])
 
 
-# load preamble. we will always need it
-PREAMBLE = loadShader("preamble.glsl")
-
-
+@cache
 def getPreamble() -> str:
     """Returns preamble preadded to all shader code before compiling"""
     # build preamble
-    preamble = str(PREAMBLE)  # copy for modification
-    # the device may have changed between calls so it's safer to just rebuilt
-    # it every time we need it.
+    preamble = loadShader("preamble.glsl")
+    # enable extended types
+    types = hp.getSupportedTypes()
+    if types.float64:
+        preamble += (
+            "#extension GL_EXT_shader_explicit_arithmetic_types_float64 : require\n"
+        )
+        preamble += "#define SUPPORTS_DOUBLE 1\n"
+    # enable supported atomics
+    atomics = getEnabledAtomics()
+    if hp.Atomics.BufferFloat64Add in atomics:
+        preamble += "#define SUPPORTS_ATOMIC_DOUBLE 1\n"
+    if hp.Atomics.BufferInt64 in atomics:
+        preamble += "#extension GL_EXT_shader_atomic_int64 : require\n"
+        preamble += "#define SUPPORTS_ATOMIC_INT64 1\n"
     # enable supported ray tracing features
     rt_features = getEnabledRayTracingFeatures()
     if rt_features.query:
