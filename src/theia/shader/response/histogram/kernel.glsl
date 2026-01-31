@@ -1,65 +1,26 @@
 #ifndef _INCLUDE_RESPONSE_KERNEL_HISTOGRAM
 #define _INCLUDE_RESPONSE_KERNEL_HISTOGRAM
 
-struct Histogram {
-    float bins[N_BINS];
-};
-writeonly buffer HistogramOut {
-    Histogram histsOut[];
-};
+#include "util/buffers.glsl"
+#include "util/launchid.glsl"
 
 uniform ResponseParams {
-    //histogram params
+    uvec2 bufferAdr;
+    uint binCount;
+    uint histCount;
+
     float t0;
     float binSize;
 
-    //kernel params
     float kernelBandwidth;
     float kernelSupport;
 } responseParams;
 
-#ifdef RESPONSE_KERNEL_HISTOGRAM_USE_SHARED_MEMORY
-
-shared float localHist[N_BINS];
-
-void initResponse() {
-    //clear local hist
-    [[unroll]] for (uint i = gl_LocalInvocationID.x; i < N_BINS; i += BLOCK_SIZE) {
-        localHist[i] = 0.0;
-    }
-
-    //block until local hist is initialized
-    memoryBarrierShared();
-    barrier();
+void updateBin(uint hist, uint bin, float value) {
+    BinBuffer bins = BinBuffer(responseParams.bufferAdr);
+    uint i = hist * responseParams.binCount + bin;
+    atomicAdd(bins.values[i], value);
 }
-
-void updateBin(int bin, float value) {
-    atomicAdd(localHist[bin], value);
-}
-
-void finalizeResponse() {
-    //ensure we're finished with the local histogram
-    memoryBarrierShared();
-    barrier();
-
-    //copy local histogram from shared memory to global memory
-    uint histId = gl_WorkGroupID.x;
-    [[unroll]] for (uint i = gl_LocalInvocationID.x; i < N_BINS; i += BLOCK_SIZE) {
-        histsOut[histId].bins[i] = localHist[i];
-    }
-}
-
-#else //ifdef RESPONSE_KERNEL_HISTOGRAM_USE_SHARED_MEMORY
-
-void initResponse() {}
-
-void updateBin(int bin, float value) {
-    atomicAdd(histsOut[gl_WorkGroupID.x].bins[bin], value);
-}
-
-void finalizeResponse() {}
-
-#endif
 
 //For now we will only support gaussian kernel
 float kernelCdf(float x) {
@@ -75,6 +36,12 @@ float kernelCdf(float x) {
 void response(HitItem item, uint idx, inout uint dim) {
     //get response value
     float value = responseValue(item, idx, dim);
+    //ignore zero and NaNs
+    if (!(value != 0.0)) return;
+
+    //hash launch id to select a random histogram for storing the value
+    //this is to avoid serialization of atomicAdds of the same bin
+    uint histIdx = getScrambledLaunchId(responseParams.histCount);
 
     //calculate which bins will be affected
     float t = item.time - responseParams.t0;
@@ -82,11 +49,10 @@ void response(HitItem item, uint idx, inout uint dim) {
     int lastBin = int(ceil((t + responseParams.kernelSupport) / responseParams.binSize));
     //clamp bins
     firstBin = max(firstBin, 0);
-    lastBin = min(lastBin, N_BINS) - 1;
+    lastBin = min(lastBin, int(responseParams.binCount)) - 1;
 
     //update histogram
     t = firstBin * responseParams.binSize + responseParams.t0 - item.time;
-    // t = firstBin * responseParams.binSize - t;
     float h = 1.0 / responseParams.kernelBandwidth;
     float prev_cdf = kernelCdf(t * h);
     for (int i = firstBin; i <= lastBin; ++i) {
@@ -97,7 +63,7 @@ void response(HitItem item, uint idx, inout uint dim) {
         float w = cdf - prev_cdf;
         prev_cdf = cdf;
         //update bin
-        updateBin(i, w * value);
+        updateBin(histIdx, i, w * value);
     }
 }
 

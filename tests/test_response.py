@@ -1,40 +1,40 @@
 import pytest
 
-import numpy as np
 import hephaistos as hp
+import numpy as np
 import scipy.stats as stats
 import theia.response
 import theia.units as u
 
-from theia.camera import PointCamera, CameraRayItem, PolarizedCameraRayItem
-from theia.light import UniformWavelengthSource, WavelengthSampleItem
 from theia.random import PhiloxRNG
+from theia.ray import UnpolarizedRay
 
-from hephaistos.pipeline import RetrieveTensorStage, UpdateTensorStage, runPipeline
-from hephaistos.queue import QueueTensor, as_queue
+from hephaistos.pipeline import runPipeline, runPipelineStage
 
 
-@pytest.mark.parametrize("polarized", [True, False])
-def test_record(rng, polarized: bool):
+def test_record(rng):
     N = 8192
 
-    record = theia.response.HitRecorder(polarized=polarized)
-    replay = theia.response.HitReplay(N, record, polarized=polarized)
+    ray = UnpolarizedRay()
+    record = theia.response.HitRecorder()
+    replay = theia.response.HitReplay(N, ray, record)
 
-    samples = replay.queue.view(0)
+    buffer = replay.queue.buffer(0)
+    assert buffer is not None
+    samples = buffer.view
+    samples.count = N
     samples["position"] = (10.0 * rng.random((N, 3)) - 5.0) * u.m
     samples["direction"] = rng.random((N, 3))
     samples["normal"] = rng.random((N, 3))
     samples["wavelength"] = (rng.random((N,)) * 100.0 + 400.0) * u.nm
     samples["time"] = (rng.random((N,)) * 100.0) * u.ns
+    samples["objectId"] = rng.integers(0, 10, N)
     # use contrib to encode ordering (gpu will scramble items)
     samples["contrib"] = np.arange(N).astype(np.float32)
-    if polarized:
-        samples["stokes"] = rng.random((N, 4))
-        samples["polarizationRef"] = rng.random((N, 3))
 
     runPipeline(replay.collectStages())
 
+    assert record.queue is not None
     results = record.queue.view(0)
     assert results.count == N
     # restore ordering via contrib
@@ -44,94 +44,89 @@ def test_record(rng, polarized: bool):
     assert np.all(samples["normal"] == results["normal"])
     assert np.all(samples["wavelength"] == results["wavelength"])
     assert np.all(samples["time"] == results["time"])
+    assert np.all(samples["objectId"] == results["objectId"])
     assert np.all(samples["contrib"] == results["contrib"])
-    if polarized:
-        assert np.all(samples["stokes"] == results["stokes"])
-        assert np.all(samples["polarizationRef"] == results["polarizationRef"])
 
 
-def test_hitPolarizationMismatch():
-    with pytest.raises(RuntimeError):
-        record = theia.response.HitRecorder(polarized=True)
-        replay = theia.response.HitReplay(128, record, polarized=False)
-    with pytest.raises(RuntimeError):
-        record = theia.response.HitRecorder(polarized=False)
-        replay = theia.response.HitReplay(128, record, polarized=True)
+@pytest.mark.parametrize("useDouble", [False, True])
+@pytest.mark.parametrize("useCPU", [False, True])
+def test_BinReducer(rng, useDouble: bool, useCPU):
+    N_BINS = 100
+    N_BUF = 16 if useCPU else 128
+    NORM = 1.0
+
+    reducer = theia.response.BinReducer(
+        binCount=N_BINS,
+        bufferCount=N_BUF,
+        normalization=NORM,
+        useDoublePrecision=useDouble,
+    )
+    # fill input buffer
+    if useDouble:
+        buffer = hp.DoubleBuffer(N_BINS * N_BUF)
+    else:
+        buffer = hp.FloatBuffer(N_BINS * N_BUF)
+    buffer.numpy()[:] = rng.random(N_BINS * N_BUF)
+    hp.execute(hp.updateTensor(buffer, reducer.bufferIn))
+    # run reducer
+    runPipelineStage(reducer)
+
+    # calculate expected result
+    exp = buffer.numpy().reshape((N_BUF, N_BINS)).sum(0)
+    # check result
+    result = reducer.result(0)
+    assert np.allclose(exp, result)
 
 
-@pytest.mark.parametrize("useSharedMemory", [True, False])
-def test_histogramResponse(rng, useSharedMemory: bool):
+@pytest.mark.parametrize("useDouble", [False, True])
+def test_HistogramHitResponse(rng, useDouble: bool):
+    # params
     N = 256 * 1024
     N_BINS = 50
     BIN_SIZE = 4.0 * u.ns
     T0 = 20.0 * u.ns
     T1 = T0 + N_BINS * BIN_SIZE
-    NORM = 1e-5
+    NORM = 5e-4
 
+    # create pipeline
+    ray = UnpolarizedRay()
     value = theia.response.UniformValueResponse()
     response = theia.response.HistogramHitResponse(
         value,
-        nBins=N_BINS,
+        binCount=N_BINS,
         t0=T0,
         binSize=BIN_SIZE,
         normalization=NORM,
-        useSharedMemory=useSharedMemory,
+        bufferCount=64,
+        useDoublePrecision=useDouble,
     )
-    replay = theia.response.HitReplay(N, response, blockSize=128)
-
+    replay = theia.response.HitReplay(N, ray, response)
+    # fill samples to process
     samples = replay.queue.view(0)
     samples["position"] = (10.0 * rng.random((N, 3)) - 5.0) * u.m
     samples["direction"] = rng.random((N, 3))
     samples["normal"] = rng.random((N, 3))
+    samples["objectId"] = rng.integers(0, 10, N)
     samples["wavelength"] = (rng.random((N,)) * 100.0 + 400.0) * u.nm
-    samples["time"] = rng.random((N,)) * T1
+    samples["time"] = rng.random((N,)) * T1 * 1.2
     samples["contrib"] = rng.random((N,)) * 10.0
-
+    # run pipeline
     runPipeline(replay.collectStages())
 
-    result = response.result(0)
     # calculate expected results
     bin_edge = np.arange(N_BINS + 1) * BIN_SIZE + T0
     exp_hist, _ = np.histogram(samples["time"], bin_edge, weights=samples["contrib"])
     exp_hist *= NORM
-    # check result
-    # TODO: Somewhat large error. Check if this is really only due to double vs float
+    # check results
+    result = response.result(0)
+    # TODO: Somewhat large error independent of float vs double (about the same)
+    #       -> Is there a difference in how we create the histogram and how numpy
+    #          does it?
     assert np.allclose(result, exp_hist, rtol=1e-4)
 
 
-def test_histogramEstimator(rng):
-    N = 32 * 1024
-    N_BINS = 50
-    BIN_SIZE = 4.0 * u.ns
-    T0 = 20.0 * u.ns
-    T1 = T0 + N_BINS * BIN_SIZE
-    NORM = 0.01
-
-    queue = theia.response.createValueQueue(N)
-    estimator = theia.response.HistogramEstimator(
-        queue,
-        nBins=N_BINS,
-        t0=T0,
-        binSize=BIN_SIZE,
-        normalization=NORM,
-        clearQueue=False,
-    )
-    updater = UpdateTensorStage(queue)
-    data = as_queue(updater.buffer(0), theia.response.ValueItem)
-
-    data.count = N
-    data["value"] = rng.random(N)
-    data["time"] = rng.random(N) * 300.0 * u.ns
-
-    runPipeline([updater, estimator])
-
-    result = estimator.result(0)
-    expected = np.histogram(data["time"], N_BINS, (T0, T1), weights=data["value"])[0]
-    assert np.allclose(result, expected * NORM)
-
-
-@pytest.mark.parametrize("useSharedMemory", [False, True])
-def test_kernelHistogramEstimator(rng, useSharedMemory: bool):
+@pytest.mark.parametrize("useDouble", [False, True])
+def test_KernelHistogramHitResponse(rng, useDouble: bool):
     N = 64 * 1024
     N_BINS = 200
     BIN_SIZE = 1.2 * u.ns
@@ -142,167 +137,130 @@ def test_kernelHistogramEstimator(rng, useSharedMemory: bool):
     SUPPORT = 50.0 * u.ns
     NORM = 5e-4
 
+    # create pipeline
+    ray = UnpolarizedRay()
     value = theia.response.UniformValueResponse()
     response = theia.response.KernelHistogramHitResponse(
         value,
-        nBins=N_BINS,
+        binCount=N_BINS,
         t0=T0,
         binSize=BIN_SIZE,
         kernelBandwidth=BANDWIDTH,
         kernelSupport=SUPPORT,
         normalization=NORM,
-        useSharedMemory=useSharedMemory,
+        bufferCount=64,
+        useDoublePrecision=useDouble,
     )
-    replay = theia.response.HitReplay(N, response)
-
+    replay = theia.response.HitReplay(N, ray, response)
+    # fill samples to process
     samples = replay.queue.view(0)
     samples["position"] = (10.0 * rng.random((N, 3)) - 5.0) * u.m
     samples["direction"] = rng.random((N, 3))
     samples["normal"] = rng.random((N, 3))
+    samples["objectId"] = rng.integers(0, 10, N)
     samples["wavelength"] = (rng.random((N,)) * 100.0 + 400.0) * u.nm
-    # samples["time"] = rng.random((N,)) * T1
+    # samples["time"] = rng.random((N,)) * T1 * 1.2
     samples["time"] = rng.normal(T_PEAK, 10.0 * BIN_SIZE, (N,))
-    # samples["contrib"] = rng.random((N,)) * 5.0 + 5.0
-    samples["contrib"] = rng.random((N,)) + np.sqrt(samples["time"])
-
+    samples["contrib"] = rng.random((N,)) * 10.0
+    # run pipeline
     runPipeline(replay.collectStages())
 
     # calculate expected result
     x = np.arange(N_BINS + 1) * BIN_SIZE + T0
     exp_result = np.zeros_like(x)
+    # TODO: At some point fix this slow loop...
     for i in range(N):
         t = samples["time"][i]
         v = samples["contrib"][i]
         exp_result += v * stats.norm.cdf(x, loc=t, scale=BANDWIDTH)
     exp_result = np.diff(exp_result) * NORM
     # check result
-    result = response.result(0)
+    result = np.asarray(response.result(0))
+    # TODO: Somewhat large error independent of double vs. float
+    #       -> Check our implementation is correct (CPU and GPU...)
     assert np.abs(result - exp_result).max() < 6e-4
 
 
-def test_uniformResponse(rng):
+def test_StoreValueHitResponse(rng):
     N = 32 * 1024
 
-    queue = theia.response.createValueQueue(N)
-    value = theia.response.UniformValueResponse()
-    response = theia.response.StoreValueHitResponse(value, queue)
-    replay = theia.response.HitReplay(N, response)
-    fetch = RetrieveTensorStage(queue)
-
-    hits = replay.queue.view(0)
-    hits["position"] = (10.0 * rng.random((N, 3)) - 5.0) * u.m
-    dir = rng.random((N, 3))
-    dir = dir / np.sqrt(np.square(dir).sum(-1))[:, None]
-    hits["direction"] = dir
-    nrm = -rng.random((N, 3))  # put normal in opposite octant
-    nrm = nrm / np.sqrt(np.square(nrm).sum(-1))[:, None]
-    hits["normal"] = nrm
-    hits["wavelength"] = (rng.random((N,)) * 100.0 + 400.0) * u.nm
-    hits["contrib"] = rng.random((N,))
-    # use time to match samples
-    hits["time"] = np.arange(N).astype(np.float32) * u.ns
-
-    runPipeline([replay, fetch])
-
-    result = as_queue(fetch.buffer(0), theia.response.ValueItem)
-    time, value = result["time"], result["value"]
-    # sort by time
-    value = value[time.argsort()]
-
-    # compare with expected results
-    assert np.allclose(value, hits["contrib"])
-
-
-@pytest.mark.parametrize("polarized", [True, False])
-def test_CameraHitResponseSamples(polarized: bool):
-    N = 64 * 1024
-
-    # create sampling pipline
-    rng = PhiloxRNG(key=0xC0FFEE)
-    camera = PointCamera()
-    photons = UniformWavelengthSource(lambdaRange=(400.0, 500.0) * u.nm)
-    value = theia.response.UniformValueResponse()
-    response = theia.response.SampleValueResponse(value)
-    sampler = theia.response.CameraHitResponseSampler(
-        N,
-        photons,
-        camera,
-        response,
-        rng=rng,
-        polarized=polarized,
-    )
-    runPipeline(sampler.collectStages())
-
-    # check wether we can access the queue
-    queue = sampler.queue.view(0)
-    result = response.result(0)
-    assert queue.count == N
-    assert len(result) == N
-    if polarized:
-        item = theia.response.PolarizedCameraHitResponseItem
-    else:
-        item = theia.response.CameraHitResponseItem
-    exp_fields = {name for name, type in item._fields_}
-    for field in exp_fields:
-        assert queue[field] is not None
-
-    # we do not check the fields for now as this would make the test a test of
-    # the camera
-
-
-@pytest.mark.parametrize("storeObjectId", [True, False])
-def test_StoreTimeHitResponse(storeObjectId: bool, rng) -> None:
-    N = 32 * 256
-
     # create pipeline
-    philox = PhiloxRNG(key=0xC0FFEE)
+    ray = UnpolarizedRay()
     value = theia.response.UniformValueResponse()
-    response = theia.response.StoreTimeHitResponse(value, storeObjectId=storeObjectId)
-    replay = theia.response.HitReplay(N, response, rng=philox)
-    # create hits
+    response = theia.response.StoreValueHitResponse(N, value)
+    replay = theia.response.HitReplay(N, ray, response)
+    # fill samples to process
     samples = replay.queue.view(0)
     samples["position"] = (10.0 * rng.random((N, 3)) - 5.0) * u.m
     samples["direction"] = rng.random((N, 3))
     samples["normal"] = rng.random((N, 3))
+    samples["objectId"] = np.arange(N)  # for matching values later
     samples["wavelength"] = (rng.random((N,)) * 100.0 + 400.0) * u.nm
-    # samples["time"] = rng.random((N,)) * 200.0 * u.ns
-    samples["time"] = np.arange(N)  # use integers for better checking
-    samples["contrib"] = rng.random((N,))
-    samples["objectId"] = np.arange(N, dtype=np.int32)  # use same as time stamp
+    samples["time"] = rng.random((N,)) * 100.0 * u.ns
+    samples["contrib"] = rng.random((N,)) * 10.0
     # run pipeline
     runPipeline(replay.collectStages())
 
-    result = response.result(0)
-    assert result is not None
+    # check result
+    result = response.queue.view(0)
+    sort = np.argsort(result["objectId"])
+    assert np.all(result["objectId"][sort] == samples["objectId"])
+    assert np.allclose(result["time"][sort], samples["time"])
+    assert np.allclose(result["value"][sort], samples["contrib"])
+
+
+def test_StoreTimeHitResponse(rng):
+    N = 32 * 1024
+
+    # create pipeline
+    ray = UnpolarizedRay()
+    philox = PhiloxRNG(key=0xABBA)
+    value = theia.response.UniformValueResponse()
+    response = theia.response.StoreTimeHitResponse(N, value)
+    replay = theia.response.HitReplay(N, ray, response, rng=philox)
+    # fill samples to process
+    samples = replay.queue.view(0)
+    samples["position"] = (10.0 * rng.random((N, 3)) - 5.0) * u.m
+    samples["direction"] = rng.random((N, 3))
+    samples["normal"] = rng.random((N, 3))
+    samples["objectId"] = np.arange(N)  # for matching values later
+    samples["wavelength"] = (rng.random((N,)) * 100.0 + 400.0) * u.nm
+    samples["time"] = rng.random((N,)) * 100.0 * u.ns
+    samples["contrib"] = rng.random((N,))
+    # run pipeline
+    runPipeline(replay.collectStages())
+
+    # check result
+    result = response.queue.view(0)
     # we expect about half the photons to be accepted
     assert abs(result.count / N - 0.5) < 0.005
-    # we can't reproduce the sampling as the random numbers drawn are lost
-    # -> simply check whether we can find the sampled time stamps in the input
-    assert result["time"].min() >= 0
-    assert result["time"].max() < N
-    assert len(np.unique(result["time"])) == result.count
-    if storeObjectId:
-        assert np.all(result["time"] == result["objectId"])
-    else:
-        assert "objectId" not in result.fields
+    # we can't reproduce the sampling as the random numbers are lost
+    # -> simply check whether we can find the sampled time stamps in the result
+    assert len(np.unique(result["objectId"])) == result.count
+    assert np.allclose(result["time"], samples["time"][result["objectId"]])
 
 
 @pytest.mark.parametrize("integrateAll", [True, False])
-def test_IntegratingHitResponse(rng, integrateAll: bool) -> None:
-    N = 8192
+@pytest.mark.parametrize("useDouble", [True, False])
+def test_IntegratingHitResponse(rng, integrateAll: bool, useDouble: bool):
+    N = 64 * 1024
     detCount = None if integrateAll else 3
 
+    ray = UnpolarizedRay()
     value = theia.response.UniformValueResponse()
-    response = theia.response.IntegratingHitResponse(value, detectorCount=detCount)
-    replay = theia.response.HitReplay(N, response)
+    response = theia.response.IntegratingHitResponse(
+        value,
+        detectorCount=detCount,
+        bufferCount=256,
+        useDoublePrecision=useDouble,
+    )
+    replay = theia.response.HitReplay(N, ray, response)
 
     samples = replay.queue.view(0)
-    samples["contrib"] = rng.random((N,)) * 50.0
+    samples["contrib"] = 2.0 * rng.random((N,)) + 0.5
     samples["objectId"] = rng.integers(0, 3, N)
 
     runPipeline(replay.collectStages())
-
-    results = response.result(0)
 
     if integrateAll:
         exp = samples["contrib"].sum()
@@ -310,4 +268,5 @@ def test_IntegratingHitResponse(rng, integrateAll: bool) -> None:
         exp = np.array(
             [samples["contrib"][samples["objectId"] == i].sum() for i in range(3)]
         )
+    results = response.result(0)
     assert np.allclose(results, exp)

@@ -5,6 +5,18 @@ layout(scalar, buffer_reference, buffer_reference_align=4) buffer FloatBuffer {
     float values[];
 };
 
+#ifdef SUPPORTS_DOUBLE
+
+layout(scalar, buffer_reference, buffer_reference_align=8) buffer DoubleBuffer {
+    float64_t values[];
+};
+
+#endif
+
+layout(scalar, buffer_reference, buffer_reference_align=8) buffer LongBuffer {
+    int64_t values[];
+};
+
 layout(scalar, buffer_reference, buffer_reference_align=4) buffer IntBuffer {
     int values[];
 };

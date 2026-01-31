@@ -1,50 +1,28 @@
-//check macro settings
-#ifndef BLOCK_SIZE
-#error "BLOCK_SIZE not defined"
-#endif
+layout(local_size_x = 512) in;
 
-layout(local_size_x = BLOCK_SIZE) in;
+//tell ray model we won't be doing any propagation
+#define RAY_STATIC
 
-//optional RNG
+#include "util/buffers.glsl"
+
 #include "rng.glsl"
-
-#include "response/queue.glsl"
-//test for rare edge case:
-//combine HitRecorder & HitReplay but mismatch polarization
-//(would require two different version of HitQueue)
-#ifdef HIT_QUEUE_POLARIZED
-#define REPLAY_HIT_QUEUE_POLARIZED
-#undef HIT_QUEUE_POLARIZED
-#endif
-//user provided response function
+#include "ray.glsl"
 #include "response.glsl"
 
-//check for queue mismatch
-#ifdef _INCLUDE_RESPONSE_RECORD
-#if defined(REPLAY_HIT_QUEUE_POLARIZED) != defined(HIT_QUEUE_POLARIZED)
-#error "mismatch in hit queue definition"
-#endif
-#endif
-
-//input queue
-readonly buffer HitQueueIn {
-    uint hitCount;
-    HitQueue queue;
-};
+uniform ReplayParams {
+    uvec2 queueAdr;
+    uint queueSize;
+} replayParams;
 
 void main() {
-    //init RNG
     uint idx = gl_GlobalInvocationID.x;
     uint dim = 0;
-    //init response
-    initResponse();
-
-    //process hit
-    if (idx < hitCount) {
-        LOAD_HIT(hit, queue, idx)
-        response(hit, idx, dim);
+    //fetch queue count
+    Counter counter = Counter(replayParams.queueAdr);
+    uvec2 queueAdr = shiftAdr(replayParams.queueAdr, 4);
+    //load and process items
+    if (idx < counter.count) {
+        HitItem item = loadHitItem(queueAdr, replayParams.queueSize, idx);
+        response(item, idx, dim);
     }
-
-    //finalize response
-    finalizeResponse();
 }

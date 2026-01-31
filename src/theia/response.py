@@ -1,96 +1,46 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import List
 from warnings import warn
 
+import numpy as np
 import hephaistos as hp
 from hephaistos.pipeline import PipelineStage, SourceCodeMixin
-from hephaistos.queue import IOQueue, QueueBuffer, QueueTensor, QueueView, clearQueue
+from hephaistos.queue import IOQueue
 
-from ctypes import Structure, c_float, c_int32, c_uint32
+from ctypes import Structure, c_double, c_float, c_int32, c_uint32
+from hephaistos.glsl import buffer_reference
 
-from theia.camera import Camera
-from theia.light import WavelengthSource
+from theia.compiler import createPreamble, compileShader, loadShader
+from theia.ray import RayModel
 from theia.random import RNG
-from theia.util import ShaderLoader, compileShader, createPreamble
+from theia.util import createCType
 import theia.units as u
 
-from numpy.typing import NDArray
-from typing import Final
+from numpy.typing import ArrayLike
 
 
 __all__ = [
-    "createHitTimeQueue",
-    "createValueQueue",
-    "CameraHitResponseItem",
-    "CameraHitResponseSampler",
+    "BinReducer",
     "CustomValueResponse",
     "EmptyResponse",
-    "Estimator",
-    "HistogramEstimator",
     "HistogramHitResponse",
-    "HistogramReducer",
-    "HitItem",
     "HitRecorder",
     "HitReplay",
     "HitResponse",
-    "HitTimeAndIdItem",
-    "HitTimeItem",
     "IntegratingHitResponse",
     "KernelHistogramHitResponse",
-    "PolarizedCameraHitResponseItem",
-    "PolarizedHitItem",
-    "SampleValueResponse",
     "StoreTimeHitResponse",
     "StoreValueHitResponse",
+    "TraceConfig",
     "UniformValueResponse",
-    "ValueItem",
+    "ValueHitResponse",
     "ValueResponse",
 ]
 
 
 def __dir__():
     return __all__
-
-
-class HitItem(Structure):
-    """
-    Structure describing the layout of a single hit. Containing the rays
-    direction, the position, surface normal and time of the hit on the detector
-    surface, as well as the light's wavelength and MC contribution value.
-    """
-
-    _fields_ = [
-        ("position", c_float * 3),
-        ("direction", c_float * 3),
-        ("normal", c_float * 3),
-        ("wavelength", c_float),
-        ("time", c_float),
-        ("contrib", c_float),
-        ("objectId", c_int32),
-    ]
-
-
-class PolarizedHitItem(Structure):
-    """
-    Structure describing the layout of a single hit similar to `HitItem`, but
-    with additional fields for polarization.  Polarization is given by a Stokes'
-    vector and corresponding reference frame defined by the direction of
-    vertical polarization of unit length and perpendicular to propagation
-    direction.
-    """
-
-    _fields_ = [
-        ("position", c_float * 3),
-        ("direction", c_float * 3),
-        ("normal", c_float * 3),
-        ("stokes", c_float * 4),
-        ("polarizationRef", c_float * 3),
-        ("wavelength", c_float),
-        ("time", c_float),
-        ("contrib", c_float),
-        ("objectId", c_int32),
-    ]
 
 
 @dataclass
@@ -102,25 +52,19 @@ class TraceConfig:
     ----------
     batchSize: int
         Total number of threads per run.
-    blockSize: int
-        Number of threads per work group.
     capacity: int
         Maximum batch size
-    maxHitsPerThread: int
-        Maximum number of hits produced per thread.
+    maxHitsPerRay: int
+        Maximum number of hits produced per ray.
     normalization: float
-        Normalization factor that must be applied to each sample to get a
+        Normalization factor that must be applied to each estimate to get a
         correct estimate.
-    polarized: bool
-        True, if hits contain polarization information.
     """
 
     batchSize: int
-    blockSize: int
     capacity: int
-    maxHitsPerThread: int = 1
+    maxHitsPerRay: int = 1
     normalization: float = 1.0
-    polarized: bool = False
 
 
 class HitResponse(SourceCodeMixin):
@@ -133,14 +77,7 @@ class HitResponse(SourceCodeMixin):
     ```
 
     `idx` and `dim` are the state of the RNG and can be used to draw random
-    numbers. Additionally, the following two functions must be present:
-
-    ````
-    void initResponse()
-    void finalizeResponse()
-    ```
-
-    These will get called at the start and end of the simulation respectively.
+    numbers.
     """
 
     name = "Hit Response"
@@ -160,7 +97,7 @@ class HitResponse(SourceCodeMixin):
         """Number of random numbers drawn per generated hit"""
         return self._nRNGSamples
 
-    def prepare(self, config: TraceConfig) -> None:
+    def prepare(self, config: TraceConfig, ray: RayModel) -> None:
         """
         Called by e.g. a `Tracer` during initialization to notify this response
         about the tracer's configuration allowing it to make adequate
@@ -185,94 +122,86 @@ class EmptyResponse(HitResponse):
     def __init__(self) -> None:
         super().__init__()
 
-    # sourceCode via descriptor
-    sourceCode = ShaderLoader("response/empty.glsl")
+    @property
+    def sourceCode(self) -> str:
+        return loadShader("response/empty.glsl")
 
 
 class HitRecorder(HitResponse):
     """
-    Records hits onto a queue, which can be retrieved later on.
-    Should be placed in the pipeline at a later stage than the tracing.
+    Records hits into a queue, which can be retrieved later on.
 
     Parameters
     ----------
     capacity: int, default=0
-        Maximum number of items to record per batch. If a non-positive number
-        is provided, the capacity will be adjusted to the tracer's capacity.
-    polarized: bool, default=False
-        Whether to save the polarization state.
-
-    Note
-    ----
-    If the hit source (e.g. a tracer) does not produce polarized samples, the
-    polarization reference will be the null vector.
+        Maximum number of items the queue can hold. For non-positive values, the
+        capacity will be adjusted to the tracer's capacity.
     """
 
-    _sourceCode = ShaderLoader("response/record.glsl")
+    class ResponseParams(Structure):
+        _fields_ = [("_queueAdr", buffer_reference), ("_queueSize", c_uint32)]
 
-    def __init__(self, *, capacity: int = 0, polarized: bool = False) -> None:
-        super().__init__()
+    def __init__(self, *, capacity: int = 0) -> None:
+        super().__init__({"ResponseParams": HitRecorder.ResponseParams})
         # save params
-        self._capacity = capacity
-        self._polarized = polarized
-        item = PolarizedHitItem if polarized else HitItem
-        self._queue = IOQueue(item, mode="retrieve")
-        if capacity > 0:
-            self._queue.initialize(capacity)
+        self._initCap = capacity
+        self.setParam("_queueSize", capacity)
+        self._queue: IOQueue | None = None
 
-    def prepare(self, config: TraceConfig) -> None:
-        maxHits = config.maxHitsPerThread * config.capacity
-        if self.queue.initialized and maxHits > self.capacity:
+    def prepare(self, config: TraceConfig, ray: RayModel) -> None:
+        maxHits = config.maxHitsPerRay * config.capacity
+        if self.capacity > 0 and maxHits > self.capacity:
             warn(
-                f"tracer reported maxHits: {maxHits}, "
-                f"but response was initialized with capacity: {self.capacity}"
+                f"Tracer reported a maximum of {maxHits} hits, but response "
+                f"was initialized with a capacity of only {self.capacity}. "
+                "This might result in data loss."
             )
-        elif not self.queue.initialized:
-            # update worst case
-            self._capacity = max(self._capacity, maxHits)
+        else:
+            self.setParam("_queueSize", maxHits)
+        # pass 0 as queue capacity to delay init if needed
+        initQueueSize = None if self._initCap <= 0 else self.capacity
+        self._queue = IOQueue(ray.hitItem, initQueueSize, mode="retrieve")
+        if self._queue.initialized:
+            assert self._queue.tensor is not None  # to make linter happy...
+            self.setParam("_queueAdr", self._queue.tensor.address)
 
     def updateConfig(self, config: TraceConfig) -> None:
-        maxHits = config.batchSize * config.maxHitsPerThread
-        if not self.queue.initialized:
-            self._capacity = max(maxHits, self._capacity)
+        maxHits = config.maxHitsPerRay * config.capacity
+        if self._initCap <= 0 and self.queue is None:
+            self.setParam("_queueSize", maxHits)
         elif maxHits > self.capacity:
             warn(
-                f"tracer reported maxHits: {maxHits}, "
-                f"but response was initialized with capacity: {self.capacity}"
+                f"Tracer reported a maximum of {maxHits} hits, but response "
+                f"was initialized with a capacity of only {self.capacity}. "
+                "This might result in data loss."
             )
 
     @property
     def capacity(self) -> int:
         """Maximum number of hits that can be saved per run"""
-        return self._capacity
+        return self.getParam("_queueSize")
 
     @property
-    def polarized(self) -> bool:
-        """Whether to save the polarization state"""
-        return self._polarized
-
-    @property
-    def queue(self) -> IOQueue:
+    def queue(self) -> IOQueue | None:
         """Queue holding the sampled hits"""
         return self._queue
 
     @property
     def sourceCode(self) -> str:
-        preamble = createPreamble(
-            HIT_QUEUE_SIZE=self.capacity,
-            HIT_QUEUE_POLARIZED=self.polarized,
-        )
-        return preamble + self._sourceCode
+        return loadShader("response/record.glsl")
 
-    def bindParams(self, program: hp.Program, i: int) -> None:
+    def _finishParams(self, i: int) -> None:
+        # lazy creation of queue
+        if self.queue is None:
+            raise RuntimeError("Response has not been prepared!")
         if not self.queue.initialized:
-            if self.capacity <= 0:
-                raise RuntimeError(f"Cannot create a queue of size {self.capacity}")
             self.queue.initialize(self.capacity)
-        super().bindParams(program, i)
-        program.bindParams(HitQueueOut=self.queue.tensor)
+            assert self.queue.tensor is not None  # to make linter happy
+            self.setParam("_queueAdr", self.queue.tensor.address)
 
     def run(self, i: int) -> list[hp.Command]:
+        if self.queue is None:
+            raise RuntimeError("Response has not been prepared!")
         return self.queue.run(i)
 
 
@@ -283,88 +212,50 @@ class HitReplay(PipelineStage):
     Parameters
     ----------
     capacity: int
-        Maximum number of hits that can be processed per run
+        Capacity of the underlying queue
+    ray: RayModel
+        Model describing the structure of hits
     response: HitResponse
-        Response to be called on each hit
+        Response the hits gets feed to
     rng: RNG | None, default=None
-        The random number generator used by the response. May be `None` if the
-        response does not require random numbers.
-    polarized: bool, default=False
-        Whether the hits contain polarization information.
-    normalization: float, default=1.0
-        Normalization passed down to the hit response.
-    blockSize: int, default=128
-        Number of hits processed per work group
-    code: bytes | None, default=None
-        Compiled source code. If `None`, the byte code get's compiled from
-        source. Note, that the compiled code is not checked. You must ensure
-        it matches the configuration.
+        Optional random number generator
     """
 
-    name = "Hit Replay"
+    class ReplayParams(Structure):
+        _fields_ = [("_queueAdr", buffer_reference), ("_queueSize", c_uint32)]
 
     def __init__(
         self,
         capacity: int,
+        ray: RayModel,
         response: HitResponse,
-        *,
         rng: RNG | None = None,
-        normalization: float = 1.0,
-        polarized: bool = False,
-        blockSize: int = 128,
-        code: bytes | None = None,
     ) -> None:
-        # check if we have a rng if needed
+        super().__init__({"ReplayParams": HitReplay.ReplayParams})
+        # check if we have a RNG if needed
         if response.nRNGSamples > 0 and rng is None:
-            raise ValueError("response requires a rng but none was given!")
-
-        super().__init__()
+            raise ValueError("response requires a RNG but none was given!")
+        # prepare response
+        self._config = TraceConfig(capacity, capacity, 1)
+        response.prepare(self._config, ray)
+        # create queue
+        self._queue = IOQueue(ray.hitItem, capacity, mode="update")
+        assert self._queue.tensor is not None
+        self.setParams(_queueAdr=self._queue.tensor.address, _queueSize=capacity)
         # save params
-        self._blockSize = blockSize
         self._capacity = capacity
-        self._polarized = polarized
+        self._ray = ray
         self._response = response
         self._rng = rng
 
-        # prepare response
-        self._config = TraceConfig(
-            capacity,
-            blockSize,
-            capacity,
-            1,
-            normalization,
-            polarized,
-        )
-        response.prepare(self._config)
-
-        # create code if needed
-        if code is None:
-            preamble = createPreamble(
-                BLOCK_SIZE=blockSize,
-                HIT_QUEUE_SIZE=capacity,
-                HIT_QUEUE_POLARIZED=polarized,
-                POLARIZATION=polarized,
-            )
-            headers = {
-                "response.glsl": response.sourceCode,
-                "rng.glsl": rng.sourceCode if rng is not None else "",
-            }
-            code = compileShader("response/replay.glsl", preamble, headers)
-        self._code = code
-        self._program = hp.Program(self._code)
-        # calculate number of workgroups
-        self._groups = -(capacity // -blockSize)
-
-        # create queue
-        item = PolarizedHitItem if polarized else HitItem
-        self._queue = IOQueue(item, capacity, mode="update")
-        # bind memory
-        self._program.bindParams(HitQueueIn=self.queue.tensor)
-
-    @property
-    def blockSize(self) -> int:
-        """Number of hits processed per work group"""
-        return self._blockSize
+        # create program
+        headers = {
+            "ray.glsl": ray.sourceCode,
+            "response.glsl": response.sourceCode,
+            "rng.glsl": "" if rng is None else rng.sourceCode,
+        }
+        code = compileShader("response/replay.glsl", "", headers)
+        self._program = hp.Program(code)
 
     @property
     def capacity(self) -> int:
@@ -372,19 +263,14 @@ class HitReplay(PipelineStage):
         return self._capacity
 
     @property
-    def code(self) -> bytes:
-        """Compiled source code. Can be used for caching"""
-        return self._code
-
-    @property
-    def polarized(self) -> bool:
-        """Whether the hits contain polarization information"""
-        return self._polarized
-
-    @property
     def queue(self) -> IOQueue:
         """Queue containing the samples for the next batch"""
         return self._queue
+
+    @property
+    def ray(self) -> RayModel:
+        """Ray model that defines the hit item used"""
+        return self._ray
 
     @property
     def rng(self) -> RNG | None:
@@ -413,33 +299,13 @@ class HitReplay(PipelineStage):
         self.response.updateConfig(self._config)
 
     def run(self, i: int) -> list[hp.Command]:
-        self._bindParams(self._program, i)
-        self.response.bindParams(self._program, i)
-        if self.rng is not None:
-            self.rng.bindParams(self._program, i)
+        for stage in self.collectStages():
+            stage.bindParams(self._program, i)
+        groups = -(self.capacity // -512)
         return [
             *self.queue.run(i),
-            self._program.dispatch(self._groups),
+            self._program.dispatch(groups),
         ]
-
-
-class ValueItem(Structure):
-    """
-    Structure describing the layout of a single value item consumed by
-    estimators. Each item assigns a value to a timestamp.
-    """
-
-    _fields_ = [("value", c_float), ("time", c_float)]
-
-
-def createValueQueue(capacity: int) -> QueueTensor:
-    """
-    Util function for creating a queue of `ValueItem` with enough space to
-    hold an amount of capacity items.
-    """
-    queue = QueueTensor(ValueItem, capacity)
-    hp.execute(clearQueue(queue))  # sets count to zero
-    return queue
 
 
 class ValueResponse(SourceCodeMixin):
@@ -475,7 +341,7 @@ class ValueResponse(SourceCodeMixin):
         """Number of random numbers drawn per hit"""
         return self._nRNGSamples
 
-    def prepare(self, config: TraceConfig) -> None:
+    def prepare(self, config: TraceConfig, ray: RayModel) -> None:
         """
         Called by e.g. a `Tracer` when binding the response into its program
         notifying it about its configuration to allow it to make adequate
@@ -492,8 +358,9 @@ class UniformValueResponse(ValueResponse):
     def __init__(self) -> None:
         super().__init__()
 
-    # property via descriptor
-    sourceCode = ShaderLoader("response/uniform.glsl")
+    @property
+    def sourceCode(self) -> str:
+        return loadShader("response/value/uniform.glsl")
 
 
 class CustomValueResponse(ValueResponse):
@@ -530,154 +397,142 @@ class CustomValueResponse(ValueResponse):
         return self._code
 
 
-class StoreValueHitResponse(HitResponse):
-    """
-    Response function storing the result of the given `ValueResponse` along the
-    hit's time stamp as `ValueItem` into a queue for further processing.
-
-    Parameters
-    ----------
-    response: ValueResponse
-        Value response function processing hits.
-    queue: QueueTensor | None
-        Queue in which the `ValueItem` will be stored.
-        If `None` creates one during preparations.
-    updateResponse: bool, default=True
-        If True, when this stage is requested to update by e.g. a pipeline it
-        will also cause the response to update.
-
-    Note
-    ----
-    During the update step in a pipeline, if `updateResponse` is True the
-    response gets also updated making it unnecessary to include as a separate
-    step in most cases. This stage, however, ignores any commands produced by
-    response.run() as it is not clear where to put them chronologically.
-    """
-
-    name = "Store Value Response"
-
-    _sourceCode = ShaderLoader("response/value.store.glsl")
+class ValueHitResponse(HitResponse):
+    """Base class for hit responses utilizing a `ValueResponse` to process hits"""
 
     def __init__(
         self,
         response: ValueResponse,
-        queue: QueueTensor | None = None,
+        params: dict[str, type[Structure]] = {},
+        extra: set[str] = set(),
         *,
-        updateResponse: bool = True,
+        updateResponse: bool,
+        nRNGSamples: int = 0,
     ) -> None:
-        super().__init__(nRNGSamples=response.nRNGSamples)
+        super().__init__(params, extra, nRNGSamples=response.nRNGSamples + nRNGSamples)
         self._response = response
-        self._queue = queue
         self._updateResponse = updateResponse
 
     @property
-    def queue(self) -> QueueTensor | None:
-        """Tensor to be filled with `ValueItem`"""
-        return self._queue
-
-    @property
-    def response(self) -> ValueResponse:
-        """Value response function processing hits."""
+    def valueResponse(self) -> ValueResponse:
+        """Underlying value response processing hits"""
         return self._response
 
-    @property
-    def sourceCode(self) -> str:
-        if self.queue is None:
-            raise RuntimeError("Response has not been prepared")
-        # assemble source code
-        guardStart = "#ifndef _INCLUDE_RESPONSE\n#define _INCLUDE_RESPONSE\n"
-        guardEnd = "#endif\n"
-        preamble = createPreamble(VALUE_QUEUE_SIZE=self.queue.capacity)
-        return "\n".join(
-            [guardStart, preamble, self.response.sourceCode, self._sourceCode, guardEnd]
-        )
-
     def bindParams(self, program: hp.Program, i: int) -> None:
-        if self.queue is None:
-            raise RuntimeError("Hit response has not been prepared")
         super().bindParams(program, i)
-        program.bindParams(ValueQueueOut=self.queue)
-        self.response.bindParams(program, i)
+        self.valueResponse.bindParams(program, i)
 
-    def prepare(self, config: TraceConfig) -> None:
-        self.response.prepare(config)
-        maxHits = config.maxHitsPerThread * config.capacity
-        if self._queue is None:
-            self._queue = createValueQueue(maxHits)
-        elif self._queue.capacity < maxHits:
-            raise RuntimeError(
-                f"Queue not big enough to store hits: Queue has capacity of"
-                f"{self._queue.capacity} but {maxHits} needed"
-            )
+    def prepare(self, config: TraceConfig, ray: RayModel) -> None:
+        super().prepare(config, ray)
+        self.valueResponse.prepare(config, ray)
 
-    def updateConfig(self, config: TraceConfig) -> None:
-        maxHits = config.maxHitsPerThread * config.capacity
-        if self.queue is not None and self.queue.capacity < maxHits:
-            raise RuntimeError(
-                f"Queue not big enough to store hits: Queue has capacity of"
-                f"{self.queue.capacity} but {maxHits} needed"
-            )
-
-    def update(self, i):
+    def update(self, i: int) -> None:
         super().update(i)
         if self._updateResponse:
-            self.response.update(i)
+            self.valueResponse.update(i)
 
 
-class HitTimeItem(Structure):
-    """Item used by `StoreTimeHitResponse` storing only time"""
-
-    _fields_ = [("time", c_float)]
-
-
-class HitTimeAndIdItem(Structure):
-    """Item used by `StoreTimeHitResponse` storing both time and object id"""
-
-    _fields_ = [("time", c_float), ("objectId", c_int32)]
-
-
-def createHitTimeQueue(capacity: int, storeObjectId: bool = True) -> QueueTensor:
+class StoreValueHitResponse(ValueHitResponse):
     """
-    Creates a new `QueueTensor` of the specified capacity to be used with
-    `StoreHitTimeResponse`.
+    Response function storing the result of the given `ValueResponse` alongside
+    the hit's time and optionally object id into a queue.
 
     Parameters
     ----------
     capacity: int
-        Maximum number of items in the queue
-    storeObjectId: bool, default=True
-        Whether to also store the object id of the hit.
-    """
-    item = HitTimeAndIdItem if storeObjectId else HitTimeItem
-    queue = QueueTensor(item, capacity)
-    hp.execute(clearQueue(queue))  # sets counter to zero
-    return queue
-
-
-class StoreTimeHitResponse(HitResponse):
-    """
-    Response function randomly storing the arrival time and optionally the
-    object id of the hits based on the probability calculated by the provided
-    `ValueResponse`. This is especially usefull if the corresponding tracer is
-    configured to trace single photons. In that case the stored times correspond
-    to single detected photons and the `ValueResponse` can be used to model a
-    detector response.
-
-    Parameters
-    ----------
+        Maximum number of hits that can be stored in the underlying queue
     response: ValueResponse
-        Value response processing the hits producing the acceptance probability.
-    queue: QueueTensor | None, default=None
-        Tensor in which the items will be stored. If `None` a new one will be
-        allocated during the tracer's preparation step.
-    retrieve: bool, default=True
-        Whether to retrieve the results from the device after tracing.
-    storeObjectId: bool, default=True
-        Whether to also store the `objectId` of the corresponding hit. Usefull
-        if multiple detectors are active at once during tracing.
+        Response processing hits
     updateResponse: bool, default=True
         If True and this stage is requested to update by e.g. a pipeline it
         will also cause the response to update.
+    storeObjectId: bool, default=True
+        Whether to also store the `objectId` of the corresponding hit. Usefull
+        if multiple detectors are active at once during tracing.
+
+    Note
+    ----
+    During the update step in a pipeline, the response gets also updated making
+    it unnecessary to include as a separate step in most cases. This stage,
+    however, ignores any commands produced by run() as it is not clear where to
+    put them chronologically.
+    """
+
+    name = "Store Value Response"
+
+    class ResponseParams(Structure):
+        _fields_ = [("_queueAdr", buffer_reference), ("_queueSize", c_uint32)]
+
+    def __init__(
+        self,
+        capacity: int,
+        response: ValueResponse,
+        *,
+        updateResponse: bool = True,
+        storeObjectId: bool = True,
+    ) -> None:
+        super().__init__(
+            response,
+            {"ResponseParams": StoreValueHitResponse.ResponseParams},
+            updateResponse=updateResponse,
+        )
+        # allocate queue
+        fields: list = [("value", c_float), ("time", c_float)]
+        if storeObjectId:
+            fields.append(("objectId", c_int32))
+        item = createCType("Item", fields)
+        self._queue = IOQueue(item, capacity, mode="retrieve")
+        assert self._queue.tensor is not None
+        # save params
+        self._capacity = capacity
+        self._storeObjectId = storeObjectId
+        self.setParams(
+            _queueAdr=self._queue.tensor.address,
+            _queueSize=capacity,
+        )
+
+    @property
+    def queue(self) -> IOQueue:
+        """Containing the stored hits"""
+        return self._queue
+
+    @property
+    def sourceCode(self) -> str:
+        preamble = createPreamble(RESPONSE_STORE_OBJECT_ID=self._storeObjectId)
+        code = loadShader("response/value/store.glsl")
+        return "\n".join(
+            [
+                preamble,
+                '#line 1 "value.glsl"',
+                self.valueResponse.sourceCode,
+                '#line 1 "response/value/store.glsl"',
+                code,
+            ]
+        )
+
+    def run(self, i: int) -> list[hp.Command]:
+        return self._queue.run(i)
+
+
+class StoreTimeHitResponse(ValueHitResponse):
+    """
+    Treats the value returned by the given `ValueResponse` as detection
+    probability and randomly decides to accept the corresponding hit based on
+    that probability. Only stores the time stamp and optionally the
+    corresponding object id.
+
+    Parameters
+    ----------
+    capacity: int
+        Maximum number of hits that can be stored in the underlying queue
+    response: ValueResponse
+        Response processing hits
+    updateResponse: bool, default=True
+        If True and this stage is requested to update by e.g. a pipeline it
+        will also cause the response to update.
+    storeObjectId: bool, default=True
+        Whether to also store the `objectId` of the corresponding hit. Usefull
+        if multiple detectors are active at once during tracing.
 
     Note
     ----
@@ -689,116 +544,175 @@ class StoreTimeHitResponse(HitResponse):
 
     name = "Store Time Hit Response"
 
-    _sourceCode = ShaderLoader("response/time.store.glsl")
+    class ResponseParams(Structure):
+        _fields_ = [("_queueAdr", buffer_reference), ("_queueSize", c_uint32)]
 
     def __init__(
         self,
+        capacity: int,
         response: ValueResponse,
-        queue: QueueTensor | None = None,
         *,
-        retrieve: bool = True,
-        storeObjectId: bool = True,
         updateResponse: bool = True,
+        storeObjectId: bool = True,
     ) -> None:
-        super().__init__(nRNGSamples=response.nRNGSamples + 1)
-        self._response = response
-        self._queue = queue
-        self._retrieve = retrieve
+        super().__init__(
+            response,
+            {"ResponseParams": StoreValueHitResponse.ResponseParams},
+            updateResponse=updateResponse,
+            nRNGSamples=1,
+        )
+        # allocate queue
+        if storeObjectId:
+            fields = [("time", c_float), ("objectId", c_int32)]
+        else:
+            fields = [("time", c_float)]
+        item = createCType("Item", fields)
+        self._queue = IOQueue(item, capacity, mode="retrieve")
+        assert self._queue.tensor is not None
+        # save params
+        self._capacity = capacity
         self._storeObjectId = storeObjectId
-        self._updateResponse = updateResponse
-        self._buffers = None
+        self.setParams(
+            _queueAdr=self._queue.tensor.address,
+            _queueSize=capacity,
+        )
 
     @property
-    def queue(self) -> QueueTensor | None:
-        """Tensor to be filled with the arrival times and optionally the object ids"""
+    def queue(self) -> IOQueue:
+        """Containing the stored hits"""
         return self._queue
 
     @property
-    def response(self) -> ValueResponse:
-        """Value response function processing hits."""
-        return self._response
-
-    @property
-    def retrieve(self) -> bool:
-        """Whether the stored times are retrieved from the GPU"""
-        return self._retrieve
-
-    @property
     def sourceCode(self) -> str:
-        if self.queue is None:
-            raise RuntimeError("Response has not been prepared!")
-        # assemble source code
-        guardStart = "#ifndef _INCLUDE_RESPONSE\n#define _INCLUDE_RESPONSE\n"
-        guardEnd = "#endif\n"
-        preamble = createPreamble(
-            VALUE_QUEUE_SIZE=self.queue.capacity,
-            RESPONSE_STORE_OBJECT_ID=self._storeObjectId,
-        )
+        preamble = createPreamble(RESPONSE_STORE_OBJECT_ID=self._storeObjectId)
+        code = loadShader("response/value/timestamp.glsl")
         return "\n".join(
-            [guardStart, preamble, self.response.sourceCode, self._sourceCode, guardEnd]
-        )
-
-    def result(self, i: int) -> QueueView | None:
-        """
-        The retrieved i-th queue. `None` if `retrieve` is `False` or the
-        response has not yet been prepared.
-        """
-        if not self.retrieve or self._buffers is None:
-            return None
-        else:
-            return self._buffers[i].view
-
-    def prepare(self, config: TraceConfig) -> None:
-        self.response.prepare(config)
-        maxHits = config.maxHitsPerThread * config.capacity
-        if self._queue is None:
-            self._queue = createHitTimeQueue(maxHits, self._storeObjectId)
-        elif self._queue.capacity < maxHits:
-            warn(
-                f"The provided queue's capacity ({self._queue.capacity}) is less "
-                f"than the max hit count reported by the tracer ({maxHits}). "
-                f"Data corruption may occur!"
-            )
-        expItem = HitTimeAndIdItem if self._storeObjectId else HitTimeItem
-        if self._queue.item is not expItem:
-            raise RuntimeError(
-                f"Unexpected queue item: {self._queue.item}. Expected {expItem}"
-            )
-        if self.retrieve:
-            # allocate double buffered buffers
-            self._buffers = [
-                QueueBuffer(expItem, self._queue.capacity) for _ in range(2)
+            [
+                preamble,
+                '#line 1 "value.glsl"',
+                self.valueResponse.sourceCode,
+                '#line 1 "response/value/timestamp.glsl"',
+                code,
             ]
-
-    def updateConfig(self, config: TraceConfig) -> None:
-        # It's save to assume maxHits won't change so nothing to do here
-        pass
-
-    def bindParams(self, program: hp.Program, i: int) -> None:
-        if self.queue is None:
-            raise RuntimeError("Hit response has not been prepared")
-        super().bindParams(program, i)
-        program.bindParams(ValueQueueOut=self.queue)
-        self.response.bindParams(program, i)
-
-    def update(self, i: int) -> None:
-        super().update(i)
-        if self._updateResponse:
-            self.response.update(i)
+        )
 
     def run(self, i: int) -> list[hp.Command]:
-        if self.retrieve:
-            if self._buffers is None:
-                raise RuntimeError("Response has not been prepared!")
+        return self._queue.run(i)
+
+
+class BinReducer(PipelineStage):
+    """
+    Utility stage for reducing a 2D array along the first axis. This can be used
+    for instance for combining a set of histograms into a single one. For small
+    arrays this happens on the CPU, whereas for large arrays this happens on the
+    GPU.
+    """
+
+    name = "Bin Reducer"
+
+    def __init__(
+        self,
+        *,
+        binCount: int,
+        bufferCount: int,
+        normalization: float = 1.0,
+        useDoublePrecision: bool = True,
+    ) -> None:
+        # save params
+        self._normalization = normalization
+        self._binCount = binCount
+        self._bufferCount = bufferCount
+        # switch on double precision
+        if useDoublePrecision:
+            Buffer, Tensor = hp.DoubleBuffer, hp.DoubleTensor
+        else:
+            Buffer, Tensor = hp.FloatBuffer, hp.FloatTensor
+        self._bufferIn = Tensor(binCount * bufferCount)
+        hp.execute(hp.clearTensor(self._bufferIn))
+        # reduce small amounts on CPU
+        self._reduceGPU = binCount >= 32 and bufferCount >= 32
+        if self._reduceGPU:
+            # create I/O
+            params = [
+                ("_bufferInAdr", buffer_reference),
+                ("_bufferOutAdr", buffer_reference),
+                ("_binCount", c_uint32),
+                ("_bufferCount", c_uint32),
+                ("_norm", c_double if useDoublePrecision else c_float),
+            ]
+            super().__init__({"Params": createCType("Params", params)})
+            # allocate memory
+            self._bufferOut = Tensor(binCount)
+            self._buffers = [Buffer(binCount) for _ in range(2)]
+            self.setParams(
+                _bufferInAdr=self._bufferIn.address,
+                _bufferOutAdr=self._bufferOut.address,
+                _binCount=binCount,
+                _bufferCount=bufferCount,
+                _norm=normalization,
+            )
+            # create program
+            preamble = createPreamble(USE_DOUBLE=useDoublePrecision)
+            code = compileShader("response/reduce.glsl", preamble)
+            self._program = hp.Program(code)
+        else:
+            super().__init__({}, {"normalization"})
+            self._buffers = [Buffer(binCount * bufferCount) for _ in range(2)]
+
+    @property
+    def binCount(self) -> int:
+        """Number of bins"""
+        return self._binCount
+
+    @property
+    def bufferCount(self) -> int:
+        """Number of buffers in input tensor"""
+        return self._bufferCount
+
+    @property
+    def bufferIn(self) -> hp.Tensor:
+        """Tensor containing input buffer"""
+        return self._bufferIn
+
+    @property
+    def normalization(self) -> float:
+        """Common normalization factor all bins are multiplied with"""
+        return self._normalization
+
+    @normalization.setter
+    def normalization(self, value: float) -> None:
+        self._normalization = value
+        if self._reduceGPU:
+            self.setParam("_norm", value)
+
+    def result(self, i: int) -> ArrayLike:
+        """Returns the final reduced buffer"""
+        if self._reduceGPU:
+            return self._buffers[i].numpy()
+        else:
+            # final reduction on CPU
+            buffer = np.asarray(self._buffers[i].numpy(), np.float64)
+            buffer = buffer.reshape((self.bufferCount, self.binCount))
+            return buffer.sum(0) * self.normalization
+
+    def run(self, i: int) -> list[hp.Command]:
+        if self._reduceGPU:
+            self.bindParams(self._program, i)
+            groups = -(self.binCount // -128)
             return [
-                hp.retrieveTensor(self._queue, self._buffers[i]),
-                clearQueue(self._queue),  # reset counter to zero
+                hp.flushMemory(),
+                self._program.dispatch(groups),
+                hp.retrieveTensor(self._bufferOut, self._buffers[i]),
+                hp.clearTensor(self._bufferIn),
             ]
         else:
-            return []
+            return [
+                hp.retrieveTensor(self._bufferIn, self._buffers[i]),
+                hp.clearTensor(self._bufferIn),
+            ]
 
 
-class IntegratingHitResponse(HitResponse):
+class IntegratingHitResponse(ValueHitResponse):
     """
     Response function summing up all created hits.
 
@@ -811,6 +725,13 @@ class IntegratingHitResponse(HitResponse):
         them must be larger than `objectId` minus one, but you may leave gaps.
         If `None`, all hits will be integrated into one value regardless of
         their `objectId`.
+    bufferCount: int, default=128
+        Number of internal buffers used to increase performance. Tuning this
+        value can further increase performance.
+    useDoublePrecision: bool, default=True
+        Whether to use double precision while summing up individual hits.
+        Using double precision results in less numerical error, but may impact
+        performance.
     updateResponse: bool, default=True
         If True, when this stage is requested to update by e.g. a pipeline it
         will also cause the response to update.
@@ -825,744 +746,250 @@ class IntegratingHitResponse(HitResponse):
 
     name = "Integrating Hit Response"
 
-    _sourceCode = ShaderLoader("response/value.integrate.glsl")
+    class ResponseParams(Structure):
+        _fields_ = [
+            ("_bufferAdr", buffer_reference),
+            ("_bufferCount", c_uint32),
+            ("_binCount", c_uint32),
+        ]
 
     def __init__(
         self,
         response: ValueResponse,
         *,
         detectorCount: int | None = None,
+        bufferCount: int = 128,
+        useDoublePrecision: bool = True,
         updateResponse: bool = True,
     ) -> None:
-        super().__init__()
-        self._response = response
-        self._detectorCount = detectorCount
-        self._updateResponse = updateResponse
-
-        size = detectorCount or 1
-        self._tensor = hp.FloatTensor(size)
-        self._buffers = [hp.FloatBuffer(size), hp.FloatBuffer(size)]
-        hp.execute(hp.clearTensor(self._tensor))
-
-    @property
-    def response(self) -> ValueResponse:
-        """Value response function processing hits."""
-        return self._response
+        super().__init__(
+            response,
+            {"ResponseParams": IntegratingHitResponse.ResponseParams},
+            updateResponse=updateResponse,
+        )
+        self._detCount = detectorCount
+        self._useDouble = useDoublePrecision
+        detectorCount = detectorCount or 1
+        # allocate buffers via reducer
+        self._reducer = BinReducer(
+            binCount=detectorCount,
+            bufferCount=bufferCount,
+            useDoublePrecision=useDoublePrecision,
+        )
+        # set params
+        self.setParams(
+            _bufferAdr=self._reducer.bufferIn.address,
+            _bufferCount=bufferCount,
+            _binCount=detectorCount,
+        )
 
     @property
     def sourceCode(self) -> str:
-        # assemble source code
-        guardStart = "#ifndef _INCLUDE_RESPONSE\n#define _INCLUDE_RESPONSE\n"
-        guardEnd = "#endif\n"
         preamble = createPreamble(
-            RESPONSE_INTEGRATE_ALL=self._detectorCount is None,
+            RESPONSE_INTEGRATE_ALL=self._detCount is None,
+            BinBuffer="DoubleBuffer" if self._useDouble else "FloatBuffer",
         )
+        code = loadShader("response/value/integrate.glsl")
         return "\n".join(
-            [guardStart, preamble, self.response.sourceCode, self._sourceCode, guardEnd]
+            [
+                preamble,
+                '#line 1 "value.glsl"',
+                self.valueResponse.sourceCode,
+                '#line 1 "response/value/integrate.glsl"',
+                code,
+            ]
         )
 
-    def result(self, i: int) -> NDArray:
-        """Returns the result of the last run using the i-th configuration"""
-        return self._buffers[i].numpy()
-
-    def prepare(self, config: TraceConfig) -> None:
-        self.response.prepare(config)
-
-    def bindParams(self, program: hp.Program, i: int) -> None:
-        super().bindParams(program, i)
-        program.bindParams(ValueOut=self._tensor)
-        self.response.bindParams(program, i)
+    def result(self, i: int) -> ArrayLike:
+        """The result of the i-th buffer"""
+        return self._reducer.result(i)
 
     def update(self, i: int) -> None:
         super().update(i)
-        if self._updateResponse:
-            self.response.update(i)
+        self._reducer.update(i)
 
     def run(self, i: int) -> list[hp.Command]:
-        return [
-            hp.retrieveTensor(self._tensor, self._buffers[i]),
-            hp.clearTensor(self._tensor),
-        ]
+        return self._reducer.run(i)
 
 
-class SampleValueResponse(HitResponse):
+class HistogramHitResponse(ValueHitResponse):
     """
-    Response function storing the result of the given `ValueResponse` ordered by
-    the thread id and retrieving them to the host. Meant for testing value
-    response functions.
+    Response function creating a histogram from the values produced by the
+    given `ValueResponse` for each hit binned by their respective hit time.
+    Hits outside the range of the histogram are ignored.
 
     Parameters
     ----------
     response: ValueResponse
-        Value response function processing hits.
+        Value response processing hits.
+    binCount: int, default=100
+        Number of bins in the histogram
+    t0: float, default=0.0
+        Left-most edge of the histogram.
+    binSize: float, default=1.0ns
+        Width of each bin.
+    normalization: float | None, default=None
+        Common normalization factor each bin gets multiplied with. If `None`,
+        uses the normalization constant reported by the tracer.
+    bufferCount: int, default=128
+        Number of internal buffers used to increase performance. Tuning this
+        value can further increase performance.
+    useDoublePrecision: bool, default=True
+        Whether to use double precision while summing up partial histograms.
+        Using double precision results in less numerical error, but may impact
+        performance.
     updateResponse: bool, default=True
         If True, when this stage is requested to update by e.g. a pipeline it
         will also cause the response to update.
 
     Note
     ----
-    For now expects a single hit per thread.
-
     During the update step in a pipeline, if `updateResponse` is True the
     response gets also updated making it unnecessary to include as a separate
     step in most cases. This stage, however, ignores any commands produced by
     response.run() as it is not clear where to put them chronologically.
     """
 
-    name = "Sample Value Response"
+    name = "Histogram Response"
 
-    _sourceCode = ShaderLoader("response/value.sample.glsl")
-
-    def __init__(self, response: ValueResponse, *, updateResponse: bool = True) -> None:
-        super().__init__(nRNGSamples=response.nRNGSamples)
-        self._response = response
-        self._updateResponse = updateResponse
-        # will later be created during prepare()
-        self._tensor = None
-        self._buffer = None
-
-    @property
-    def response(self) -> ValueResponse:
-        """Value response function processing hits."""
-        return self._response
-
-    @property
-    def sourceCode(self) -> str:
-        if self._tensor is None:
-            raise RuntimeError("Response has not been prepared!")
-        # assemble source code
-        guardStart = "#ifndef _INCLUDE_RESPONSE\n#define _INCLUDE_RESPONSE\n"
-        guardEnd = "#endif"
-        # preamble = createPreamble(VALUE_QUEUE_SIZE=self._tensor.size)
-        return "\n".join(
-            [guardStart, self.response.sourceCode, self._sourceCode, guardEnd]
-        )
-
-    def bindParams(self, program, i):
-        if self._tensor is None:
-            raise RuntimeError("Response has not been prepared!")
-        super().bindParams(program, i)
-        program.bindParams(ValueQueueOut=self._tensor)
-        self.response.bindParams(program, i)
-
-    def prepare(self, config):
-        if config.maxHitsPerThread != 1:
-            raise ValueError("This sampler only supports a single hit per thread!")
-        self.response.prepare(config)
-        self._tensor = hp.FloatTensor(config.batchSize)
-        self._buffer = [hp.FloatBuffer(config.batchSize) for _ in range(2)]
-
-    def result(self, i: int) -> NDArray:
-        """Returns the result of the given config"""
-        if self._buffer is None:
-            raise RuntimeError("Response has not been prepared!")
-        return self._buffer[i].numpy()
-
-    def update(self, i):
-        super().update(i)
-        if self._updateResponse:
-            self.response.update(i)
-
-    def run(self, i) -> list[hp.Command]:
-        if self._tensor is None:
-            raise RuntimeError("Response has not been prepared!")
-        return [hp.retrieveTensor(self._tensor, self._buffer[i])]
-
-
-class CameraHitResponseItem(Structure):
-    _fields_ = [
-        ("position", c_float * 3),
-        ("direction", c_float * 3),
-        ("normal", c_float * 3),
-        ("wavelength", c_float),
-        ("timeDelta", c_float),
-        ("contrib", c_float),
-    ]
-
-
-class PolarizedCameraHitResponseItem(Structure):
-    _fields_ = [
-        ("position", c_float * 3),
-        ("direction", c_float * 3),
-        ("normal", c_float * 3),
-        ("wavelength", c_float),
-        ("timeDelta", c_float),
-        ("contrib", c_float),
-        ("polarizationRef", c_float * 3),
-        ("stokes", c_float * 3),
-    ]
-
-
-class CameraHitResponseSampler(PipelineStage):
-    """
-    Util class calling the given hit response with hits sampled from the given
-    camera and storing the results.
-
-    Parameters
-    ----------
-    batchSize: int
-        Number of samples drawn per run
-    wavelengthSource: WavelengthSource
-        Source to sample wavelengths from
-    camera: Camera
-        Camera to sample hits from
-    response: HitResponse
-        Response processing the sampled hits
-    rng: RNG | None, default=None
-        The random number generator used for sampling. May be `None` if both
-        `camera` and `wavelengthSource` do not require random numbers.
-    polarized: bool, default=True
-        Whether to sample and save polarization information
-    blockSize: int, default=128
-        Number of samples drawn per work group
-    code: bytes | None, default=None
-        Compiled source code. If `None`, the byte code get's compiled from
-        source. Note, that the compiled code is not checked. You must ensure
-        it matches the configuration.
-    """
-
-    name = "Camera Hit Response Sampler"
-
-    def __init__(
-        self,
-        batchSize: int,
-        wavelengthSource: WavelengthSource,
-        camera: Camera,
-        response: HitResponse,
-        *,
-        rng: RNG | None = None,
-        polarized: bool = False,
-        blockSize: int = 128,
-        code: bytes | None = None,
-    ) -> None:
-        super().__init__()
-
-        # save params
-        self._batchSize = batchSize
-        self._camera = camera
-        self._response = response
-        self._photons = wavelengthSource
-        self._rng = rng
-        self._polarized = polarized
-        self._blockSize = blockSize
-        self._nRNGSamples = (
-            camera.nRNGSamples + wavelengthSource.nRNGSamples + response.nRNGSamples
-        )
-        if polarized:
-            self._nRNGSamples += 3
-        if self._nRNGSamples > 0 and rng is None:
-            raise ValueError("An RNG is required but none was specified!")
-        # allocate queues
-        item = PolarizedCameraHitResponseItem if polarized else CameraHitResponseItem
-        self._queue = IOQueue(item, batchSize, mode="retrieve", skipCounter=True)
-
-        # prepare response
-        c = TraceConfig(batchSize, blockSize, batchSize, 1, 1.0, polarized)
-        response.prepare(c)
-
-        # create code if needed
-        if code is None:
-            preamble = createPreamble(
-                BLOCK_SIZE=blockSize,
-                CAMERA_QUEUE_POLARIZED=polarized,
-                POLARIZATION=polarized,
-                QUEUE_SIZE=batchSize,
-            )
-            headers = {
-                "camera.glsl": camera.sourceCode,
-                "photon.glsl": wavelengthSource.sourceCode,
-                "rng.glsl": "" if rng is None else rng.sourceCode,
-                "response.glsl": response.sourceCode,
-            }
-            code = compileShader("camera/response.sample.glsl", preamble, headers)
-        self._code = code
-        self._program = hp.Program(self._code)
-        # calculate group size
-        self._groups = -(batchSize // -blockSize)
-        # bind memory
-        self._program.bindParams(QueueOut=self._queue.tensor)
-
-    @property
-    def batchSize(self) -> int:
-        """Number of samples per batch"""
-        return self._batchSize
-
-    @property
-    def blockSize(self) -> int:
-        """Number of samples per workgroup"""
-        return self._blockSize
-
-    @property
-    def camera(self) -> Camera:
-        """Camera creating the samples"""
-        return self._camera
-
-    @property
-    def code(self) -> bytes:
-        """Compiled source code. Can be used for caching"""
-        return self._code
-
-    @property
-    def nRNGSamples(self) -> int:
-        """Number of random numbers drawn per sample"""
-        return self._nRNGSamples
-
-    @property
-    def queue(self) -> IOQueue:
-        """Queue holding the sampled items"""
-        return self._queue
-
-    @property
-    def response(self) -> HitResponse:
-        """Response processing the sampled hits"""
-        return self._response
-
-    @property
-    def rng(self) -> RNG | None:
-        """Random number generator used"""
-        return self._rng
-
-    @property
-    def wavelengthSource(self) -> WavelengthSource:
-        """Source from which wavelengths are sampled"""
-        return self._photons
-
-    def collectStages(self) -> list[PipelineStage]:
-        """
-        Returns a list of all pipeline stages involved with this tracer in the
-        correct order suitable for creating a pipeline.
-        """
-        return [
-            *([self.rng] if self.rng is not None else []),
-            self.wavelengthSource,
-            self.camera,
-            self,
-            self.response,
+    class ResponseParams(Structure):
+        _fields_ = [
+            ("_bufferAdr", buffer_reference),
+            ("_binCount", c_uint32),
+            ("_histCount", c_uint32),
+            ("t0", c_float),
+            ("binSize", c_float),
         ]
-
-    def run(self, i):
-        self._bindParams(self._program, i)
-        self.camera.bindParams(self._program, i)
-        self.wavelengthSource.bindParams(self._program, i)
-        self.response.bindParams(self._program, i)
-        if self.rng is not None:
-            self.rng.bindParams(self._program, i)
-        return [self._program.dispatch(self._groups), *self.queue.run(i)]
-
-
-class HistogramReducer(PipelineStage):
-    """
-    Util class for reducing a set of histograms into a single one.
-
-    Parameters
-    ----------
-    nBins: int
-        Number of bins in the histogram
-    nHist: int
-        Number of histograms to reduce
-    histIn: Tensor | None, default=None
-        Tensor holding the histograms to reduce. If `None` creates a new one
-        with enough space to hold `nHist` histograms.
-    histOut: Tensor | None, default=None
-        Tensor holding the final reduced histogram. If `None` creates a new one
-        with enough space to hold the resulting histogram.
-    normalization: float, default=1.0
-        Common factor each bin gets multiplied with
-    retrieve: bool, default=True
-        Wether to retrieve the final histogram
-    blockSize: int, default=128
-        Number of threads per workgroup
-
-    Stage Parameters
-    ----------------
-    normalization: float
-        Common factor each bin gets multiplied with
-    nHist: int
-        Number of histograms to reduce
-    """
-
-    name = "Histogram Reducer"
-
-    MAX_SHARED_MEMORY_BINS: Final[int] = 8192  # assume 32KB
-    """Max number of bins that still fit in shared memory"""
-
-    class Params(Structure):
-        """Parameters"""
-
-        _fields_ = [("normalization", c_float), ("nHist", c_uint32)]
-
-    class Constants(Structure):
-        """Specialization Constants"""
-
-        _fields_ = [("blockSize", c_uint32), ("nBins", c_uint32)]
-
-    # lazily compile code (shared among all instances, variation via spec consts)
-    byte_code = None
-
-    def __init__(
-        self,
-        *,
-        nBins: int,
-        nHist: int,
-        histIn: hp.Tensor | None = None,
-        histOut: hp.Tensor | None = None,
-        retrieve: bool = True,
-        normalization: float = 1.0,
-        blockSize: int = 128,
-        useSharedMemory: bool = True,
-    ) -> None:
-        super().__init__({"Params": self.Params})
-        # save params
-        self._blockSize = blockSize
-        self._nBins = nBins
-        self._retrieve = retrieve
-        self.setParams(normalization=normalization, nHist=nHist)
-        self._useSharedMemory = useSharedMemory
-
-        # create code if needed
-        if HistogramReducer.byte_code is None:
-            HistogramReducer.byte_code = compileShader("estimator/reduce.glsl")
-        # create specialization
-        spec = HistogramReducer.Constants(blockSize=blockSize, nBins=nBins)
-        # compile
-        self._program = hp.Program(HistogramReducer.byte_code, bytes(spec))
-        self._groups = -(nBins // -blockSize)
-
-        # allocate memory if needed
-        n = nBins * nHist
-        self._histIn = hp.FloatTensor(n) if histIn is None else histIn
-        self._histOut = hp.FloatTensor(nBins) if histOut is None else histOut
-        self._buffer = [hp.FloatBuffer(nBins) if retrieve else None for _ in range(2)]
-        # zero out memory
-        hp.execute(hp.clearTensor(self._histIn))
-        # bind memory
-        self._program.bindParams(HistogramIn=self._histIn, HistogramOut=self._histOut)
-
-    @property
-    def blockSize(self) -> int:
-        """Number of threads per workgroup"""
-        return self._blockSize
-
-    @property
-    def capacity(self) -> int:
-        """Maximum number of histograms"""
-        # since input tensor may have been provided externally, we need to calculate it
-        return self.histIn.size_bytes // (4 * self.nBins)
-
-    @property
-    def histIn(self) -> hp.Tensor:
-        """Tensor containing the list of histograms to reduce"""
-        return self._histIn
-
-    @property
-    def histOut(self) -> hp.Tensor:
-        """Tensor containing the final reduced histogram"""
-        return self._histOut
-
-    @property
-    def nBins(self) -> int:
-        """Number of bins in the histogram"""
-        return self._nBins
-
-    @property
-    def retrieve(self) -> bool:
-        """Wether to retrieve the final histogram"""
-        return self._retrieve
-
-    def result(self, i: int) -> NDArray | None:
-        """The retrieved i-th histogram. `None` if `retrieve`was set to `False`"""
-        return self._buffer[i].numpy() if self.retrieve else None
-
-    def run(self, i: int) -> list[hp.Command]:
-        self._bindParams(self._program, i)
-        cmds = [
-            hp.flushMemory(),
-            self._program.dispatch(self._groups),
-            hp.clearTensor(self._histIn),
-        ]
-        if self.retrieve:
-            cmds.append(hp.retrieveTensor(self.histOut, self._buffer[i]))
-        return cmds
-
-
-class HistogramHitResponse(HitResponse):
-    """
-    Response function producing a histogram using the values produced by the
-    given `ValueResponse`. Produces a partial histogram for each workgroup in
-    the response function, which need to be reduced into the final histogram in
-    a final stage following the tracing.
-
-    Parameters
-    ----------
-    response: ValueResponse
-        Value response function processing hits.
-    nBins: int, default=100
-        Number of bins in the histogram.
-    t0: float, default=0ns
-        First bin edge, i.e. the minimum time value a sample has to have to get
-        included
-    binSize: float, default=1.0ns
-        Size of a single bin in unit of time
-    normalization: float | None, default=None
-        Common factor each bin gets multiplied with. If `None`, uses the value
-        from the corresponding tracer during preparation and config updates.
-    retrieve: bool, default=True
-        Wether to retrieve the final histogram, i.e. copying it back to the CPU.
-    reduceBlockSize: int, default=128
-        Workgroup size of the reduction stage.
-    updateResponse: bool, default=True
-        If True, when this stage is requested to update by e.g. a pipeline it
-        will also cause the response to update.
-    useSharedMemory: bool, default=True
-        Whether to use shared memory to create partial histograms, which may
-        improve performance. Ignored if there are too many bins to fit in
-        shared memory.
-
-    Stage Parameters
-    ----------------
-    t0: float
-        First bin edge, i.e. the minimum time value a sample has to have to get
-        included
-    binSize: float, default=1.0
-        Size of a single bin in unit of time
-    normalization
-        Common factor each bin gets multiplied with
-
-    Note
-    ----
-    During the update step in a pipeline, the response gets also updated making
-    it unnecessary to include as a separate step in most cases. This stage,
-    however, ignores any commands produced by run() as it is not clear where to
-    put them chronologically.
-    """
-
-    name = "Histogram Hit Response"
-
-    # lazily load source code
-    _sourceCode = ShaderLoader("response/histogram.glsl")
-
-    class Params(Structure):
-        _fields_ = [("t0", c_float), ("binSize", c_float)]
 
     def __init__(
         self,
         response: ValueResponse,
         *,
-        nBins: int = 100,
-        t0: float = 0.0 * u.ns,
+        binCount: int = 100,
+        t0: float = 0.0,
         binSize: float = 1.0 * u.ns,
         normalization: float | None = None,
-        retrieve: bool = True,
-        reduceBlockSize: int = 128,
+        bufferCount: int = 128,
+        useDoublePrecision: bool = True,
         updateResponse: bool = True,
-        useSharedMemory: bool = True,
     ) -> None:
         super().__init__(
-            {"ResponseParams": self.Params},
+            response,
+            {"ResponseParams": HistogramHitResponse.ResponseParams},
             {"normalization"},
-            nRNGSamples=response.nRNGSamples,
+            updateResponse=updateResponse,
+        )
+        # let reducer allocate memory
+        self._reducer = BinReducer(
+            binCount=binCount,
+            bufferCount=bufferCount,
+            normalization=normalization or 1.0,
+            useDoublePrecision=useDoublePrecision,
         )
         # save params
-        self._response = response
-        self.setParams(t0=t0, binSize=binSize)
-        self._nBins = nBins
         self._normalization = normalization
-        self._requestedNorm = 1.0  # keeps track of norm passed through TraceConfigs
-        self._retrieve = retrieve
-        self._reduceBlockSize = reduceBlockSize
-        self._updateResponse = updateResponse
-        self._nHistMax = 0  # keeps track of worst case between prepare() calls
-        self._reducer = None
-        if nBins > HistogramReducer.MAX_SHARED_MEMORY_BINS:
-            useSharedMemory = False
-        self._useSharedMemory = useSharedMemory
+        self._useDouble = useDoublePrecision
+        self.setParams(
+            _bufferAdr=self._reducer.bufferIn.address,
+            _binCount=binCount,
+            _histCount=bufferCount,
+            t0=t0,
+            binSize=binSize,
+        )
 
     @property
-    def nBins(self) -> int:
+    def binCount(self) -> int:
         """Number of bins in the histogram"""
-        return self._nBins
+        return self._reducer.binCount
 
     @property
-    def normalization(self) -> float | None:
-        """Common factor each bin gets multiplied with"""
-        return self._normalization
+    def normalization(self) -> float:
+        """Normalization factor applied to all bins"""
+        return self._reducer.normalization
 
     @normalization.setter
-    def normalization(self, value: float | None) -> None:
+    def normalization(self, value: float) -> None:
         self._normalization = value
-        if self._reducer is not None and value is not None:
-            self._reducer.normalization = value
+        self._reducer.normalization = value
 
-    @property
-    def reduceBlockSize(self) -> int:
-        """Workgroup size of the reduction stage."""
-        return self._reduceBlockSize
-
-    @property
-    def reduceCode(self) -> bytes:
-        """
-        Compiled source code of the reduction stage. Only available after
-        response has been prepared.
-        """
-        if self._reducer is None:
-            raise RuntimeError("Response has not been prepared")
-        return self._reducer.code
-
-    @property
-    def response(self) -> ValueResponse:
-        """Value response function processing hits."""
-        return self._response
-
-    @property
-    def retrieve(self) -> bool:
-        """Wether to retrieve the final histogram"""
-        return self._retrieve
+    @normalization.deleter
+    def normalization(self) -> None:
+        self._normalization = None
+        self._reducer.normalization = 1.0
 
     @property
     def sourceCode(self) -> str:
-        # we need to define histogram size via macro -> enclose in include guards
         preamble = createPreamble(
-            N_BINS=self.nBins,
-            RESPONSE_HISTOGRAM_USE_SHARED_MEMORY=self.useSharedMemory,
+            BinBuffer="DoubleBuffer" if self._useDouble else "FloatBuffer",
         )
-        # Include value response
+        code = loadShader("response/histogram/simple.glsl")
         return "\n".join(
             [
-                self.response.sourceCode,
-                "#ifndef _INCLUDE_RESPONSE_HISTOGRAM_PREAMBLE",
-                "#define _INCLUDE_RESPONSE_HISTOGRAM_PREAMBLE",
                 preamble,
-                "#endif",
-                self._sourceCode,
+                '#line 1 "value.glsl"',
+                self.valueResponse.sourceCode,
+                '#line 1 "response/histogram/simple.glsl"',
+                code,
             ]
         )
 
-    @property
-    def useSharedMemory(self) -> bool:
-        """Whether shared memory is used to create partial histograms"""
-        return self._useSharedMemory
+    def result(self, i: int) -> ArrayLike:
+        """The result of the i-th buffer"""
+        return self._reducer.result(i)
 
-    def result(self, i: int) -> NDArray | None:
-        """
-        The retrieved i-th histogram. `None` if `retrieve` was set to `False` or
-        response has not yet been prepared.
-        """
-        if self._reducer is None:
-            return None
-        else:
-            return self._reducer.result(i)
-
-    def prepare(self, config: TraceConfig) -> None:
-        self.response.prepare(config)
-        self._requestedNorm = config.normalization
-        nHistMax = -(config.capacity // -config.blockSize)
-        if self._reducer is None:
-            self._nHistMax = max(self._nHistMax, nHistMax)
-        elif nHistMax > self._reducer.capacity:
-            raise RuntimeError(
-                f"Tracer may produce up to {nHistMax} intermediate histograms, "
-                f"but the response can only fit {self._reducer.capacity}"
-            )
+    def prepare(self, config: TraceConfig, ray: RayModel) -> None:
+        super().prepare(config, ray)
+        if self._normalization is None:
+            self._reducer.normalization = config.normalization
 
     def updateConfig(self, config: TraceConfig) -> None:
-        if self._reducer is None:
-            self._requestedNorm = config.normalization
-        else:
-            self._reducer.nHist = -(config.batchSize // -config.blockSize)
-            if self.normalization is None:
-                self._reducer.normalization = config.normalization
-
-    def _initReducer(self) -> HistogramReducer:
-        if self.normalization is not None:
-            norm = self.normalization
-        else:
-            norm = self._requestedNorm
-        # return instead of just assigning to make type checker happy...
-        return HistogramReducer(
-            nBins=self.nBins,
-            nHist=self._nHistMax,
-            retrieve=self.retrieve,
-            normalization=norm,
-            blockSize=self._reduceBlockSize,
-            useSharedMemory=self.useSharedMemory,
-        )
-
-    def _bindParams(self, program: hp.Program, i: int) -> None:
-        super()._bindParams(program, i)
-        self.response.bindParams(program, i)
-        # connect response and reducer
-        if self._reducer is None:
-            self._reducer = self._initReducer()
-        program.bindParams(HistogramOut=self._reducer.histIn)
+        super().updateConfig(config)
+        if self._normalization is None:
+            self._reducer.normalization = config.normalization
 
     def update(self, i: int) -> None:
-        if self._reducer is None:
-            self._reducer = self._initReducer()
         super().update(i)
         self._reducer.update(i)
-        if self._updateResponse:
-            self.response.update(i)
 
     def run(self, i: int) -> list[hp.Command]:
-        if self._reducer is None:
-            raise RuntimeError("Response has not been prepared")
         return self._reducer.run(i)
 
 
-class KernelHistogramHitResponse(HitResponse):
+class KernelHistogramHitResponse(ValueHitResponse):
     """
-    Response function producing a histogram using the values produced by the
-    given `ValueResponse`. Unlike `HistogramHitResponse`, however, each hit
-    value gets smeared by a kernel function and thus may affect multiple bins.
-    This is equivalent to binning a kernel density estimation.
-
-    Currently only Gaussian kernel is supported.
+    Response function creating a histogram from the values produced by the
+    given `ValueResponse`. The contribution from each bin get smeared out using
+    a gaussian kernel of given shape.
+    Hits outside the range of the histogram are ignored.
 
     Parameters
     ----------
     response: ValueResponse
-        Value response function processing hits.
-    nBins: int, default=100
-        Number of bins in the histogram.
-    t0: float, default=0ns
-        First bin edge, i.e. the minimum time value a sample has to have to get
-        included.
+        Value response processing hits.
+    binCount: int, default=100
+        Number of bins in the histogram
+    t0: float, default=0.0
+        Left-most edge of the histogram.
     binSize: float, default=1.0ns
-        Size of a single bin in units of time
-    kernelBandwidth: float, default=1.0ns
-        Bandwidth of the kernel. Corresponds to the standard deviation for
-        gaussian kernel.
-    kernelSupport: float, default=3.0ns
-        Limits the range the kernel affects to +/- the support.
-    normalization: float | None, default=None
-        Common factor each bin gets multiplied with. If `None`, uses the value
-        reported from the tracer during the preparation step and config updates.
-    retrieve: bool, default=True
-        Whether to retrieve the final histogram, i.e. copying it back to CPU.
-    reduceBlockSize: int, default=128
-        Workgroup size of the reduction stage.
-    updateResponse: bool, default=True
-        If True and this stage is requested to update e.g. by a pipeline, it
-        will cause the response function to also update.
-    useSharedMemory: bool, default=True
-        Whether to use shared memory to create partial histograms, which may
-        improve performance. Ignored if there are too many bins to fit in
-        shared memory.
-
-    Stage Parameters
-    ----------------
-    t0: float
-        First bin edge, i.e. the minimum time value a sample has to have to get
-        included
-    binSize: float
-        Size of a single bin in unit of time
-        kernelBandwidth: float
+        Width of each bin.
+    kernelBandwidth: float
         Bandwidth of the kernel. Corresponds to the standard deviation for
         gaussian kernel.
     kernelSupport: float
         Limits the range the kernel affects to +/- the support.
-    normalization
-        Common factor each bin gets multiplied with
+    normalization: float | None, default=None
+        Common normalization factor each bin gets multiplied with. If `None`,
+        uses the normalization constant reported by the tracer.
+    bufferCount: int, default=128
+        Number of internal buffers used to increase performance. Tuning this
+        value can further increase performance.
+    useDoublePrecision: bool, default=True
+        Whether to use double precision while summing up partial histograms.
+        Using double precision results in less numerical error, but may impact
+        performance.
+    updateResponse: bool, default=True
+        If True, when this stage is requested to update by e.g. a pipeline it
+        will also cause the response to update.
 
     Note
     ----
@@ -1576,13 +1003,13 @@ class KernelHistogramHitResponse(HitResponse):
     theia.response.HistogramHitResponse
     """
 
-    name = "Kernel Histogram Hit Response"
+    name = "Kernel Histogram Response"
 
-    # lazily load source code
-    _sourceCode = ShaderLoader("response/histogram.kernel.glsl")
-
-    class Params(Structure):
+    class ResponseParams(Structure):
         _fields_ = [
+            ("_bufferAdr", buffer_reference),
+            ("_binCount", c_uint32),
+            ("_histCount", c_uint32),
             ("t0", c_float),
             ("binSize", c_float),
             ("kernelBandwidth", c_float),
@@ -1593,401 +1020,95 @@ class KernelHistogramHitResponse(HitResponse):
         self,
         response: ValueResponse,
         *,
-        nBins: int = 100,
-        t0: float = 0.0 * u.ns,
+        binCount: int = 100,
+        t0: float = 0.0,
         binSize: float = 1.0 * u.ns,
         kernelBandwidth: float = 1.0 * u.ns,
         kernelSupport: float = 3.0 * u.ns,
         normalization: float | None = None,
-        retrieve: bool = True,
-        reduceBlockSize: int = 128,
+        bufferCount: int = 128,
+        useDoublePrecision: bool = True,
         updateResponse: bool = True,
-        useSharedMemory: bool = True,
     ) -> None:
         super().__init__(
-            {"ResponseParams": self.Params},
+            response,
+            {"ResponseParams": KernelHistogramHitResponse.ResponseParams},
             {"normalization"},
-            nRNGSamples=response.nRNGSamples,
+            updateResponse=updateResponse,
+        )
+        # let reducer allocate memory
+        self._reducer = BinReducer(
+            binCount=binCount,
+            bufferCount=bufferCount,
+            normalization=normalization or 1.0,
+            useDoublePrecision=useDoublePrecision,
         )
         # save params
-        self._response = response
-        self._nBins = nBins
+        self._useDouble = useDoublePrecision
         self._normalization = normalization
-        self._requestedNorm = 1.0  # keeps track of norm passed through TraceConfigs
-        self._retrieve = retrieve
-        self._reduceBlockSize = reduceBlockSize
-        self._updateResponse = updateResponse
         self.setParams(
+            _bufferAdr=self._reducer.bufferIn.address,
+            _binCount=binCount,
+            _histCount=bufferCount,
             t0=t0,
             binSize=binSize,
             kernelBandwidth=kernelBandwidth,
             kernelSupport=kernelSupport,
         )
-        self._nHistMax = 0  # keeps track of worst case between prepare() calls
-        self._reducer = None
-        if nBins > HistogramReducer.MAX_SHARED_MEMORY_BINS:
-            useSharedMemory = False
-        self._useSharedMemory = useSharedMemory
 
     @property
-    def nBins(self) -> int:
+    def binCount(self) -> int:
         """Number of bins in the histogram"""
-        return self._nBins
-
-    @property
-    def normalization(self) -> float | None:
-        """Common factor each bin gets multiplied with"""
-        return self._normalization
-
-    @normalization.setter
-    def normalization(self, value: float | None) -> None:
-        self._normalization = value
-        if self._reducer is not None and value is not None:
-            self._reducer.normalization = value
-
-    @property
-    def reduceBlockSize(self) -> int:
-        """Workgroup size of the reduction stage."""
-        return self._reduceBlockSize
-
-    @property
-    def reduceCode(self) -> bytes:
-        """
-        Compiled source code of the reduction stage. Only available after
-        response has been prepared.
-        """
-        if self._reducer is None:
-            raise RuntimeError("Response has not been prepared")
-        return self._reducer.code
-
-    @property
-    def response(self) -> ValueResponse:
-        """Value response function processing hits."""
-        return self._response
-
-    @property
-    def retrieve(self) -> bool:
-        """Wether to retrieve the final histogram"""
-        return self._retrieve
-
-    @property
-    def sourceCode(self) -> str:
-        # we need to define histogram size via macro -> enclose in include guards
-        preamble = createPreamble(
-            N_BINS=self.nBins,
-            RESPONSE_HISTOGRAM_USE_SHARED_MEMORY=self.useSharedMemory,
-        )
-        # Include value response
-        return "\n".join(
-            [
-                self.response.sourceCode,
-                "#ifndef _INCLUDE_RESPONSE_HISTOGRAM_PREAMBLE",
-                "#define _INCLUDE_RESPONSE_HISTOGRAM_PREAMBLE",
-                preamble,
-                "#endif",
-                self._sourceCode,
-            ]
-        )
-
-    @property
-    def useSharedMemory(self) -> bool:
-        """Whether shared memory is used to create partial histograms"""
-        return self._useSharedMemory
-
-    def result(self, i: int) -> NDArray | None:
-        """
-        The retrieved i-th histogram. `None` if `retrieve` was set to `False` or
-        response has not yet been prepared.
-        """
-        if self._reducer is None:
-            return None
-        else:
-            return self._reducer.result(i)
-
-    def prepare(self, config: TraceConfig) -> None:
-        self.response.prepare(config)
-        self._requestedNorm = config.normalization
-        nHistMax = -(config.capacity // -config.blockSize)
-        if self._reducer is None:
-            self._nHistMax = max(self._nHistMax, nHistMax)
-        elif nHistMax > self._reducer.capacity:
-            raise RuntimeError(
-                f"Tracer may produce up to {nHistMax} intermediate histograms, "
-                f"but the response can only fit {self._reducer.capacity}"
-            )
-
-    def updateConfig(self, config: TraceConfig) -> None:
-        if self._reducer is None:
-            self._requestedNorm = config.normalization
-        else:
-            self._reducer.nHist = -(config.batchSize // -config.blockSize)
-            if self.normalization is None:
-                self._reducer.normalization = config.normalization
-
-    def _initReducer(self) -> HistogramReducer:
-        if self.normalization is not None:
-            norm = self.normalization
-        else:
-            norm = self._requestedNorm
-        # return instead of just assigning to make type checker happy...
-        return HistogramReducer(
-            nBins=self.nBins,
-            nHist=self._nHistMax,
-            retrieve=self.retrieve,
-            normalization=norm,
-            blockSize=self._reduceBlockSize,
-            useSharedMemory=self.useSharedMemory,
-        )
-
-    def _bindParams(self, program: hp.Program, i: int) -> None:
-        super()._bindParams(program, i)
-        self.response.bindParams(program, i)
-        # connect response and reducer
-        if self._reducer is None:
-            self._reducer = self._initReducer()
-        program.bindParams(HistogramOut=self._reducer.histIn)
-
-    def update(self, i: int) -> None:
-        if self._reducer is None:
-            self._reducer = self._initReducer()
-        super().update(i)
-        self._reducer.update(i)
-        if self._updateResponse:
-            self.response.update(i)
-
-    def run(self, i: int) -> list[hp.Command]:
-        if self._reducer is None:
-            raise RuntimeError("Response has not been prepared")
-        return self._reducer.run(i)
-
-
-class Estimator(PipelineStage):
-    """
-    Base class for estimators that produce a final output by consuming a queue
-    of `ValueItem` each consisting of a timestamp and a single float.
-
-    Parameters
-    ----------
-    queue: QueueTensor
-        Queue from which to consume the `ValueItem`
-    clearQueue: bool
-        Wether the input queue should be cleared after processing it
-    params: {str: Structure}, default={}
-        Dictionary of named ctype structure containing the stage's parameters.
-        Each structure will be allocated on the CPU side and twice on the GPU
-        for buffering. The latter can be bound in programs
-    extra: {str}, default={}
-        Set of extra parameter name, that can be set and retrieved using the
-        stage api. Take precedence over parameters defined by structs. Should
-        be be implemented in subclasses as properties.
-    """
-
-    name = "Estimator"
-
-    def __init__(
-        self,
-        queue: QueueTensor,
-        clearQueue: bool,
-        params: dict[str, type[Structure]] = {},
-        extra: set[str] = set(),
-    ) -> None:
-        super().__init__(params, extra)
-        self._queue = queue
-        self._clearQueue = clearQueue
-
-    @property
-    def clearQueue(self) -> bool:
-        """Wether the input queue should be cleared after processing it"""
-        return self._clearQueue
-
-    @property
-    def queue(self) -> QueueTensor:
-        """Queue holding the `ValueItem` to be consumed by the estimator"""
-        return self._queue
-
-
-class HistogramEstimator(Estimator):
-    """
-    Estimator producing a histogram from the provided value samples as a
-    function of time in a given frame.
-
-    Parameters
-    ----------
-    queue: QueueTensor
-        Queue from which to consume the `ValueItem`
-    nBins: int, default=100
-        Number of bins in the histogram
-    t0: float, default=0.0
-        First bin edge, i.e. the minimum time value a sample has to have to get
-        included
-    binSize: float, default=1.0
-        Size of a single bin in unit of time
-    normalization: float, default=1.0
-        Common factor each bin gets multiplied with
-    clearQueue: bool, default=True
-        Wether the input queue should be cleared after processing it
-    retrieve: bool, default=True
-        Wether to retrieve the final histogram
-    blockSize: int, default=128
-        Number of items processed per workgroup during item processing
-    reduceBlockSize: int, default=128
-        Number of items processed per workgroup during reduction
-    code: bytes | None, default=None
-        Compiled source code. If `None`, the byte code get's compiled from
-        source. Note, that the compiled code is not checked. You must ensure
-        it matches the configuration.
-
-    Stage Parameters
-    ----------------
-    t0: float
-        First bin edge, i.e. the minimum time value a sample has to have to get
-        included
-    binSize: float, default=1.0
-        Size of a single bin in unit of time
-    normalization
-        Common factor each bin gets multiplied with
-    """
-
-    class Params(Structure):
-        """Histogram Params"""
-
-        _fields_ = [
-            ("t0", c_float),
-            ("binSize", c_float),
-        ]
-
-    def __init__(
-        self,
-        queue: QueueTensor,
-        *,
-        nBins: int = 100,
-        t0: float = 0.0,
-        binSize: float = 1.0,
-        normalization: float = 1.0,
-        clearQueue: bool = True,
-        retrieve: bool = True,
-        blockSize: int = 128,
-        reduceBlockSize: int = 128,
-        code: bytes | None = None,
-    ) -> None:
-        super().__init__(
-            queue, clearQueue, {"Parameters": self.Params}, {"normalization"}
-        )
-        # save params
-        self._blockSize = blockSize
-        self.setParams(t0=t0, binSize=binSize)
-
-        # create reducer
-        self._groups = -(queue.capacity // -blockSize)
-        self._reducer = HistogramReducer(
-            nBins=nBins,
-            nHist=self._groups,
-            normalization=normalization,
-            retrieve=retrieve,
-            blockSize=reduceBlockSize,
-        )
-
-        # compile code if needed
-        if code is None:
-            preamble = createPreamble(
-                BLOCK_SIZE=blockSize,
-                N_BINS=nBins,
-                VALUE_QUEUE_SIZE=queue.capacity,
-            )
-            code = compileShader("estimator/hist.glsl", preamble)
-        self._code = code
-        # create program
-        self._program = hp.Program(code)
-        # bind memory
-        self._program.bindParams(HistogramOut=self._reducer.histIn, ValueIn=self.queue)
-
-    @property
-    def blockSize(self) -> int:
-        """Number of threads per workgroup during item processing"""
-        return self._blockSize
-
-    @property
-    def code(self) -> bytes:
-        """Compiled source code. Can be used for caching"""
-        return self._code
-
-    @property
-    def nBins(self) -> int:
-        """Number of bins in the histogram"""
-        return self._reducer.nBins
+        return self._reducer.binCount
 
     @property
     def normalization(self) -> float:
-        """Common factor each bin gets multiplied with"""
-        return self._reducer.getParam("normalization")
+        """Normalization factor applied to all bins"""
+        return self._reducer.normalization
 
     @normalization.setter
     def normalization(self, value: float) -> None:
-        self._reducer.setParam("normalization", value)
+        self._normalization = value
+        self._reducer.normalization = value
+
+    @normalization.deleter
+    def normalization(self) -> None:
+        self._normalization = None
+        self._reducer.normalization = 1.0
 
     @property
-    def reduceBlockSize(self) -> int:
-        """Number of threads per workgroup during reduction"""
-        return self._reducer.blockSize
+    def sourceCode(self) -> str:
+        preamble = createPreamble(
+            BinBuffer="DoubleBuffer" if self._useDouble else "FloatBuffer",
+        )
+        code = loadShader("response/histogram/kernel.glsl")
+        return "\n".join(
+            [
+                preamble,
+                '#line 1 "value.glsl"',
+                self.valueResponse.sourceCode,
+                '#line 1 "response/histogram/kernel.glsl"',
+                code,
+            ]
+        )
 
-    @property
-    def resultTensor(self) -> hp.Tensor:
-        """Tensor holding the final histogram"""
-        return self._reducer.histOut
-
-    @property
-    def retrieve(self) -> bool:
-        """Wether to retrieve the final histogram"""
-        return self._reducer.retrieve
-
-    def result(self, i: int) -> NDArray | None:
-        """The retrieved i-th histogram. `None` if `retrieve`was set to `False`"""
+    def result(self, i: int) -> ArrayLike:
+        """The result of the i-th buffer"""
         return self._reducer.result(i)
 
-    # Pipeline API
+    def prepare(self, config: TraceConfig, ray: RayModel) -> None:
+        super().prepare(config, ray)
+        if self._normalization is None:
+            self._reducer.normalization = config.normalization
+
+    def updateConfig(self, config: TraceConfig) -> None:
+        super().updateConfig(config)
+        if self._normalization is None:
+            self._reducer.normalization = config.normalization
 
     def update(self, i: int) -> None:
-        # also update reducer
-        self._reducer.update(i)
         super().update(i)
+        self._reducer.update(i)
 
     def run(self, i: int) -> list[hp.Command]:
-        self._bindParams(self._program, i)
-        return [
-            self._program.dispatch(self._groups),
-            *([clearQueue(self.queue)] if self.clearQueue else []),
-            hp.flushMemory(),
-            *self._reducer.run(i),
-        ]
-
-
-class HostEstimator(Estimator):
-    """
-    Copies `ValueItems` back to host without processing them.
-
-    Parameters
-    ----------
-    queue: QueueTensor
-        Queue from which to consume the `ValueItem`
-    clearQueue: bool, default=True
-        Wether the input queue should be cleared after processing it
-    """
-
-    def __init__(self, queue: QueueTensor, *, clearQueue: bool = True) -> None:
-        super().__init__(queue, clearQueue)
-        # create local copy
-        self._buffers = [QueueBuffer(ValueItem, queue.capacity) for _ in range(2)]
-
-    def buffer(self, i: int) -> QueueBuffer:
-        """Returns the i-th queue buffer."""
-        return self._buffers[i]
-
-    def view(self, i: int) -> QueueView:
-        """Returns a view of the i-th queue buffer"""
-        return self.buffer(i).view
-
-    def run(self, i: int) -> list[hp.Command]:
-        return [
-            hp.retrieveTensor(self.queue, self.buffer(i)),
-            *([clearQueue(self.queue)] if self.clearQueue else []),
-        ]
+        return self._reducer.run(i)
