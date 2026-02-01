@@ -21,8 +21,8 @@ LightTargetSample sampleLightTarget(
     //sample point on disk
     vec3 localPos = lightTargetParams.radius * sampleUnitDisk(random2D(idx, dim));
     //transform to world coordinates
-    samplePos = lightTargetParams.objToWorld * localPos + lightTargetParams.position;
-    sampleNrm = lightTargetParams.normal;
+    vec3 samplePos = lightTargetParams.objToWorld * localPos + lightTargetParams.position;
+    vec3 sampleNrm = lightTargetParams.normal;
 
     return LightTargetSample(
         samplePos,

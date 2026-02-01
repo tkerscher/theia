@@ -1122,11 +1122,14 @@ class TargetLightSource(LightSource):
         # fmt: off
         return "\n".join([
             "#define sampleLight principal_sampleLight",
+            '#line 1 "principal_light.glsl"',
             self.principalLight.sourceCode,
             "#undef sampleLight",
             '#include "lightsource/target/common.glsl"',
+            '#line 1 "light_target.glsl"',
             self.target.sourceCode,
             "#define LIGHTSOURCE_GUIDED_USE_CAM" if useCam else "",
+            '#line 1 "lightsource/guided.glsl"',
             code,
         ])
         # fmt: on
