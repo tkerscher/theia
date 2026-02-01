@@ -1,23 +1,22 @@
 from __future__ import annotations
-import importlib.resources
 
 import numpy as np
 import hephaistos as hp
-from hephaistos.glsl import vec2, vec3
+from hephaistos.glsl import vec3
+from ctypes import Structure, c_float
 
 import itertools
-import os.path
 import trimesh
 
-import theia.units as u
-from theia.material import MaterialStore, VACUUM_IDX
-
-from collections.abc import Iterable, Mapping
-from ctypes import Structure, c_float, c_uint64
 from dataclasses import dataclass
-from numpy.typing import NDArray, ArrayLike
 from pathlib import Path
 from types import MappingProxyType
+
+from theia.material import MaterialStore, VACUUM_IDX
+import theia.units as u
+
+from collections.abc import Iterable, Mapping
+from numpy.typing import NDArray, ArrayLike
 
 
 __all__ = [
@@ -49,16 +48,16 @@ class Transform:
                 raise ValueError("matrix must be of shape (3,4)!")
             self._arr[:3, :] = matrix
 
-    def apply(self, points: NDArray) -> NDArray:
+    def apply(self, points: ArrayLike) -> NDArray:
         """Applies the transformation to the given points of shape (N,3)"""
-        return points @ self._arr[:3, :3].T + self._arr[:3, 3]
+        return np.asarray(points) @ self._arr[:3, :3].T + self._arr[:3, 3]
 
-    def applyVec(self, vector: NDArray) -> NDArray:
+    def applyVec(self, vector: ArrayLike) -> NDArray:
         """
         Applies the transformation to the given vectors of shape (N,3).
         Similar to `apply`, but translation are ignored.
         """
-        return vector @ self._arr[:3, :3].T
+        return np.asarray(vector) @ self._arr[:3, :3].T
 
     def copy(self) -> Transform:
         """Creates a new independent copy of this transformation"""
@@ -538,7 +537,7 @@ class MeshStore:
         """
         # load all meshes that are specified as file paths
         self._keys = list(meshes.keys())
-        values = [loadMesh(v) if type(v) == str else v for v in meshes.values()]
+        values = [loadMesh(v) if isinstance(v, str) else v for v in meshes.values()]
         self._triangleCounts = [len(mesh.indices) for mesh in values]
         _lower = [tuple(mesh.vertices[:, :3].min(0)) for mesh in values]
         _upper = [tuple(mesh.vertices[:, :3].max(0)) for mesh in values]
@@ -847,7 +846,7 @@ class SceneTemplate:
 
     def createScene(
         self,
-        tempInstance: Iterable[Transform] | None = None,
+        tempInstance: Iterable[Transform | None] | None = None,
         *,
         materials: MaterialStore | Mapping[str, int] | None = None,
         sceneMedium: int = 0,
