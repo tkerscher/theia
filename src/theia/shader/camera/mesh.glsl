@@ -25,6 +25,7 @@ struct CameraSample {
     vec3 position;
     vec3 normal;
     float contrib;
+    uint mediumIdx;
 
     vec3 hitPosition;
     vec3 hitNormal;
@@ -72,6 +73,7 @@ CameraSample sampleCamera(float wavelength, uint idx, inout uint dim) {
         rayPos,
         rayNrm,
         contrib,
+        cameraParams.mediumIdx,
         localPos,
         localNrm
     );

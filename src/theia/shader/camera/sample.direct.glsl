@@ -32,16 +32,19 @@ void main() {
     
     //save result
 
+    #define _saveUInt(v) uints.values[idx] = (v); idx += samplerParams.queueSize
     #define _saveFloat(v) floats.values[idx] = (v); idx += samplerParams.queueSize
     #define _saveVec3(v) _saveFloat(v.x); _saveFloat(v.y); _saveFloat(v.z)
 
+    UIntBuffer uints = UIntBuffer(samplerParams.queueAdr);
     FloatBuffer floats = FloatBuffer(samplerParams.queueAdr);
     _saveVec3(lightDir);
     _saveVec3(cam.position);
     _saveVec3(cam.normal);
     _saveFloat(cam.contrib);
+    _saveUInt(cam.mediumIdx);
 
-    const uint prependFieldCount = 10;
+    const uint prependFieldCount = 11;
     const uint offset = 4 * prependFieldCount * samplerParams.queueSize;
     uvec2 queueAdr = shiftAdr(samplerParams.queueAdr, offset);
 

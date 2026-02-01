@@ -214,6 +214,7 @@ def test_FlatCamera_direct():
     assert np.allclose(r["contrib"], contrib, atol=1e-7)
     assert np.all(r["objectId"] == 4)
     assert np.all(r["mediumIdx"] == 10)
+    assert np.all(r["sampleMediumIdx"] == 10)
 
 
 def test_ConeCamera():
@@ -302,6 +303,7 @@ def test_ConeCamera_direct():
     assert np.allclose(r["hitNormal"], (0.0, 0.0, 1.0))
     assert np.all(r["objectId"] == 4)
     assert np.all(r["mediumIdx"] == 10)
+    assert np.all(r["sampleMediumIdx"] == 10)
 
 
 def test_SphericalCamera():
@@ -396,6 +398,7 @@ def test_SphericalCamera_direct():
     assert np.abs(r["contrib"] - contrib).max() < 5e-5
     assert np.all(r["objectId"] == 4)
     assert np.all(r["mediumIdx"] == 10)
+    assert np.all(r["sampleMediumIdx"] == 10)
 
 
 def test_PointCamera():

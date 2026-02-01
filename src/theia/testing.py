@@ -251,6 +251,7 @@ class CameraDirectSampler(PipelineStage):
             ("samplePos", c_float * 3),
             ("sampleNrm", c_float * 3),
             ("sampleContrib", c_float),
+            ("sampleMediumIdx", c_uint32),
         ]
         resultFields.extend(ray.cameraItem._fields_)
         item = createCType("Item", resultFields)

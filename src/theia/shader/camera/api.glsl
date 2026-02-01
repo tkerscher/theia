@@ -30,6 +30,7 @@ struct CameraSample {
     vec3 position;              ///< Position on camera in world space
     vec3 normal;                ///< Surface normal at position
     float contrib;              ///< Sample contribution, i.e. reciprocal sample probability
+    uint mediumIdx;             ///< Index of the medium the sample lies within
 };
 
 /**

@@ -60,6 +60,7 @@ struct CameraSample {
     vec3 position;
     vec3 normal;
     float contrib;
+    uint mediumIdx;
 };
 
 CameraSample sampleCamera(float wavelength, uint idx, inout uint dim) {
@@ -75,7 +76,7 @@ CameraSample sampleCamera(float wavelength, uint idx, inout uint dim) {
     //calculate contribution
     float contrib = cameraParams.width * cameraParams.height;
     //return sample
-    return CameraSample(rayPos, rayNrm, contrib);
+    return CameraSample(rayPos, rayNrm, contrib, cameraParams.mediumIdx);
 }
 
 BackwardRay createCameraRay(
