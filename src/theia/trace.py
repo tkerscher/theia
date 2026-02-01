@@ -13,7 +13,7 @@ from numpy.ctypeslib import as_array
 
 from theia.camera import Camera
 from theia.compiler import createPreamble, compileShader, loadShader
-from theia.light import LightSource
+from theia.light import LightSource, WavelengthSource
 from theia.material import MaterialStore
 from theia.random import RNG
 from theia.ray import RayModel
@@ -480,7 +480,7 @@ class Tracer(PipelineStage):
         self.response.updateConfig(self._getTraceConfig())
 
 
-def _getVolumeRNGStride(
+def _getVolumeForwardRNGStride(
     volume: VolumeModel,
     response: HitResponse,
     target: Target | None = None,
@@ -494,6 +494,22 @@ def _getVolumeRNGStride(
     if target is not None:
         result += volume.rngDraws.sampleVolumeScattering
         result += target.nRNGSamples
+        result += volume.rngDraws.applyVolumeEffect
+        result += response.nRNGSamples
+    return result
+
+
+def _getVolumeBackwardRNGStride(
+    volume: VolumeModel,
+    response: HitResponse,
+    target: Target | None = None,
+) -> int:
+    result = 0
+    result += max(1, volume.rngDraws.sampleInteractionLength)
+    result += volume.rngDraws.applyVolumeEffect
+    result += volume.rngDraws.sampleVolumeInteraction
+    result += response.nRNGSamples
+    if target is not None:
         result += volume.rngDraws.applyVolumeEffect
         result += response.nRNGSamples
     return result
@@ -628,7 +644,7 @@ class VolumeForwardTracer(Tracer):
         if not disableDirectLighting:
             rngInit += volume.rngDraws.applyVolumeEffect
             rngInit += response.nRNGSamples
-        rngStride = _getVolumeRNGStride(volume, response, target)
+        rngStride = _getVolumeForwardRNGStride(volume, response, target)
         nRNG = rngInit + pathLength * rngStride
         super().__init__(
             batchSize,
@@ -732,6 +748,260 @@ class VolumeForwardTracer(Tracer):
         # wavelength sources are optional, but need to be before the light source
         if self.source.wavelengthSource is not None:
             stages.insert(1, ("photons", self.source.wavelengthSource))
+        return stages
+
+    def _finishParams(self, i: int) -> None:
+        super()._finishParams(i)
+        self.setParam("_maxDist", self.traceBBox.diagonal)
+
+    def run(self, i: int) -> list[hp.Command]:
+        for _, stage in self.collectStages():
+            stage.bindParams(self._program, i)
+        groups = -(self.capacity // -512)
+        return [self._program.dispatch(groups)]
+
+
+class VolumeBackwardTracer(Tracer):
+    """
+    Path tracer sampling paths starting at a camera and creating complete ones
+    by sampling the light source independently at each volume interaction. It
+    does NOT check for any intersection with a scene but may include self
+    shadowing from an optional target acting as a proxy for the physical camera.
+    Can be run on hardware without ray tracing support and may be faster.
+
+    Parameters
+    ----------
+    batchSize: int
+        Number of rays to simulate per run. Note that a single ray may generate
+        up to nScattering hits plus one if direct lighting is enabled.
+    ray: RayModel
+        Model of the ray to propagate
+    source: LightSource
+        Source producing light rays. Must support backward mode.
+    camera: Camera
+        Source producing camera rays. If direct lighting is enabled, must
+        support direct mode.
+    wavelengthSource: WavelengthSource
+        Source producing wavelength samples
+    response: HitResponse
+        Respose function processing each simulated hit
+    rng: RNG
+        Random number generator
+    materials: MaterialStore
+        MaterialStore containing the medium used by the tracer
+    volume: VolumeModel | str | int
+        Volume model used by the tracer. Can dynamically be fetched from the
+        material store using the corresponding medium's name or index.
+    capacity: int | None, default=None
+        Maximum batch size. If None, same as `batchSize`.
+    callback: TraceEventCallback, default=EmptyEventCallback()
+        Callback called for each tracing event. See `TraceEventCallback`
+    maxPathLength: int, default=64
+        Maximum length of paths to simulate
+    target: Target | None, default=None
+        Optional target acting as proxy for the camera in determining self
+        shadowing
+    sampleCoefficient: float, default=NaN
+        Optional coefficient used for sampling ray lengths. If the value is NaN
+        or negative, the volume will sample the ray length instead. Will always
+        be disabled, if the ray is a particle.
+    maxTime: float, default=inf
+        Rays exceeding this limit will aborted with code `decayed`.
+    traceBBox: RectBBox | None, default=None
+        Rays leaving the trace boundary box will get stopped and noted as lost.
+        If `None`, this defaults to a box with at the origin spanning 1km in
+        each direction, i.e. 2km side length.
+    disableDirectLighting: bool, default=False
+        Whether to ignore contributions from direct lighting, i.e. paths with
+        no scattering. Usefull if a dedicated tracer or estimator for direct
+        light contributions is additionally used.
+
+    Stage Parameters
+    ----------------
+    scatterCoefficient: float
+        Scatter coefficient used for sampling ray lengths. Negative values or
+        NaN will cause the tracer to use the current scattering length
+        instead. A value of zero disables volume scattering all together.
+    medium: int | str
+        Index or name of the medium the scene is emerged in. If given as a
+        string, the index will be fetched from the given `MaterialStore`.
+    lowerBBoxCorner: (float, float, float)
+        Lower limit of the x,y,z coordinates a ray must stay above to not get
+        stopped
+    upperBBoxCorner: (float, float, float)
+        Upper limit of the x,y,z coordinates a ray must stay below to not get
+        stopped
+    maxTime: float
+        Max total time including delay from the source and travel time, after
+        which a ray gets stopped
+
+    Note
+    ----
+    No hits will be created if scattering is disabled.
+    """
+
+    name = "Volume Backward Tracer"
+
+    class TraceParams(Structure):
+        _fields_ = [
+            ("_batchSize", c_uint32),
+            ("sampleCoefficient", c_float),
+            ("lowerBBoxCorner", vec3),
+            ("upperBBoxCorner", vec3),
+            ("maxTime", c_float),
+            ("_maxDist", c_float),
+        ]
+
+    def __init__(
+        self,
+        batchSize: int,
+        ray: RayModel,
+        source: LightSource,
+        camera: Camera,
+        wavelengthSource: WavelengthSource,
+        response: HitResponse,
+        rng: RNG,
+        materials: MaterialStore,
+        *,
+        volume: VolumeModel | str | int,
+        capacity: int | None = None,
+        callback: TraceEventCallback = EmptyEventCallback(),
+        maxPathLength: int = 64,
+        target: Target | None = None,
+        sampleCoefficient: float = float("NaN"),
+        maxTime: float = float("inf"),
+        traceBBox: RectBBox | None = None,
+        disableDirectLighting: bool = False,
+    ) -> None:
+        # fetch volume model if not given
+        if not isinstance(volume, VolumeModel):
+            volume = materials.getVolumeModel(volume)
+        # check components support backward tracing
+        if not ray.supportsBackward:
+            raise ValueError("Ray model does not support backward tracing")
+        if not source.supportBackward:
+            raise ValueError("Light source does not support backward mode")
+        if not disableDirectLighting and not camera.supportDirect:
+            raise ValueError("Camera does not support direct mode")
+        if volume.backwardSourceCode is None:
+            raise ValueError("Volume model does not support backward mode")
+
+        # calculate max hits
+        maxHitsPerRay = maxPathLength - 1 if disableDirectLighting else maxPathLength
+        # calculate number of rng samples
+        rngInit = wavelengthSource.nRNGSamples + camera.nRNGSamples
+        rngStride = _getVolumeBackwardRNGStride(volume, response, target)
+        nRNG = rngInit + maxPathLength * rngStride
+        if not disableDirectLighting:
+            nRNG += camera.nRNGDirect
+            nRNG += source.nRNGBackward
+            nRNG += response.nRNGSamples
+        super().__init__(
+            batchSize,
+            ray,
+            response,
+            rng,
+            {"TraceParams": VolumeBackwardTracer.TraceParams},
+            capacity=capacity,
+            callback=callback,
+            maxPathLength=maxPathLength,
+            nRNGSamples=nRNG,
+            maxHitsPerRay=maxHitsPerRay,
+        )
+        # save params
+        if traceBBox is None:
+            traceBBox = RectBBox((-1.0, -1.0, -1.0) * u.km, (1.0, 1.0, 1.0) * u.km)
+        self._photons = wavelengthSource
+        self._camera = camera
+        self._source = source
+        self._target = target
+        self._materials = materials
+        self._directLightingDisabled = disableDirectLighting
+        self.setParams(
+            sampleCoefficient=sampleCoefficient,
+            maxTime=maxTime,
+            lowerBBoxCorner=traceBBox.lowerCorner,
+            upperBBoxCorner=traceBBox.upperCorner,
+            _maxDist=traceBBox.diagonal,
+        )
+        # compile code
+        preamble = createPreamble(
+            DISABLE_DIRECT_LIGHTING=disableDirectLighting,
+            DISABLE_SELF_SHADOWING=target is None,
+            PATH_LENGTH=maxPathLength - 1,
+        )
+        headers = {
+            "callback.glsl": callback.sourceCode,
+            "camera.glsl": camera.sourceCode,
+            "photon.glsl": wavelengthSource.sourceCode,
+            "ray.glsl": ray.sourceCode,
+            "response.glsl": response.sourceCode,
+            "rng.glsl": rng.sourceCode,
+            "source.glsl": source.sourceCode,
+            "target.glsl": "" if target is None else target.sourceCode,
+            "volume.glsl": volume.backwardSourceCode,
+            **materials.header,
+        }
+        code = compileShader("tracer/volume/backward.glsl", preamble, headers)
+        # create program
+        self._program = hp.Program(code)
+        self.materials.bindParams(self._program)
+
+    @Tracer.batchSize.setter
+    def batchSize(self, value) -> None:
+        assert Tracer.batchSize.fset is not None  # to make linter happy
+        Tracer.batchSize.fset(self, value)
+        self.setParam("_batchSize", value)
+
+    @property
+    def camera(self) -> Camera:
+        """Camera producing camera rays"""
+        return self._camera
+
+    @property
+    def directLightingDisabled(self) -> bool:
+        """Whether direct lighting is disabled"""
+        return self._directLightingDisabled
+
+    @property
+    def materials(self) -> MaterialStore:
+        """MaterialStore containing the medium used by the tracer"""
+        return self._materials
+
+    @property
+    def source(self) -> LightSource:
+        """Source producing rays"""
+        return self._source
+
+    @property
+    def target(self) -> Target | None:
+        """Optional target used for self shadowing"""
+        return self._target
+
+    @property
+    def traceBBox(self) -> RectBBox:
+        """Boundary box of simulated rays"""
+        return RectBBox(
+            self.getParam("lowerBBoxCorner"), self.getParam("upperBBoxCorner")
+        )
+
+    @property
+    def wavelengthSource(self) -> WavelengthSource:
+        """Sampler for wavelengths"""
+        return self._photons
+
+    def _collectStages(self) -> list[tuple[str, PipelineStage]]:
+        stages = [
+            ("rng", self.rng),
+            ("photons", self.wavelengthSource),
+            ("source", self.source),
+            ("camera", self.camera),
+            ("tracer", self),
+            ("callback", self.callback),
+            ("response", self.response),
+        ]
+        if self.target is not None:
+            stages.insert(4, ("target", self.target))
         return stages
 
     def _finishParams(self, i: int) -> None:

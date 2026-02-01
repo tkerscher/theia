@@ -4,6 +4,7 @@ import hephaistos as hp
 import hephaistos.pipeline as pl
 import numpy as np
 
+from theia.camera import SphereCamera
 from theia.light import PencilLightSource, SphericalLightSource, UniformWavelengthSource
 from theia.material import MaterialStore, PureWaterModel, getPropertySamples, VACUUM_IDX
 from theia.random import PhiloxRNG
@@ -253,3 +254,109 @@ def test_VolumeForwardTracer(
         #     assert len(hits) > (stats.detected + stats.scattered)
 
     # TODO: more sophisticated tests...
+
+
+@pytest.mark.parametrize("disableDirect", [True, False])
+@pytest.mark.parametrize("disableTarget", [True, False])
+@pytest.mark.parametrize("disableScattering", [True, False])
+@pytest.mark.parametrize("limitTime", [True, False])
+def test_VolumeBackwardTracer(
+    disableDirect: bool, disableTarget: bool, disableScattering: bool, limitTime: bool
+) -> None:
+    N = 32 * 256
+    N_SCATTER = 6
+    T0, T1 = 10.0 * u.ns, 20.0 * u.ns
+    T_MAX = 1.0 * u.us
+    capacity = 48 * 256
+    light_pos = (-1.0, -7.0, 0.0) * u.m
+    light_budget = 1000.0
+    target_pos, target_radius = (5.0, 2.0, -8.0) * u.m, 4.0 * u.m
+    target = SphereTarget(position=target_pos, radius=target_radius)
+
+    # create water medium
+    water = PureWaterModel().createMedium(physicModel=Attenuating())
+    materials = MaterialStore([], media=[water])
+    medIdx = materials.media["water"]
+
+    # estimate max speed
+    d_min = (
+        np.sqrt(np.square(np.subtract(light_pos, target_pos)).sum(-1)) - target_radius
+    )
+    vg = theia.material.getPropertySamples(water, "group_velocity")
+    assert vg is not None
+    v_max = np.max(vg)
+    t_min = d_min / v_max + T0
+
+    # create pipeline
+    ray = UnpolarizedRay()
+    philox = PhiloxRNG(key=0xC01DC0FFEE)
+    photons = UniformWavelengthSource()
+    light = SphericalLightSource(
+        photons,
+        mediumIdx=medIdx,
+        position=light_pos,
+        timeRange=(T0, T1),
+        budget=light_budget,
+    )
+    camera = SphereCamera(mediumIdx=medIdx, position=target_pos, radius=target_radius)
+    recorder = HitRecorder()
+    stats = theia.trace.EventStatisticCallback()
+    tracer = theia.trace.VolumeBackwardTracer(
+        N,
+        ray,
+        light,
+        camera,
+        photons,
+        recorder,
+        philox,
+        materials,
+        volume="water",
+        capacity=capacity,
+        callback=stats,
+        maxPathLength=N_SCATTER,
+        sampleCoefficient=0.0 if disableScattering else float("NaN"),
+        target=None if disableTarget else target,
+        maxTime=T_MAX if limitTime else float("inf"),
+        disableDirectLighting=disableDirect,
+    )
+    # run pipeline
+    pl.runPipeline(tracer.collectStages())
+
+    # check hits
+    assert recorder.queue is not None
+    hits = recorder.queue.view(0)
+    if disableDirect and disableScattering:
+        # this combination makes it impossible for the tracer to create hits
+        assert hits.count == 0
+        assert stats.scattered == 0
+        return  # nothing more to check
+    else:
+        assert hits.count > 0
+    assert hits.count <= tracer.maxHits
+    hits = hits[: hits.count]
+
+    assert np.allclose(np.square(hits["position"]).sum(-1), 1.0)
+    assert np.allclose(np.square(hits["normal"]).sum(-1), 1.0)
+    assert np.min(hits["time"]) >= t_min
+    if limitTime:
+        assert np.max(hits["time"]) <= T_MAX
+    elif not disableScattering:
+        # without scattering rays will immediately leave the volume
+        assert np.max(hits["time"]) > T_MAX
+
+    # check config via stats
+    if disableScattering:
+        assert stats.scattered == 0
+    else:
+        assert stats.scattered > 0
+    if disableTarget or disableScattering:
+        assert stats.absorbed == 0
+    else:
+        assert stats.absorbed > 0
+    if disableDirect:
+        assert stats.created == tracer.batchSize
+        # there will only be hits from shadow rays
+        assert stats.detected == 0
+    else:
+        assert stats.created == 2 * tracer.batchSize
+        assert stats.detected > 0

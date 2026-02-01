@@ -1,63 +1,87 @@
-layout(local_size_x = BLOCK_SIZE) in;
+layout(local_size_x = 512) in;
 
-#include "ray/propagate.glsl"
-
-uniform DispatchParams {
-    uint batchSize;
-};
-
-uniform TraceParams {
-    uint mediumIdx;
-
-    PropagateParams propagation;
-} params;
-
-//define global medium
-#define USE_GLOBAL_MEDIUM
-uint getMediumIdx() {
-    return params.mediumIdx;
-}
-#include "ray/medium.glsl"
-
-#include "ray.glsl"
-#include "ray/combine.glsl"
-
-#include "wavelengthsource/common.glsl"
-#include "lightsource/common.glsl"
-#include "response/common.glsl"
-#include "camera/common.glsl"
+#include "result.glsl"
+#include "material.glsl"
 //user provided code
+#include "ray.glsl"
 #include "rng.glsl"
 #include "callback.glsl"
-#include "camera.glsl"
-#include "light.glsl"
+#include "photon.glsl"
 #include "source.glsl"
+#include "camera.glsl"
 #include "response.glsl"
+#include "volume.glsl"
 
-#include "callback/util.glsl"
+#include "tracer/propagate/backward.glsl"
 
-#ifndef DISABLE_DIRECT_LIGHTING
-#include "tracer/direct.common.glsl"
-#endif
+uniform TraceParams {
+    uint batchSize;
+    
+    PropagationParams propagation;
+} params;
 
 #ifndef DISABLE_SELF_SHADOWING
+
 #include "target/common.glsl"
 #include "target.glsl"
 
 bool isVisible(vec3 observer, vec3 target) {
-    vec3 dir = target - observer;
-    float dist = length(dir);
-    dir /= dist;
+    vec3 dir = normalize(target - observer);
+    float dist = distance(target, observer);
 
     //Check if we are shadowed by target
     // -> returns false (target not visible) if shadowed
     TargetSample hit = intersectTarget(observer, dir);
     return !hit.valid || (hit.dist >= dist);
 }
+
 #else
+
 bool isVisible(vec3 observer, vec3 target) {
     return true;
 }
+
+#endif
+
+#ifndef DISABLE_DIRECT_LIGHTING
+
+void sampleDirect(
+    float wavelength,
+    float wavelengthContrib,
+    uint idx, inout uint dim
+) {
+    //sample camera
+    CameraHit camHit;
+    CameraSample camSample = sampleCamera(wavelength, idx, dim);
+    ForwardRay lightRay = sampleLight(
+        camSample.position,
+        camSample.normal,
+        wavelength,
+        camSample.mediumIdx,
+        idx, dim
+    );
+    BackwardRay ray = createCameraRay(
+        camSample,
+        lightRay.direction,
+        wavelength,
+        camHit
+    );
+    ray.lin_contrib *= wavelengthContrib;
+    onEvent(ray, RESULT_CODE_RAY_CREATED, idx, 0);
+
+    //combine rays and create hit
+    HitItem hit;
+    ResultCode result = combineRays(
+        ray, lightRay, camHit,
+        params.propagation,
+        hit, idx, dim);
+    if (result >= 0) {
+        response(hit, idx, dim);
+        result = RESULT_CODE_RAY_DETECTED;
+    }
+    onEvent(ray, result, idx, 1);
+}
+
 #endif
 
 void traceShadowRay(
@@ -66,19 +90,26 @@ void traceShadowRay(
     uint idx, inout uint dim
 ) {
     //sample light
-    SourceRay source = sampleLight(
-        ray.state.position, vec3(0.0),
-        ray.state.wavelength,
-        ray.state.constants,
-        idx, dim);
+    ForwardRay source = sampleLight(
+        ray.position, vec3(0.0),
+        ray.wavelength,
+        ray.mediumIdx,
+        idx, dim
+    );
+
+    #ifndef DISABLE_SELF_SHADOWING
     //check if light is visible
-    if (!isVisible(source.position, ray.state.position))
+    if (!isVisible(source.position, ray.position))
         return;
+    #endif
     
-    //create hit by combining source and camera ray
+    //create hit by combining light and camera ray
     HitItem hit;
-    ResultCode result = combineRays(ray, source, cam, params.propagation, hit);
-    if (result >= 0 && hit.contrib > 0.0) {
+    ResultCode result = combineRays(
+        ray, source, cam,
+        params.propagation,
+        hit, idx, dim);
+    if (result >= 0) {
         response(hit, idx, dim);
     }
 }
@@ -88,76 +119,68 @@ ResultCode trace(
     const CameraHit cam,
     uint idx, inout uint dim
 ) {
-    //sample distance
-    float u = random(idx, dim);
-    float dist = sampleScatterLength(ray, params.propagation, u);
+    //sample distance to propagate in volume
+    float dist = sampleStepSize(ray, params.propagation, idx, dim);
 
-    //check for self shadowing
+    //check for self-shadowing
     #ifndef DISABLE_SELF_SHADOWING
-    TargetSample intersection = intersectTarget(ray.state.position, ray.state.direction);
-    bool hit = intersection.valid && (intersection.dist <= dist);
+    TargetSample intersection = intersectTarget(ray.position, ray.direction);
+    bool hit = intersection.valid && intersection.dist <= dist;
     if (hit) dist = intersection.dist;
     #else
     bool hit = false;
     #endif
-    
-    //update ray. Even if self shadowed for correct callback
-    ResultCode result = propagateRay(ray, dist, params.propagation);
-    updateRayIS(ray, dist, params.propagation, hit);
 
-    //abort if self shadowed
+    //propagate ray even if self-shadowed for correct result code
+    ResultCode result = propagate(
+        ray, dist,
+        hit, true,
+        params.propagation,
+        idx, dim);
     if (hit) return RESULT_CODE_RAY_ABSORBED;
-    //abort if out of bounds
     if (result < 0) return result;
 
-    //create shadow ray
+    //trace shadow ray for NEE
     traceShadowRay(ray, cam, idx, dim);
-    return RESULT_CODE_RAY_SCATTERED;
-}
-
-void traceMain() {
-    uint dim = 0;
-    uint idx = gl_GlobalInvocationID.x;
-    if (idx >= batchSize)
-        return;
-    
-    //Direct light sampling
-    #ifndef DISABLE_DIRECT_LIGHTING
-    sampleDirect(idx, dim, getMediumIdx(), params.propagation);
-    uint iPath = 2;
-    #else
-    uint iPath = 0;
-    #endif
-
-    //sample camera ray
-    WavelengthSample photon = sampleWavelength(idx, dim);
-    CameraRay cam = sampleCameraRay(photon.wavelength, idx, dim);
-    BackwardRay ray = createRay(cam, getMediumIdx(), photon);
-    onEvent(ray, RESULT_CODE_RAY_CREATED, idx, iPath++);
-
-    //trace loop
-    //one iteration less than PATH_LENGTH as we will always create shadow rays
-    //extending the path length by one
-    for (uint i = 1; i < PATH_LENGTH; ++i) {
-        //trace ray
-        ResultCode result = trace(ray, cam.hit, idx, dim);
-        onEvent(ray, result, idx, iPath++);
-
-        //stop codes are negative
-        if (result < 0) return;
-
-        //scatter ray to prepare next trace, except on last iteration
-        if (i < PATH_LENGTH - 1) {
-            scatterRay(ray, random2D(idx, dim));
-        }
-    }
-
-    //finished loop, but could go further
-    onEvent(ray, RESULT_CODE_MAX_ITER, idx, iPath);
+    return RESULT_CODE_SUCCESS;
 }
 
 void main() {
-    initResponse();
-    traceMain();
-    finalizeResponse();
+    uint dim = 0;
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= params.batchSize) return;
+
+    //sample wavelength
+    float lambdaContrib;
+    float lambda = sampleWavelength(lambdaContrib, idx, dim);
+
+    //optionally, sample direct light contribution
+    #ifndef DISABLE_DIRECT_LIGHTING
+    sampleDirect(lambda, lambdaContrib, idx, dim);
+    #endif
+
+    //sample camera ray
+    CameraHit hit;
+    BackwardRay ray = sampleCameraRay(lambda, hit, idx, dim);
+    ray.lin_contrib *= lambdaContrib;
+    onEvent(ray, RESULT_CODE_RAY_CREATED, idx, 0);
+
+    //trace loop
+    for (uint i = 1; i < PATH_LENGTH; ++i) {
+        //trace ray
+        ResultCode result = trace(ray, hit, idx, dim);
+        //scatter ray except on last iteration
+        if (result >= 0) {
+            if (i < PATH_LENGTH - 1) {
+                result = sampleVolumeInteraction(ray, idx, dim);
+            }
+            else {
+                result = RESULT_CODE_MAX_ITER;
+            }
+        }
+        onEvent(ray, result, idx, i);
+
+        //stop codes are negative
+        if (result < 0) return;
+    }
 }
