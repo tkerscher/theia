@@ -105,7 +105,7 @@ def test_StreamingHostLightSource(rng):
         assert np.allclose(data2[field], values)
 
 
-def test_ConstWavelengthSource(rng):
+def test_ConstWavelengthSource():
     N = 32 * 256
     lam = 450.0 * u.nm
 
@@ -190,7 +190,8 @@ def test_FunctionWavelengthSource():
     assert np.abs(hist - exp_hist).max() < 9e-4
 
 
-def test_ConeLightSource_fwd():
+@pytest.mark.parametrize("particle", [True, False], ids=["particle", "ray"])
+def test_ConeLightSource_fwd(particle: bool):
     N = 32 * 256
     position = (14.0, -2.0, 3.0) * u.m
     direction = (0.8, 0.36, 0.48)
@@ -199,7 +200,7 @@ def test_ConeLightSource_fwd():
     budget = 12.0
 
     # create pipeline
-    ray = UnpolarizedRay()
+    ray = UnpolarizedRay(particle=particle)
     philox = PhiloxRNG(key=0xC0110FFC0FFEE)
     photons = theia.light.ConstWavelengthSource(wavelength=100.0 * u.nm)
     light = theia.light.ConeLightSource(
@@ -210,6 +211,7 @@ def test_ConeLightSource_fwd():
         cosOpeningAngle=opening,
         budget=budget,
         mediumIdx=VACUUM_IDX,
+        emitParticles=particle,
     )
     sampler = theia.light.LightSampler(N, light, ray, rng=philox)
     # run
@@ -221,11 +223,12 @@ def test_ConeLightSource_fwd():
     assert np.allclose(result["position"], position)
     assert (result["direction"] * direction).sum(-1).min() >= opening
     assert np.abs(np.square(result["direction"]).sum(-1) - 1.0).max() < 1e-5
-    assert np.all(result["contrib"] == budget)
     assert np.all(result["mediumIdx"] == VACUUM_IDX)
     t_min, t_max = np.min(result["time"]).item(), np.max(result["time"]).item()
     assert timeRange[0] <= t_min <= timeRange[0] + 0.1
     assert timeRange[1] - 0.1 <= t_max <= timeRange[1]
+    if not particle:
+        assert np.all(result["contrib"] == budget)
 
 
 def test_ConeLightSource_bwd():
@@ -274,7 +277,8 @@ def test_ConeLightSource_bwd():
     assert np.allclose(contrib, exp_contrib)
 
 
-def test_PencilLightSource():
+@pytest.mark.parametrize("particle", [True, False], ids=["particle", "ray"])
+def test_PencilLightSource(particle: bool):
     N = 32 * 256
     position = (14.0, -2.0, 3.0) * u.m
     direction = (0.8, 0.36, 0.48)  # unit
@@ -282,7 +286,7 @@ def test_PencilLightSource():
     budget = 12.0
 
     # create pipeline
-    ray = UnpolarizedRay()
+    ray = UnpolarizedRay(particle=particle)
     philox = PhiloxRNG(key=0xC0110FFC0FFEE)
     photons = theia.light.ConstWavelengthSource(wavelength=100.0 * u.nm)
     light = theia.light.PencilLightSource(
@@ -292,6 +296,7 @@ def test_PencilLightSource():
         timeRange=timeRange,
         budget=budget,
         mediumIdx=VACUUM_IDX,
+        emitParticles=particle,
     )
     sampler = theia.light.LightSampler(N, light, ray, rng=philox)
     # run
@@ -302,21 +307,23 @@ def test_PencilLightSource():
     assert result.count == N
     assert np.allclose(result["position"], position)
     assert np.allclose(result["direction"], direction)
-    assert np.all(result["contrib"] == budget)
     assert np.all(result["mediumIdx"] == VACUUM_IDX)
     t_min, t_max = np.min(result["time"]).item(), np.max(result["time"]).item()
     assert timeRange[0] <= t_min <= timeRange[0] + 0.1
     assert timeRange[1] - 0.1 <= t_max <= timeRange[1]
+    if not particle:
+        assert np.all(result["contrib"] == budget)
 
 
-def test_SphericalLightSource_fwd():
+@pytest.mark.parametrize("particle", [True, False], ids=["particle", "ray"])
+def test_SphericalLightSource_fwd(particle: bool):
     N = 32 * 256
     position = (14.0, -2.0, 3.0) * u.m
     timeRange = (10.0, 50.0) * u.ns
     budget = 12.0
 
     # create pipeline
-    ray = UnpolarizedRay()
+    ray = UnpolarizedRay(particle=particle)
     philox = PhiloxRNG(key=0xC0110FFC0FFEE)
     photons = theia.light.ConstWavelengthSource(wavelength=100.0 * u.nm)
     light = theia.light.SphericalLightSource(
@@ -325,6 +332,7 @@ def test_SphericalLightSource_fwd():
         timeRange=timeRange,
         budget=budget,
         mediumIdx=VACUUM_IDX,
+        emitParticles=particle,
     )
     sampler = theia.light.LightSampler(N, light, ray, rng=philox)
     # run
@@ -337,14 +345,14 @@ def test_SphericalLightSource_fwd():
     assert result.count == N
     assert np.all(result["position"] == position)
     assert np.allclose(np.sqrt(np.square(result["direction"]).sum(-1)), 1.0)
-    # uniform direction should average to zero
-    assert np.abs(np.mean(result["direction"], axis=0)).max() < 0.01  # low statistics
-    # check contribution
-    assert np.allclose(result["contrib"], budget)
     assert np.all(result["mediumIdx"] == VACUUM_IDX)
     t_min, t_max = np.min(result["time"]).item(), np.max(result["time"]).item()
     assert timeRange[0] <= t_min <= timeRange[0] + 0.1
     assert timeRange[1] - 0.1 <= t_max <= timeRange[1]
+    if not particle:
+        assert np.allclose(result["contrib"], budget)
+    # uniform direction should average to zero
+    assert np.abs(np.mean(result["direction"], axis=0)).max() < 0.01  # low statistics
 
 
 def test_SphericalLightSource_bwd():

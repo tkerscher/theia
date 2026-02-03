@@ -39,13 +39,13 @@ ForwardRay sampleLight(uint idx, inout uint dim) {
         wavelength,
         lightParams.mediumIdx,
         time
-        #ifndef LIGHT_SOURCE_PARTICLE
+        #ifndef LIGHT_SOURCE_EMIT_PARTICLE
         , contrib * lightParams.contribFwd
         #endif
     );
 }
 
-#ifndef LIGHT_SOURCE_PARTICLE
+#ifndef LIGHT_SOURCE_EMIT_PARTICLE
 
 ForwardRay sampleLight(
     vec3 observer, vec3 normal,
