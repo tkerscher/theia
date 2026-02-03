@@ -4,6 +4,8 @@ import hephaistos as hp
 import hephaistos.pipeline as pl
 import numpy as np
 
+from itertools import product
+
 from theia.camera import SphereCamera
 from theia.light import PencilLightSource, SphericalLightSource, UniformWavelengthSource
 from theia.material import MaterialStore, PureWaterModel, getPropertySamples, VACUUM_IDX
@@ -136,17 +138,49 @@ def test_TrackRecordCallback():
     assert codes.min() >= minCode and codes.max() <= maxCode
 
 
-@pytest.mark.parametrize("disableDirect", [True, False])
-@pytest.mark.parametrize("disableTarget", [True, False])
-@pytest.mark.parametrize("disableScattering", [True, False])
-@pytest.mark.parametrize("limitTime", [True, False])
-# @pytest.mark.parametrize("polarized", [True, False])
+def _parameterize_VolumeForwardTracer():
+    configs = product([True, False], repeat=6)
+    for direct, target, scatter, limitTime, particle, transient in configs:
+        # skip unnecessary configs
+        if limitTime and not transient:
+            continue
+        if particle and target:
+            continue
+        if particle and not scatter:
+            continue
+        # return accepted config
+        yield (not direct, not target, not scatter, limitTime, particle, transient)
+
+
+def _test_VolumeForwardTracer_id():
+    configs = _parameterize_VolumeForwardTracer()
+    for disDirect, disTarget, disScatter, limitTime, particle, transient in configs:
+        args = []
+        if not disDirect:
+            args.append("direct")
+        if not disTarget:
+            args.append("target")
+        if not disScatter:
+            args.append("scatter")
+        if limitTime:
+            args.append("limitTime")
+        args.append("particle" if particle else "ray")
+        args.append("transient" if transient else "instant")
+        yield "-".join(args)
+
+
+@pytest.mark.parametrize(
+    "disableDirect,disableTarget,disableScattering,limitTime,particle,transient",
+    list(_parameterize_VolumeForwardTracer()),
+    ids=list(_test_VolumeForwardTracer_id()),
+)
 def test_VolumeForwardTracer(
     disableDirect: bool,
     disableTarget: bool,
     disableScattering: bool,
     limitTime: bool,
-    # polarized: bool,
+    particle: bool,
+    transient: bool,
 ):
     N = 32 * 256
     N_SCATTER = 6
@@ -173,7 +207,7 @@ def test_VolumeForwardTracer(
 
     # create pipeline
     rng = PhiloxRNG(key=0xC01DC0FFEE)
-    ray = UnpolarizedRay()
+    ray = UnpolarizedRay(transient=transient, particle=particle)
     photons = UniformWavelengthSource()
     source = SphericalLightSource(
         photons,
@@ -181,6 +215,7 @@ def test_VolumeForwardTracer(
         position=light_pos,
         timeRange=(T0, T1),
         budget=light_budget,
+        emitParticles=particle,
     )
     target = SphereTarget(position=target_pos, radius=target_radius)
     recorder = HitRecorder()
@@ -220,13 +255,12 @@ def test_VolumeForwardTracer(
 
     assert np.allclose(np.square(hits["position"]).sum(-1), 1.0)
     assert np.allclose(np.square(hits["normal"]).sum(-1), 1.0)
-    assert np.min(hits["time"]) >= t_min
-    assert np.max(hits["time"]) <= T_MAX
     assert np.all(hits["objectId"] == objectId)
+    if transient:
+        assert np.min(hits["time"]) >= t_min
+        assert np.max(hits["time"]) <= T_MAX
 
     # check config via stats
-    # NOTE: We no longer report hits with zero contrib.
-    #       The asserts commented out no longer hold
     assert stats.created == tracer.batchSize
     if disableScattering:
         assert stats.scattered == 0
@@ -235,23 +269,18 @@ def test_VolumeForwardTracer(
     if disableDirect and disableTarget:
         assert stats.absorbed > 0
         assert stats.detected > 0
-        # if not limitTime:
-        #     assert len(hits) == stats.detected
     elif disableDirect and not disableTarget:
         assert stats.absorbed > 0
         assert stats.detected == 0
-        # if not limitTime:
-        #     assert len(hits) > stats.scattered
     elif not disableDirect and disableTarget:
-        assert stats.absorbed == 0
         assert stats.detected > 0
-        # if not limitTime:
-        #     assert len(hits) == stats.detected
+        if particle:
+            assert stats.absorbed > 0
+        else:
+            assert stats.absorbed == 0
     elif not disableDirect and not disableTarget:
         assert stats.absorbed > 0
         assert stats.detected == 0
-        # if not limitTime:
-        #     assert len(hits) > (stats.detected + stats.scattered)
 
     # TODO: more sophisticated tests...
 

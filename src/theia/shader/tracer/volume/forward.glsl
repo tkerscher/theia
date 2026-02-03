@@ -116,9 +116,9 @@ ResultCode trace(
     bool hitValid = hit.valid && hit.dist <= dist;
     //propagate
     dist = min(dist, hit.dist);
-    ResultCode result = propagate(
+    ResultCode result = propagateSampled(
         ray, dist,
-        hitValid, true,
+        hitValid,
         params.propagation,
         idx, dim);
     if (result < 0)

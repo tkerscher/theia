@@ -45,7 +45,7 @@ ResultCode applyVolumeSampled(
     //chance of scattering
     float p_scatter = mu_s / (mu_a + mu_s);
 
-    #ifdef VOLUME_ABSORB_RAY
+    #if defined(VOLUME_ABSORB_RAY) || defined(RAY_PARTICLE)
     //stop ray with chance 1-p_scatter
     float u = random(idx, dim);
     if (u > p_scatter) {
