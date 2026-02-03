@@ -1,11 +1,10 @@
 import numpy as np
 import hephaistos as hp
 
-# needed for side effects
-import theia
+from theia.compiler import compileShader
 
 
-def test_signBit(rng, shaderUtil):
+def test_signBit(rng):
     N = 32 * 256
 
     # allocate memory
@@ -22,7 +21,7 @@ def test_signBit(rng, shaderUtil):
     query_buffer.numpy()[:] = floats
 
     # create test program
-    program = shaderUtil.createTestProgram("math.signBit.test.glsl")
+    program = hp.Program(compileShader("math.signBit.test.glsl"))
     program.bindParams(FloatIn=query_tensor, FloatOut=result_tensor)
     (
         hp.beginSequence()
