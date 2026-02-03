@@ -146,6 +146,32 @@ class HostWavelengthSource(WavelengthSource):
 
 
 class StreamingHostWavelengthSource(HostWavelengthSource):
+    """
+    Wavelength source using a provided data source to sequentially feed pre
+    sampled wavelengths to the device. Subsequent batches move forward into the
+    provided data streaming it to the device. Providing new data resets the
+    stream.
+
+    Parameters
+    ----------
+    batchSize: int
+        Number of wavelengths to sample per batch
+    data: dict[str, ArrayLike] | None, default=None
+        Data source from which the batches are produced
+    emitParticle: bool, default=False
+        Whether the source should produce particles or not.
+
+    Stage Parameters
+    ----------------
+    data: ArrayLike | None
+        Data source from which the batches are produced.
+
+    Note
+    ----
+    There is no special handling for when the last batch from the data is not
+    filling the queue completely. Data in the queue beyond the end is likely old
+    or garbage, but the source does not prevent the tracer from reading it.
+    """
 
     def __init__(
         self,
@@ -427,6 +453,23 @@ class LightSource(SourceCodeMixin):
 
 
 class LightSampler(PipelineStage):
+    """
+    Samples a given light source and puts the result into a queue for processing
+    on the CPU.
+
+    Parameters
+    ----------
+    batchSize: int
+        Number of samples to draw per batch.
+    source: LightSource
+        Light source to sample from.
+    ray: RayModel
+        Model describing the structure of rays to sample.
+    rng: RNG | None, default=None
+        Optional RNG the light source may require.
+    materials: MaterialStore | None, default=None
+        Optional material store the light source or ray model may require.
+    """
 
     name = "Light Sampler"
 
@@ -539,6 +582,25 @@ class LightSampler(PipelineStage):
 
 
 class HostLightSource(LightSource):
+    """
+    Light source passing samples from the CPU to the GPU
+
+    Parameters
+    ----------
+    capacity: int
+        Maximum number of samples that can be drawn per run
+    ray: RayModel | type[Structure]:
+        Model describing the structure of rays in the queue
+    updateFn: (HostLightSource, int) -> None | None, default=None
+        Optional update function called before the pipeline processes a task.
+        `i` is the i-th configuration the update should affect.
+        Can be used to stream in new samples on demand.
+    extra: set[str], default={}
+        Set of extra parameter name, that can be set and retrieved using the
+        stage api.
+    """
+
+    name = "Host Light Source"
 
     class LightParams(Structure):
         _fields_ = [("_queueAdr", buffer_reference), ("_queueSize", c_uint32)]
@@ -587,6 +649,32 @@ class HostLightSource(LightSource):
 
 
 class StreamingHostLightSource(HostLightSource):
+    """
+    Light source using a provided data source to sequentially feed light rays to
+    the device. Subsequent batches move forward into the provided data streaming
+    it to the device. Providing new data resets the stream.
+
+    Parameters
+    ----------
+    capacity: int
+        Maximum number of rays that can be drawn per run
+    ray: RayModel | type[Structure]
+        Ray model or structure describing the data in the queue to be fed to the
+        GPU
+    data: dict[str, ArrayLike] | None, default=None
+        Data source from which the batches are produced.
+
+    Stage Parameters
+    ----------------
+    data: dict[str, ArrayLike] | None
+        Data source from which the batches are produced.
+
+    Note
+    ----
+    There is no special handling for when the last batch from the data is not
+    filling the queue completely. Data in the queue beyond the end is likely old
+    or garbage, but the source does not prevent the tracer from reading it.
+    """
 
     def __init__(
         self,
@@ -653,6 +741,31 @@ class StreamingHostLightSource(HostLightSource):
 
 
 class ConeLightSource(LightSource):
+    """
+    Point light source radiating light in a specified cone.
+    Can optionally be constant polarized.
+
+    Parameters
+    ----------
+    wavelengthSource: WavelengthSource
+        Source to sample wavelengths from
+    mediumIdx: int
+        Index of the medium the light source is located in
+    position: (float, float, float), default=(0.0, 0.0, 0.0)
+        Position of the light source.
+    direction: (float, float, float), default(1.0, 0.0, 0.0)
+        Direction of the opening cone.
+    timeRange: (float, float), default=(0.0, 100.0)
+        start and stop time of the light source
+    cosOpeningAngle: float, default=0.5
+        Cosine of the cones opening angle
+    budget: float, default=1.0
+        Total amount of energy or photons the light source distributes among the
+        sampled photons.
+    emitParticles: bool, default=False
+        Whether to emit particles instead of rays. If so, `budget` will be
+        ignored.
+    """
 
     name = "Cone Light Source"
 
@@ -738,6 +851,28 @@ class ConeLightSource(LightSource):
 
 
 class PencilLightSource(LightSource):
+    """
+    Light source generating a pencil beam
+
+    Parameters
+    ----------
+    wavelengthSource: WavelengthSource
+        Source to sample wavelengths from
+    mediumIdx: int
+        Index of the medium the light source is located in
+    position: (float, float, float), default=(0.0, 0.0, 0.0)
+        Start point of the ray
+    direction: (float, float, float), default=(0.0, 0.0, 1.0)
+        Direction of the ray
+    timeRange: (float, float), default=(0.0, 100.0)
+        start and stop time of the light source
+    budget: float, default=1.0
+        Total amount of energy or photons the light source distributes among the
+        sampled photons.
+    emitParticles: bool, default=False
+        Whether to emit particles instead of rays. If so, `budget` will be
+        ignored.
+    """
 
     name = "Pencil Light Source"
 
@@ -808,6 +943,26 @@ class PencilLightSource(LightSource):
 
 
 class SphericalLightSource(LightSource):
+    """
+    Isotropic point light source radiating light in all directions uniformly.
+
+    Parameters
+    ----------
+    wavelengthSource: WavelengthSource
+        Source to sample wavelengths from
+    mediumIdx: int
+        Index of the medium the light source is located in
+    position: (float, float, float), default=(0.0, 0.0, 0.0)
+        Position of the light source.
+    timeRange: (float, float), default=(0.0, 100.0)
+        start and stop time of the light source
+    budget: float, default=1.0
+        Total amount of energy or photons the light source distributes among the
+        sampled photons.
+    emitParticles: bool, default=False
+        Whether to emit particles instead of rays. If so, `budget` will be
+        ignored.
+    """
 
     class LightParams(Structure):
         _fields_ = [
