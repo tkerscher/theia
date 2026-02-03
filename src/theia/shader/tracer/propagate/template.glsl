@@ -37,11 +37,6 @@ ResultCode checkBoundary(const RAY ray, const PropagationParams params) {
 
 #ifndef RAY_PARTICLE
 
-void scatter(inout RAY ray, vec3 dir) {
-    volumeScatterRay(ray, dir);
-    scatterRay(ray, dir);
-}
-
 float sampleStepSize(
     const RAY ray,
     const PropagationParams params,

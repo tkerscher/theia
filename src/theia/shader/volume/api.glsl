@@ -17,7 +17,7 @@
  * to occur.
 */
 float sampleInteractionLength(
-    inout RAY ray,                  ///< Ray for which to sample
+    const RAY ray,                  ///< Ray for which to sample
     uint idx, inout uint dim        ///< RNG state
 );
 
@@ -58,14 +58,15 @@ ResultCode applyVolume(
 );
 
 /**
- * Deterministically scatters the ray in the given direction.
+ * Samples a volume interaction that scatters the ray into the given direction.
  * Is expected to update the ray accordingly, e.g. by calling `scatterRay`.
  *
  * OPTIONAL. Required for NEE
 */
-void volumeScatterRay(
+ResultCode volumeScatterRay(
     inout RAY ray,                  ///< Ray to scatter
-    vec3 newDir                     ///< New direction after scattering
+    vec3 newDir,                    ///< New direction after scattering
+    uint idx, inout uint dim        ///< RNG state
 );
 
 /**

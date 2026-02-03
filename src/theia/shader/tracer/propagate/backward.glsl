@@ -19,19 +19,20 @@ ResultCode combineRays(
     uint idx, inout uint dim        ///< RNG state
 ) {
     //scatter ray to point towards source
-    volumeScatterRay(ray, -source.direction);
-    ResultCode result = propagate(
+    ResultCode result = volumeScatterRay(ray, -source.direction, idx, dim);
+    if (result < 0) return result;
+    result = propagate(
         ray,
         distance(ray.position, source.position),
         false, false,
         params,
         idx, dim
     );
-    //return early if propagation failed
     if (result < 0) return result;
 
     //combine
-    hit = combineRaysAligned(source, ray, cam);
+    result = combineRaysAligned(source, ray, cam, hit);
+    if (result < 0) return result;
 
     //check time limit if applicable
     #ifdef RAY_TRANSIENT

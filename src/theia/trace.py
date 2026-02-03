@@ -494,7 +494,8 @@ def _getVolumeForwardRNGStride(
     if target is not None:
         result += volume.rngDraws.sampleVolumeScattering
         result += target.nRNGSamples
-        result += volume.rngDraws.applyVolumeEffect
+        result += 2 * volume.rngDraws.applyVolumeEffect
+        result += 2 * volume.rngDraws.volumeScatterRay
         result += response.nRNGSamples
     return result
 
@@ -510,6 +511,8 @@ def _getVolumeBackwardRNGStride(
     result += volume.rngDraws.sampleVolumeInteraction
     result += response.nRNGSamples
     if target is not None:
+        result += target.nRNGSamples
+        result += volume.rngDraws.volumeScatterRay
         result += volume.rngDraws.applyVolumeEffect
         result += response.nRNGSamples
     return result

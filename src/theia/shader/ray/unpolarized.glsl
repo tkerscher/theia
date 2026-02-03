@@ -187,11 +187,12 @@ void alignRayToHit(
     //nothing to do
 }
 
-void scatterRay(
+ResultCode scatterRay(
     inout ForwardRay ray,
     vec3 newDir
 ) {
     ray.direction = newDir;
+    return RESULT_CODE_SUCCESS;
 }
 
 #ifndef RAY_PARTICLE
@@ -218,11 +219,12 @@ void alignRayToHit(
     //nothing to do
 }
 
-void scatterRay(
+ResultCode scatterRay(
     inout BackwardRay ray,
     vec3 newDir
 ) {
     ray.direction = newDir;
+    return RESULT_CODE_SUCCESS;
 }
 
 #endif
@@ -255,18 +257,22 @@ HitItem createHit(
 
 #ifndef RAY_PARTICLE
 
-HitItem combineRaysAligned(
+ResultCode combineRaysAligned(
     ForwardRay forward,
     BackwardRay backward,
-    const CameraHit hit
+    const CameraHit hit,
+    out HitItem result
 ) {
+    if (forward.mediumIdx != backward.mediumIdx)
+        return ERROR_CODE_MEDIA_MISMATCH;
+
     float contrib = forward.lin_contrib * exp(forward.log_contrib) *
                     backward.lin_contrib * exp(backward.log_contrib);
     #ifdef RAY_TRANSIENT
     float time = forward.time + backward.time;
     #endif
 
-    return HitItem(
+    result = HitItem(
         hit.position,
         hit.direction,
         hit.normal,
@@ -277,6 +283,8 @@ HitItem combineRaysAligned(
         #endif
         contrib
     );
+
+    return RESULT_CODE_SUCCESS;
 }
 
 #endif

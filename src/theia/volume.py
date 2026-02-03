@@ -31,6 +31,7 @@ class VolumeRNGDraws:
     applyVolumeEffect: int = 0
     sampleVolumeInteraction: int = 0
     sampleVolumeScattering: int = 0
+    volumeScatterRay: int = 0
 
 
 class VolumeModel(ABC):
@@ -129,6 +130,7 @@ class Attenuating(VolumeModel, name="attenuating"):
             applyVolumeEffect=0,
             sampleVolumeInteraction=2,
             sampleVolumeScattering=2,
+            volumeScatterRay=0,
         )
         super().__init__(
             rngDraws=rngDraws,

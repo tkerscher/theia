@@ -103,11 +103,13 @@ ResultCode applyVolume(
     return RESULT_CODE_SUCCESS;
 }
 
-void volumeScatterRay(
+ResultCode volumeScatterRay(
     inout RAY ray,
-    vec3 newDir
+    vec3 newDir,
+    uint idx, inout uint dim
 ) {
     ray.lin_contrib *= scatterProb(ray.mediumIdx, ray.direction, newDir);
+    return scatterRay(ray, newDir);
 }
 
 vec3 sampleVolumeScattering(

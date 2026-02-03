@@ -40,12 +40,14 @@ void createResponse(
     if (!hit.valid) return;
 
     //scatter ray if needed
+    ResultCode result;
     if (scattered) {
-        scatter(ray, dir);
+        result = volumeScatterRay(ray, dir, idx, dim);
+        if (result < 0) return;
     }
 
     //propagate ray to hit
-    ResultCode result = propagateToHit(
+    result = propagateToHit(
         ray,
         hit.position,
         hit.normal,
@@ -75,13 +77,12 @@ void sampleTargetMIS(ForwardRay ray, uint idx, inout uint dim) {
     //e.g. pTP: p_target(dir ~ phase)
 
     //shorthand notation
-    uint med = params.mediumIdx;
     vec3 obs = ray.position;
     vec3 dir = ray.direction;
 
     //sample phase function
     float pPP;
-    vec3 dirPhase = scatter(med, dir, random2D(idx, dim), pPP);
+    vec3 dirPhase = sampleVolumeScattering(ray, pPP, idx, dim);
     TargetSample phaseHit = intersectTarget(obs, dirPhase);
 
     //sample target
@@ -90,7 +91,7 @@ void sampleTargetMIS(ForwardRay ray, uint idx, inout uint dim) {
     float pTT = targetHit.prob * dA_dw(obs, targetHit.position, targetHit.normal);
 
     //calculate cross probabilities
-    float pPT = scatterProb(med, dir, dirTarget);
+    float pPT = volumeScatterProb(ray, dirTarget);
     float pTP = phaseHit.prob * dA_dw(obs, phaseHit.position, phaseHit.normal);
 
     //calculate MIS weights
