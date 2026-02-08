@@ -13,76 +13,16 @@ layout(local_size_x = 512) in;
 #include "volume.glsl"
 
 #include "tracer/propagate/backward.glsl"
+#include "tracer/volume/shadowing.glsl"
+#ifndef DISABLE_DIRECT_LIGHTING
+#include "tracer/volume/direct.glsl"
+#endif
 
 uniform TraceParams {
     uint batchSize;
     
     PropagationParams propagation;
 } params;
-
-#ifndef DISABLE_SELF_SHADOWING
-
-#include "target/common.glsl"
-#include "target.glsl"
-
-bool isVisible(vec3 observer, vec3 target) {
-    vec3 dir = normalize(target - observer);
-    float dist = distance(target, observer);
-
-    //Check if we are shadowed by target
-    // -> returns false (target not visible) if shadowed
-    TargetSample hit = intersectTarget(observer, dir);
-    return !hit.valid || (hit.dist >= dist);
-}
-
-#else
-
-bool isVisible(vec3 observer, vec3 target) {
-    return true;
-}
-
-#endif
-
-#ifndef DISABLE_DIRECT_LIGHTING
-
-void sampleDirect(
-    float wavelength,
-    float wavelengthContrib,
-    uint idx, inout uint dim
-) {
-    //sample camera
-    CameraHit camHit;
-    CameraSample camSample = sampleCamera(wavelength, idx, dim);
-    ForwardRay lightRay = sampleLight(
-        camSample.position,
-        camSample.normal,
-        wavelength,
-        camSample.mediumIdx,
-        idx, dim
-    );
-    BackwardRay ray = createCameraRay(
-        camSample,
-        lightRay.direction,
-        wavelength,
-        camHit
-    );
-    ray.lin_contrib *= wavelengthContrib;
-    onEvent(ray, RESULT_CODE_RAY_CREATED, idx, 0);
-
-    //combine rays and create hit
-    HitItem hit;
-    ResultCode result = combineRays(
-        ray, lightRay, camHit,
-        params.propagation,
-        hit, idx, dim);
-    if (result >= 0) {
-        response(hit, idx, dim);
-        result = RESULT_CODE_RAY_DETECTED;
-    }
-    onEvent(ray, result, idx, 1);
-}
-
-#endif
 
 void traceShadowRay(
     BackwardRay ray,
@@ -156,7 +96,7 @@ void main() {
 
     //optionally, sample direct light contribution
     #ifndef DISABLE_DIRECT_LIGHTING
-    sampleDirect(lambda, lambdaContrib, idx, dim);
+    sampleDirect(params.propagation.maxTime, idx, dim);
     #endif
 
     //sample camera ray

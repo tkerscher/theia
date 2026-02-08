@@ -1016,3 +1016,179 @@ class VolumeBackwardTracer(Tracer):
             stage.bindParams(self._program, i)
         groups = -(self.capacity // -512)
         return [self._program.dispatch(groups)]
+
+
+class VolumeDirectTracer(Tracer):
+    """
+    Path tracer sampling both camera and light source to create direct
+    connections between them. It does NOT check for any intersection with a
+    scene but may include self shadowing from an optional target acting as a
+    proxy for the physical camera. Can be run on hardware without ray tracing
+    support and may be faster.
+
+    Parameters
+    ----------
+    batchSize: int
+        Number of rays to simulate per run.
+    ray: RayModel
+        Model of the ray to propagate
+    source: LightSource
+        Source producing light rays. Must support backward mode.
+    camera: Camera
+        Source producing camera rays. Must support direct mode.
+    wavelengthSource: WavelengthSource
+        Source producing wavelength samples
+    response: HitResponse
+        Respose function processing each simulated hit
+    rng: RNG
+        Random number generator
+    materials: MaterialStore
+        MaterialStore containing the medium used by the tracer
+    volume: VolumeModel | str | int
+        Volume model used by the tracer. Can dynamically be fetched from the
+        material store using the corresponding medium's name or index.
+    capacity: int | None, default=None
+        Maximum batch size. If None, same as `batchSize`.
+    callback: TraceEventCallback, default=EmptyEventCallback()
+        Callback called for each tracing event. See `TraceEventCallback`
+    target: Target | None, default=None
+        Optional target acting as proxy for the camera in determining self
+        shadowing
+    maxTime: float, default=inf
+        Rays exceeding this limit will aborted with code `decayed`.
+    """
+
+    name = "Volume Direct Tracer"
+
+    class TraceParams(Structure):
+        _fields_ = [
+            ("maxTime", c_float),
+            ("_batchSize", c_uint32),
+        ]
+
+    def __init__(
+        self,
+        batchSize: int,
+        ray: RayModel,
+        source: LightSource,
+        camera: Camera,
+        wavelengthSource: WavelengthSource,
+        response: HitResponse,
+        rng: RNG,
+        materials: MaterialStore,
+        *,
+        volume: VolumeModel | str | int,
+        capacity: int | None = None,
+        callback: TraceEventCallback = EmptyEventCallback(),
+        target: Target | None = None,
+        maxTime: float = float("inf"),
+    ) -> None:
+        # fetch volume model if not given
+        if not isinstance(volume, VolumeModel):
+            volume = materials.getVolumeModel(volume)
+        # check components support backward tracing
+        if not ray.supportsBackward:
+            raise ValueError("Ray model does not support backward tracing")
+        if not source.supportBackward:
+            raise ValueError("Light source does not support backward mode")
+        if not camera.supportDirect:
+            raise ValueError("Camera does not support direct mode")
+        if volume.backwardSourceCode is None:
+            raise ValueError("Volume model does not support backward mode")
+
+        nRNG = (
+            wavelengthSource.nRNGSamples
+            + source.nRNGBackward
+            + camera.nRNGDirect
+            + volume.rngDraws.applyVolumeEffect
+            + response.nRNGSamples
+        )
+        super().__init__(
+            batchSize,
+            ray,
+            response,
+            rng,
+            {"TraceParams": VolumeDirectTracer.TraceParams},
+            capacity=capacity,
+            callback=callback,
+            maxPathLength=1,
+            maxHitsPerRay=1,
+            nRNGSamples=nRNG,
+        )
+        # save params
+        self._photons = wavelengthSource
+        self._camera = camera
+        self._source = source
+        self._target = target
+        self._materials = materials
+        self.setParams(maxTime=maxTime)
+
+        # compile code
+        preamble = createPreamble(DISABLE_SELF_SHADOWING=target is None)
+        headers = {
+            "callback.glsl": callback.sourceCode,
+            "camera.glsl": camera.sourceCode,
+            "photon.glsl": wavelengthSource.sourceCode,
+            "ray.glsl": ray.sourceCode,
+            "response.glsl": response.sourceCode,
+            "rng.glsl": rng.sourceCode,
+            "source.glsl": source.sourceCode,
+            "target.glsl": "" if target is None else target.sourceCode,
+            "volume.glsl": volume.backwardSourceCode,
+            **materials.header,
+        }
+        code = compileShader("tracer/volume/direct.main.glsl", preamble, headers)
+        # create program
+        self._program = hp.Program(code)
+        materials.bindParams(self._program)
+
+    @Tracer.batchSize.setter
+    def batchSize(self, value) -> None:
+        assert Tracer.batchSize.fset is not None  # to make linter happy
+        Tracer.batchSize.fset(self, value)
+        self.setParam("_batchSize", value)
+
+    @property
+    def camera(self) -> Camera:
+        """Camera producing camera rays"""
+        return self._camera
+
+    @property
+    def materials(self) -> MaterialStore:
+        """MaterialStore containing the medium used by the tracer"""
+        return self._materials
+
+    @property
+    def source(self) -> LightSource:
+        """Source producing rays"""
+        return self._source
+
+    @property
+    def target(self) -> Target | None:
+        """Optional target used for self shadowing"""
+        return self._target
+
+    @property
+    def wavelengthSource(self) -> WavelengthSource:
+        """Sampler for wavelengths"""
+        return self._photons
+
+    def _collectStages(self) -> list[tuple[str, PipelineStage]]:
+        stages = [
+            ("rng", self.rng),
+            ("photons", self.wavelengthSource),
+            ("source", self.source),
+            ("camera", self.camera),
+            ("tracer", self),
+            ("callback", self.callback),
+            ("response", self.response),
+        ]
+        if self.target is not None:
+            stages.insert(4, ("target", self.target))
+        return stages
+
+    def run(self, i: int) -> list[hp.Command]:
+        for _, stage in self.collectStages():
+            stage.bindParams(self._program, i)
+        groups = -(self.capacity // -512)
+        return [self._program.dispatch(groups)]

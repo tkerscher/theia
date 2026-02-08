@@ -6,7 +6,7 @@ import numpy as np
 
 from itertools import product
 
-from theia.camera import SphereCamera
+from theia.camera import FlatCamera, SphereCamera
 from theia.light import PencilLightSource, SphericalLightSource, UniformWavelengthSource
 from theia.material import MaterialStore, PureWaterModel, getPropertySamples, VACUUM_IDX
 from theia.random import PhiloxRNG
@@ -389,3 +389,86 @@ def test_VolumeBackwardTracer(
     else:
         assert stats.created == 2 * tracer.batchSize
         assert stats.detected > 0
+
+
+@pytest.mark.parametrize("limitTime", [True, False])
+def test_VolumeDirectTracer(limitTime: bool):
+    N = 32 * 256
+    # params
+    T0, T1 = 10.0 * u.ns, 20.0 * u.ns
+    T_MAX = 45.0 * u.ns
+    capacity = 48 * 256
+    camDir = (1.0, 0.0, 0.0)
+    camPos = (5.0, 2.0, -1.0)
+    camUp = (0.0, 0.0, 1.0)
+    width, length = 50.0 * u.cm, 40.0 * u.cm
+    lightPos = (10.0, 5.0, 2.0)
+    lightBudget = 1000.0
+
+    # create water medium
+    water = PureWaterModel().createMedium(physicModel=Attenuating())
+    materials = MaterialStore([], media=[water])
+    waterIdx = materials.media["water"]
+
+    # estimate min time
+    vg = getPropertySamples(water, "group_velocity")
+    assert vg is not None
+    v_max = np.max(vg)
+    d = np.array(lightPos) - np.array(camPos)
+    d = np.multiply(d, camDir).sum(-1)  # not exact, but lower bound
+    t_min = d / v_max + T0
+
+    # create pipeline
+    rng = PhiloxRNG(key=0xC0FFEE)
+    ray = UnpolarizedRay()
+    photons = UniformWavelengthSource()
+    light = SphericalLightSource(
+        photons,
+        position=lightPos,
+        budget=lightBudget,
+        timeRange=(T0, T1),
+        mediumIdx=waterIdx,
+    )
+    camera = FlatCamera(
+        mediumIdx=waterIdx,
+        width=width,
+        length=length,
+        position=camPos,
+        direction=camDir,
+        up=camUp,
+    )
+    recorder = HitRecorder()
+    stats = theia.trace.EventStatisticCallback()
+    tracer = theia.trace.VolumeDirectTracer(
+        N,
+        ray,
+        light,
+        camera,
+        photons,
+        recorder,
+        rng,
+        materials,
+        volume="water",
+        capacity=capacity,
+        callback=stats,
+        maxTime=T_MAX if limitTime else float("NaN"),
+    )
+    # run pipeline
+    pl.runPipeline(tracer.collectStages())
+
+    # check hits
+    assert recorder.queue is not None
+    hits = recorder.queue.view(0)
+    assert hits.count > 0
+    assert hits.count <= tracer.maxHits
+    hits = hits[: hits.count]
+    assert np.min(hits["time"]) >= t_min
+    if limitTime:
+        assert np.max(hits["time"]) <= T_MAX
+    else:
+        assert np.max(hits["time"]) > T_MAX
+
+    # check stats
+    assert stats.created == tracer.batchSize
+    assert stats.detected + stats.decayed + stats.absorbed == tracer.batchSize
+    assert stats.detected == len(hits)
