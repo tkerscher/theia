@@ -3,7 +3,6 @@ from __future__ import annotations
 from abc import abstractmethod
 
 import hephaistos as hp
-from hephaistos import Program
 from hephaistos.pipeline import PipelineStage, SourceCodeMixin
 
 from ctypes import Structure, c_float, c_int32, c_uint32, c_uint64
@@ -12,19 +11,27 @@ from hephaistos.glsl import vec3
 from numpy.ctypeslib import as_array
 
 from theia.camera import Camera
-from theia.compiler import createPreamble, compileShader, loadShader
+from theia.compiler import (
+    createCompilerSession,
+    createPreamble,
+    compileShader,
+    loadShader,
+)
+from theia.device import getEnabledRayTracingFeatures, isRayTracingEnabled
 from theia.light import LightSource, WavelengthSource
 from theia.material import MaterialStore
 from theia.random import RNG
 from theia.ray import RayModel
 from theia.response import HitResponse, TraceConfig
-from theia.scene import RectBBox
+from theia.scene import RectBBox, Scene
+from theia.surface import SurfaceModel
 from theia.target import Target
 from theia.volume import VolumeModel
 import theia.units as u
 
 from enum import IntEnum
 from numpy.typing import NDArray
+from typing import Iterable, Literal
 
 
 __all__ = [
@@ -174,7 +181,7 @@ class EventStatisticCallback(TraceEventCallback):
         """Resets the statistic"""
         memset(addressof(self._stat), 0, sizeof(self.Statistic))
 
-    def bindParams(self, program: Program, i: int) -> None:
+    def bindParams(self, program: hp.Program | hp.RayTracingPipeline, i: int) -> None:
         super().bindParams(program, i)
         program.bindParams(Statistics=self._tensor)
 
@@ -287,7 +294,7 @@ class TrackRecordCallback(TraceEventCallback):
         codes = codes.transpose()
         return tracks, lengths, codes
 
-    def bindParams(self, program: Program, i: int) -> None:
+    def bindParams(self, program: hp.Program | hp.RayTracingPipeline, i: int) -> None:
         super().bindParams(program, i)
         program.bindParams(TrackBuffer=self._tensor)
 
@@ -1192,3 +1199,263 @@ class VolumeDirectTracer(Tracer):
             stage.bindParams(self._program, i)
         groups = -(self.capacity // -512)
         return [self._program.dispatch(groups)]
+
+
+def _compileTemplateShader(
+    models: Iterable[VolumeModel | SurfaceModel],
+    mode: Literal["forward", "backward"],
+    templatePath: str,
+    preamble: str,
+    headers: dict[str, str],
+    stage: hp.ShaderStage,
+    session: hp.CompilerSession,
+) -> list[bytes]:
+    """Util function compiling the given template for each volume model"""
+    result: list[bytes] = []
+    for model in models:
+        if mode == "forward":
+            assert model.forwardSourceCode is not None
+            source = model.forwardSourceCode
+        else:
+            assert model.backwardSourceCode is not None
+            source = model.backwardSourceCode
+        if isinstance(model, SurfaceModel):
+            _headers = {"surface.glsl": source, **headers}
+        elif isinstance(model, VolumeModel):
+            _headers = {"volume.glsl": source, **headers}
+        else:
+            raise ValueError(f"Unexpected model: {model}")
+        code = compileShader(
+            templatePath,
+            preamble,
+            _headers,
+            stage=stage,
+            session=session,
+        )
+        result.append(code)
+    return result
+
+
+def _compileMultiTemplateShader(
+    models: Iterable[VolumeModel | SurfaceModel],
+    mode: Literal["forward", "backward"],
+    templatePaths: Iterable[str],
+    preamble: str,
+    headers: dict[str, str],
+    stage: hp.ShaderStage,
+    session: hp.CompilerSession,
+) -> list[list[bytes]]:
+    """similar to `_compileMultiTemplateShader` but takes multiple templates"""
+    return [
+        _compileTemplateShader(models, mode, path, preamble, headers, stage, session)
+        for path in templatePaths
+    ]
+
+
+class SceneDirectTracer(Tracer):
+    """
+    Path tracer sampling both camera and light source to create direct
+    connections between them. Checks for any shadowing caused by the provided
+    scene. This tracer may be more performant in sampling the direct light
+    contribution in the sense that estimates converge faster.
+
+    Parameters
+    ----------
+    batchSize: int
+        Number of rays to simulate per run.
+    ray: RayModel
+        Model of the ray to propagate
+    source: LightSource
+        Source producing light rays. Must support backward mode.
+    camera: Camera
+        Source producing camera rays. Must support direct mode.
+    wavelengthSource: WavelengthSource
+        Source producing wavelength samples
+    response: HitResponse
+        Respose function processing each simulated hit
+    rng: RNG
+        Random number generator
+    scene: Scene
+        Scene to trace the rays in
+    capacity: int | None, default=None
+        Maximum batch size. If None, same as `batchSize`.
+    callback: TraceEventCallback, default=EmptyEventCallback()
+        Callback called for each tracing event. See `TraceEventCallback`
+    maxTime: float, default=inf
+        Rays exceeding this limit will aborted with code `decayed`.
+    """
+
+    name = "Scene Direct Tracer"
+
+    class TraceParams(Structure):
+        _fields_ = [
+            ("maxTime", c_float),
+            ("_batchSize", c_uint32),
+            ("_rayCountY", c_uint32),
+            ("_rayCountZ", c_uint32),
+        ]
+
+    def __init__(
+        self,
+        batchSize: int,
+        ray: RayModel,
+        source: LightSource,
+        camera: Camera,
+        wavelengthSource: WavelengthSource,
+        response: HitResponse,
+        rng: RNG,
+        scene: Scene,
+        *,
+        capacity: int | None = None,
+        callback: TraceEventCallback = EmptyEventCallback(),
+        maxTime: float = float("inf"),
+    ) -> None:
+        # we need ray tracing for this
+        if not isRayTracingEnabled():
+            raise RuntimeError("The device does not support ray tracing")
+        # check components support direct sampling
+        if not ray.supportsBackward:
+            raise ValueError("Ray model does not support backward mode")
+        if not source.supportBackward:
+            raise ValueError("Light source does not support backward mode")
+        if not camera.supportDirect:
+            raise ValueError("Camera does not support direct mode")
+        volModels = scene.materials.volumeModels
+        errorModels = [m.name for m in volModels if m.backwardSourceCode is None]
+        if errorModels:
+            msg = "The following volume models do not support direct mode: "
+            msg = ", ".join(errorModels)
+            raise ValueError(msg)
+
+        # calculate number of rng samples drawn
+        nRNGApply = max(v.rngDraws.applyVolumeEffect for v in volModels)
+        nRNG = (
+            wavelengthSource.nRNGSamples
+            + source.nRNGBackward
+            + camera.nRNGDirect
+            + nRNGApply
+        )
+        super().__init__(
+            batchSize,
+            ray,
+            response,
+            rng,
+            {"TraceParams": SceneDirectTracer.TraceParams},
+            capacity=capacity,
+            callback=callback,
+            maxPathLength=1,
+            nRNGSamples=nRNG,
+            maxHitsPerRay=1,
+        )
+        # save params
+        self._photons = wavelengthSource
+        self._source = source
+        self._camera = camera
+        self._scene = scene
+        self.setParams(
+            maxTime=maxTime,
+            _rayCountY=1,
+            _rayCountZ=1,
+        )
+
+        # compile code
+        self._dispatchIndirect = getEnabledRayTracingFeatures().indirectDispatch
+        session = createCompilerSession()
+        preamble = createPreamble(
+            INDIRECT_DISPATCH=self._dispatchIndirect,
+            DIRECT_SAMPLING_RNG_STRIDE=nRNG,
+            DIRECT_RAY_PAYLOAD_LOCATION=0,
+        )
+        headers = {
+            "callback.glsl": callback.sourceCode,
+            "camera.glsl": camera.sourceCode,
+            "photon.glsl": wavelengthSource.sourceCode,
+            "ray.glsl": ray.sourceCode,
+            "response.glsl": response.sourceCode,
+            "rng.glsl": rng.sourceCode,
+            "source.glsl": source.sourceCode,
+            **scene.materials.header,
+        }
+        rayGen_code = compileShader(
+            "tracer/scene/direct/sample.rgen.glsl",
+            preamble,
+            headers,
+            stage=hp.ShaderStage.RAYGEN,
+            session=session,
+        )
+        miss_code = _compileTemplateShader(
+            scene.materials.volumeModels,
+            "backward",
+            "tracer/scene/direct/direct.rmiss.glsl",
+            preamble,
+            headers,
+            hp.ShaderStage.MISS,
+            session,
+        )
+        # create ray tracing pipeline
+        shaders = [
+            hp.RayGenerateShader(rayGen_code),
+            *(hp.RayMissShader(c) for c in miss_code),
+        ]
+        self._pipeline = hp.RayTracingPipeline(shaders)
+        scene.bindParams(self._pipeline)
+        # create shader binding tables
+        nSbtHitEntries = len(scene.materials.surfaceModels) * Scene.sbtHitStride
+        createSBT = lambda x: self._pipeline.createShaderBindingTable(x)
+        _range = lambda i, n: range(i, i + n)
+        self._sbt = {
+            "rayGenShaders": createSBT([0]),
+            "missShaders": createSBT(list(_range(1, len(miss_code)))),
+            # sbt indices for hit shaders are determined by the TLAS too
+            # so we have to create an entry for each possible index
+            "hitShaders": createSBT([None] * nSbtHitEntries),
+        }
+
+    @Tracer.batchSize.setter
+    def batchSize(self, value) -> None:
+        assert Tracer.batchSize.fset is not None  # to make linter happy
+        Tracer.batchSize.fset(self, value)
+        self.setParam("_batchSize", value)
+
+    @property
+    def camera(self) -> Camera:
+        """Camera producing camera rays"""
+        return self._camera
+
+    @property
+    def scene(self) -> Scene:
+        """Scene the tracer propagates rays in"""
+        return self._scene
+
+    @property
+    def source(self) -> LightSource:
+        """Source producing rays"""
+        return self._source
+
+    @property
+    def wavelengthSource(self) -> WavelengthSource:
+        """Sampler for wavelengths"""
+        return self._photons
+
+    def _collectStages(self) -> list[tuple[str, PipelineStage]]:
+        return [
+            ("rng", self.rng),
+            ("photons", self.wavelengthSource),
+            ("source", self.source),
+            ("camera", self.camera),
+            ("tracer", self),
+            ("callback", self.callback),
+            ("response", self.response),
+        ]
+
+    def run(self, i: int) -> list[hp.Command]:
+        for _, stage in self.collectStages():
+            stage.bindParams(self._pipeline, i)
+        if self._dispatchIndirect:
+            tensor = self._getParamsTensor("TraceParams", i)
+            offset = SceneDirectTracer.TraceParams._batchSize.offset
+            return [
+                self._pipeline.traceRaysIndirect(tensor, offset=offset, **self._sbt)
+            ]
+        else:
+            return [self._pipeline.traceRays(self.capacity, 1, 1, **self._sbt)]

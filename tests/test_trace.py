@@ -7,11 +7,15 @@ import numpy as np
 from itertools import product
 
 from theia.camera import FlatCamera, SphereCamera
+from theia.device import isRayTracingEnabled
 from theia.light import PencilLightSource, SphericalLightSource, UniformWavelengthSource
-from theia.material import MaterialStore, PureWaterModel, getPropertySamples, VACUUM_IDX
+from theia.material import Material, MaterialStore, getPropertySamples, VACUUM_IDX
+from theia.material import PureWaterModel
 from theia.random import PhiloxRNG
 from theia.ray import UnpolarizedRay
 from theia.response import HitRecorder
+from theia.scene import Scene, Transform
+from theia.surface import AbsorbingSurface
 from theia.target import SphereTarget
 from theia.volume import Attenuating
 import theia.trace
@@ -436,6 +440,7 @@ def test_VolumeDirectTracer(limitTime: bool):
         position=camPos,
         direction=camDir,
         up=camUp,
+        objectId=10,
     )
     recorder = HitRecorder()
     stats = theia.trace.EventStatisticCallback()
@@ -462,6 +467,7 @@ def test_VolumeDirectTracer(limitTime: bool):
     assert hits.count > 0
     assert hits.count <= tracer.maxHits
     hits = hits[: hits.count]
+    assert np.all(hits["objectId"] == 10)
     assert np.min(hits["time"]) >= t_min
     if limitTime:
         assert np.max(hits["time"]) <= T_MAX
@@ -472,3 +478,105 @@ def test_VolumeDirectTracer(limitTime: bool):
     assert stats.created == tracer.batchSize
     assert stats.detected + stats.decayed + stats.absorbed == tracer.batchSize
     assert stats.detected == len(hits)
+
+
+@pytest.mark.parametrize("limitTime", [True, False])
+def test_SceneDirectTracer(limitTime: bool):
+    if not isRayTracingEnabled():
+        pytest.skip("ray tracing is not supported")
+
+    N = 32 * 256
+    # same as volume version, but now put something before camera to test shadow rays
+    T0, T1 = 10.0 * u.ns, 20.0 * u.ns
+    T_MAX = 45.0 * u.ns
+    capacity = 48 * 256
+    camDir = (1.0, 0.0, 0.0)
+    camPos = (5.0, 2.0, -1.0)
+    camUp = (0.0, 0.0, 1.0)
+    width, length = 50.0 * u.cm, 40.0 * u.cm
+    lightPos = (10.0, 5.0, 2.0)
+    lightBudget = 1000.0
+
+    # create water medium
+    attenuate = Attenuating()
+    water = PureWaterModel().createMedium(physicModel=attenuate)
+    absorber = AbsorbingSurface()
+    mat = Material("absorber", None, water, absorber)
+    matStore = MaterialStore([mat], media=[water])
+    waterIdx = matStore.media["water"]
+    # create scene
+    # block half of the camera to see whether shadow rays work properly
+    meshes = theia.scene.MeshStore({"cube": "assets/cube.ply"})
+    aperture_size = (1.0 * u.cm, width, length)
+    aperture_pos = (5.03, 2.0 + width, -1.0)
+    t = Transform.TRS(scale=aperture_size, translate=aperture_pos)
+    a = meshes.createInstance("cube", "absorber", t)
+    scene = Scene([a], matStore)
+
+    # estimate min time
+    vg = getPropertySamples(water, "group_velocity")
+    assert vg is not None
+    v_max = np.max(vg)
+    d = np.array(lightPos) - np.array(camPos)
+    d = np.multiply(d, camDir).sum(-1)  # not exact, but lower bound
+    t_min = d / v_max + T0
+
+    # create pipeline
+    rng = PhiloxRNG(key=0xC0FFEE)
+    ray = UnpolarizedRay()
+    photons = UniformWavelengthSource()
+    light = SphericalLightSource(
+        photons,
+        position=lightPos,
+        budget=lightBudget,
+        timeRange=(T0, T1),
+        mediumIdx=waterIdx,
+    )
+    camera = FlatCamera(
+        mediumIdx=waterIdx,
+        width=width,
+        length=length,
+        position=camPos,
+        direction=camDir,
+        up=camUp,
+        objectId=10,
+    )
+    recorder = HitRecorder()
+    stats = theia.trace.EventStatisticCallback()
+    tracer = theia.trace.SceneDirectTracer(
+        N,
+        ray,
+        light,
+        camera,
+        photons,
+        recorder,
+        rng,
+        scene,
+        capacity=capacity,
+        callback=stats,
+        maxTime=T_MAX if limitTime else float("inf"),
+    )
+    # run pipeline
+    pl.runPipeline(tracer.collectStages())
+
+    # check hits
+    assert recorder.queue is not None
+    hits = recorder.queue.view(0)
+    assert hits.count > 0
+    assert hits.count <= tracer.maxHits
+    hits = hits[: hits.count]
+    assert np.all(hits["objectId"] == 10)
+    assert np.min(hits["time"]) >= t_min
+    if limitTime:
+        assert np.max(hits["time"]) <= T_MAX
+    else:
+        assert np.max(hits["time"]) > T_MAX
+    # check we hit only half of the detector
+    assert np.abs(hits["position"].max(0) - (0.0, length / 2, 0.0)).max() < 0.025
+    assert np.abs(hits["position"].min(0) - (-width / 2, -length / 2, 0.0)).max() < 5e-4
+    # check stats
+    assert stats.created == tracer.batchSize
+    n = stats.detected + stats.decayed + stats.absorbed + stats.missed
+    assert n == tracer.batchSize
+    assert stats.detected == len(hits)
+    assert stats.absorbed > 0
