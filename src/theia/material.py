@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import re
+import warnings
+
 import hephaistos as hp
 import numpy as np
+from ctypes import memmove
+
 import scipy.constants
 from scipy.integrate import cumulative_simpson
 from scipy.interpolate import CubicSpline
 from scipy.stats.sampling import NumericalInversePolynomial
-import warnings
 
 from dataclasses import dataclass, field
 from enum import Enum, IntFlag
@@ -787,6 +790,14 @@ class MaterialStore:
         # create media table
         mediaProps = {n: _createTableEntryFromMedium(m) for n, m in mediaDict.items()}
         self._mediaTable = PropertyTable(mediaProps, requiredSlots=mediaSlots)
+        # create mapping from medium index to volume model index
+        if (n := len(mediaDict)) > 0:
+            self._volumeMap = hp.UnsignedIntTensor(n, mapped=True)
+            volMap = np.ascontiguousarray(self._volumeModelIndices)
+            memmove(self._volumeMap.memory, volMap.ctypes.data, volMap.nbytes)
+        else:
+            # we cannot create an empty tensor
+            self._volumeMap = None
 
         # collect surface models
         material = list(material)
@@ -834,6 +845,11 @@ class MaterialStore:
         return self._volumeModelIndices
 
     @property
+    def volumeModelMapTensor(self) -> hp.Tensor | None:
+        """Tensor containing the volume module map on the device"""
+        return self._volumeMap
+
+    @property
     def slotMacros(self) -> dict[str, int]:
         """Dictionary containing the slot names to be used in shaders"""
         mediaSlots = createSlotMacros(self.media, "MEDIA_SLOT")
@@ -854,11 +870,13 @@ class MaterialStore:
         idx = self.volumeModelMap[medium]
         return self.volumeModels[idx]
 
-    def bindParams(self, program: hp.Program) -> None:
+    def bindParams(self, program: hp.Program | hp.RayTracingPipeline) -> None:
         program.bindParams(
             MediaTable=self.media.tensor,
             MaterialTable=self.materials.tensor,
         )
+        if self.volumeModelMapTensor is not None:
+            program.bindParams(MediumMap=self.volumeModelMapTensor)
 
     def __len__(self) -> int:
         return len(self.materials)

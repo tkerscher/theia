@@ -173,7 +173,7 @@ class Transform:
             Translation given as an offset added.
         """
         result = Transform()
-        if type(scale) is tuple:
+        if isinstance(scale, tuple):
             result = result.scale(*scale)
         else:
             result = result.scale(scale)
@@ -612,46 +612,49 @@ class Scene:
         instances that make up the scene
     materials: MaterialStore
         Store containing the material and media referenced by the tracer.
-    medium: str | int | None, default=None
-        Name or index of the medium the scene is emerged in, e.g. "water" for an
-        underwater simulation assuming the corresponding medium has this name.
-        Defaults to `None` specifying vacuum.
     bbox: RectBBox, default=None
         bounding box containing the scene, limiting traced rays inside. Defaults
         to a cube of 1km in each primal direction.
     """
+
+    sbtHitStride: Final[int] = 2
 
     def __init__(
         self,
         instances: Iterable[MeshInstance],
         materials: MaterialStore,
         *,
-        medium: str | int | None = None,
         bbox: RectBBox | None = None,
     ) -> None:
         instances = list(instances)
         if len(instances) == 0:
             raise ValueError("No instances given. Scene cannot be empty!")
         self._materials = materials
-        self.medium = medium
         if bbox is None:
-            bbox = RectBBox((-1.0 * u.km,) * 3, (1.0 * u.km,) * 3)
+            bbox = RectBBox((-1.0, -1.0, -1.0) * u.km, (1.0, 1.0, 1.0) * u.km)
         self.bbox = bbox
 
-        # build materials map
-        materialMap = hp.UnsignedIntBuffer(len(instances))
-        materialMapArray = materialMap.numpy()
-        for i, inst in enumerate(instances):
+        # TODO: We need a mapping from instanceID -> objectID
+
+        # fill in missing data in instances. This is namely:
+        # - customIndex storing the index into the material table
+        # - sbtOffset mapping to surface model index
+        # Note, that we will have two hit shaders per surface model (one for
+        # tracing, one for NEE), so the sbtOffset is actually twice the index
+        geomInstances: list[hp.GeometryInstance] = []
+        for inst in instances:
             if inst.material not in materials:
                 raise ValueError(f'Unknown material "{inst.material}"')
-            materialMapArray[i] = materials[inst.material]
-        # upload map to GPU
-        self._materialMap = hp.UnsignedIntTensor(len(instances))
-        hp.execute(hp.updateTensor(materialMap, self._materialMap))
+            matIdx = materials[inst.material]
+            srfIdx = materials.surfaceModelMap[matIdx]
 
-        # in order to pass to hephaistos.AccelerationStructure, we need to
-        # extract the hephaistos.GeometryInstance from the MeshInstance
-        self._tlas = hp.AccelerationStructure([i.instance for i in instances])
+            geom = inst.instance
+            geom.customIndex = matIdx
+            geom.instanceSBTOffset = self.sbtHitStride * srfIdx
+
+            geomInstances.append(geom)
+        # finally, create the acceleration structure
+        self._tlas = hp.AccelerationStructure(geomInstances)
 
     @property
     def bbox(self) -> RectBBox:
@@ -663,45 +666,19 @@ class Scene:
         self._bbox = value
 
     @property
-    def materialMap(self) -> hp.Tensor:
-        """
-        Tensor containing the mapping from geometry instances to their assigned
-        material
-        """
-        return self._materialMap
-
-    @property
     def materials(self) -> MaterialStore:
         """Store containing the materials and media used in the scene."""
         return self._materials
-
-    @property
-    def medium(self) -> int:
-        """
-        Index of the medium the scene is emerged in as specified by the
-        `MaterialStore` in use.
-        """
-        return self._medium
-
-    @medium.setter
-    def medium(self, value: str | int | None) -> None:
-        if value is None:
-            value = VACUUM_IDX
-        if isinstance(value, str):
-            value = self.materials.media[value]
-        if not 0 <= value < len(self.materials.media) and value != VACUUM_IDX:
-            raise ValueError(f"Media index {value} is out of range!")
-        self._medium = value
 
     @property
     def tlas(self) -> hp.AccelerationStructure:
         """The acceleration structure describing the scene's geometry"""
         return self._tlas
 
-    def bindParams(self, program: hp.Program) -> None:
+    def bindParams(self, program: hp.Program | hp.RayTracingPipeline) -> None:
         """Binds the parameters describing the scene in the given program"""
         self.materials.bindParams(program)
-        program.bindParams(tlas=self.tlas, MaterialMap=self.materialMap)
+        program.bindParams(tlas=self.tlas)
 
 
 class SceneTemplate:

@@ -418,7 +418,7 @@ class ValueHitResponse(HitResponse):
         """Underlying value response processing hits"""
         return self._response
 
-    def bindParams(self, program: hp.Program, i: int) -> None:
+    def bindParams(self, program: hp.Program | hp.RayTracingPipeline, i: int) -> None:
         super().bindParams(program, i)
         self.valueResponse.bindParams(program, i)
 

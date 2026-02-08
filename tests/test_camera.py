@@ -466,7 +466,7 @@ def test_MeshCamera(inward: bool):
     )
     c1 = store.createInstance("cube", "mat", t1)
     c2 = store.createInstance("cube", "mat", t2)
-    scene = Scene([c1, c2], matStore, medium="water")
+    scene = Scene([c1, c2], matStore)
 
     # create camera and sampler
     ray = UnpolarizedRay()

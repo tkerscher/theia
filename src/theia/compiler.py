@@ -38,6 +38,11 @@ def getCompiler() -> hp.Compiler:
     return _compiler
 
 
+def createCompilerSession() -> hp.CompilerSession:
+    """Creates a new compiler session"""
+    return _compiler.createSession()
+
+
 def addIncludeDir(path: Traversable) -> None:
     """adds the given path to the list of include dirs searched by theia"""
     _includeDirs.append(path)
@@ -127,6 +132,7 @@ def compileShader(
     headers: dict[str, str] = {},
     *,
     stage: hp.ShaderStage = hp.ShaderStage.COMPUTE,
+    session: hp.CompilerSession | None = None,
 ) -> bytes:
     """
     Compiles the shader stored in the given file. Must be stored in one of the
@@ -166,4 +172,5 @@ def compileShader(
         ]
     )
     # finally ask compiler to compile the code
-    return getCompiler().compile(code, headers, stage=stage)
+    compiler = session or getCompiler()
+    return compiler.compile(code, headers, stage=stage)
