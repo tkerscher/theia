@@ -43,6 +43,10 @@ float sampleStepSize(
     uint idx, inout uint dim
 ) {
     float dist = params.maxDist;
+
+    if (ray.mediumIdx == VACUUM_MEDIUM_IDX)
+        return params.maxDist;
+
     //negative or NaN sample coefficients denotes importance sampling the volume model
     //mind that comparison with NaN always return false
     if (!(params.sampleCoefficient >= 0.0)) {
@@ -100,14 +104,17 @@ ResultCode propagate(
     //propagate ray itself
     ResultCode code = propagateRay(ray, dist);
     if (code < 0) return code;
-    //apply volume effects
-    if (sampled) {
-        code = updateRayIS(ray, dist, hit, params, idx, dim);
+    //no volume effects in vacuum
+    if (ray.mediumIdx != VACUUM_MEDIUM_IDX) {
+        //apply volume effects
+        if (sampled) {
+            code = updateRayIS(ray, dist, hit, params, idx, dim);
+        }
+        else {
+            code = applyVolume(ray, dist, hit, idx, dim);
+        }
+        if (code < 0) return code;
     }
-    else {
-        code = applyVolume(ray, dist, hit, idx, dim);
-    }
-    if (code < 0) return code;
 
     //boundary check
     return checkBoundary(ray, params);

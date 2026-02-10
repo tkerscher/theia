@@ -675,11 +675,6 @@ class Scene:
         """The acceleration structure describing the scene's geometry"""
         return self._tlas
 
-    def bindParams(self, program: hp.Program | hp.RayTracingPipeline) -> None:
-        """Binds the parameters describing the scene in the given program"""
-        self.materials.bindParams(program)
-        program.bindParams(tlas=self.tlas)
-
 
 class SceneTemplate:
     """

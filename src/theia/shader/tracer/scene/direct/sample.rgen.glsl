@@ -18,6 +18,7 @@ uniform accelerationStructureEXT tlas;
 #include "tracer/scene/direct/sample.glsl"
 
 uniform TraceParams {
+    uvec2 tlas;
     float maxTime;
     uint batchSize;
 } params;
@@ -31,5 +32,5 @@ void main() {
     #endif
 
     //sample direct
-    sampleDirect(dim);
+    sampleDirect(params.tlas, dim);
 }

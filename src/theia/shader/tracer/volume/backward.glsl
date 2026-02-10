@@ -13,6 +13,7 @@ layout(local_size_x = 512) in;
 #include "volume.glsl"
 
 #include "tracer/propagate/backward.glsl"
+#include "tracer/propagate/combine.glsl"
 #include "tracer/volume/shadowing.glsl"
 #ifndef DISABLE_DIRECT_LIGHTING
 #include "tracer/volume/direct.glsl"

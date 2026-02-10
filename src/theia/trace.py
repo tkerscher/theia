@@ -7,7 +7,7 @@ from hephaistos.pipeline import PipelineStage, SourceCodeMixin
 
 from ctypes import Structure, c_float, c_int32, c_uint32, c_uint64
 from ctypes import addressof, memset, sizeof
-from hephaistos.glsl import vec3
+from hephaistos.glsl import buffer_reference, vec3
 from numpy.ctypeslib import as_array
 
 from theia.camera import Camera
@@ -38,9 +38,12 @@ __all__ = [
     "EmptyEventCallback",
     "EventResultCode",
     "EventStatisticCallback",
+    "SceneDirectTracer",
     "TraceEventCallback",
     "Tracer",
     "TrackRecordCallback",
+    "VolumeBackwardTracer",
+    "VolumeDirectTracer",
     "VolumeForwardTracer",
 ]
 
@@ -594,11 +597,11 @@ class VolumeForwardTracer(Tracer):
             ("_batchSize", c_uint32),
             ("_mediumIdx", c_uint32),
             ("objectId", c_int32),
-            ("sampleCoefficient", c_float),
-            ("lowerBBoxCorner", vec3),
-            ("upperBBoxCorner", vec3),
             ("maxTime", c_float),
             ("_maxDist", c_float),
+            ("lowerBBoxCorner", vec3),
+            ("upperBBoxCorner", vec3),
+            ("sampleCoefficient", c_float),
         ]
 
     def __init__(
@@ -855,11 +858,11 @@ class VolumeBackwardTracer(Tracer):
     class TraceParams(Structure):
         _fields_ = [
             ("_batchSize", c_uint32),
-            ("sampleCoefficient", c_float),
-            ("lowerBBoxCorner", vec3),
-            ("upperBBoxCorner", vec3),
             ("maxTime", c_float),
             ("_maxDist", c_float),
+            ("lowerBBoxCorner", vec3),
+            ("upperBBoxCorner", vec3),
+            ("sampleCoefficient", c_float),
         ]
 
     def __init__(
@@ -1289,6 +1292,7 @@ class SceneDirectTracer(Tracer):
 
     class TraceParams(Structure):
         _fields_ = [
+            ("_tlas", buffer_reference),
             ("maxTime", c_float),
             ("_batchSize", c_uint32),
             ("_rayCountY", c_uint32),
@@ -1353,6 +1357,7 @@ class SceneDirectTracer(Tracer):
         self._camera = camera
         self._scene = scene
         self.setParams(
+            _tlas=scene.tlas.address,
             maxTime=maxTime,
             _rayCountY=1,
             _rayCountZ=1,
@@ -1398,7 +1403,7 @@ class SceneDirectTracer(Tracer):
             *(hp.RayMissShader(c) for c in miss_code),
         ]
         self._pipeline = hp.RayTracingPipeline(shaders)
-        scene.bindParams(self._pipeline)
+        scene.materials.bindParams(self._pipeline)
         # create shader binding tables
         nSbtHitEntries = len(scene.materials.surfaceModels) * Scene.sbtHitStride
         createSBT = lambda x: self._pipeline.createShaderBindingTable(x)

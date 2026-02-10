@@ -22,6 +22,7 @@ layout(location = DIRECT_RAY_PAYLOAD_LOCATION) rayPayloadInEXT DirectRay directR
 //GLSL won't check on this, so one needs to be especially carefull!
 //(It should not be part of the payload as it is uniform across all invocations)
 uniform TraceParams {
+    uvec2 tlas;
     float maxTime;
 } params;
 

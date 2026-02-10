@@ -11,7 +11,7 @@ struct DirectRay {
 };
 layout(location = DIRECT_RAY_PAYLOAD_LOCATION) rayPayloadEXT DirectRay directRay;
 
-void sampleDirect(inout uint dim) {
+void sampleDirect(uvec2 tlas, inout uint dim) {
     //save rng state
     uint idx = gl_LaunchIDEXT.x;
     uint rngDimInit = dim;
@@ -61,17 +61,17 @@ void sampleDirect(inout uint dim) {
     directRay.result = RESULT_CODE_RAY_ABSORBED;
     //trace shadow ray to check for visibility
     traceRayEXT(
-        tlas,
+        accelerationStructureEXT(tlas),
         gl_RayFlagsTerminateOnFirstHitEXT,
-        0xFF,
-        DIRECT_SAMPLING_HIT_SHADER_OFFSET,
-        0,
-        missIdx,
-        position,
-        0.0,
-        direction,
-        dist,
-        DIRECT_RAY_PAYLOAD_LOCATION
+        0xFF,                               //cull mask
+        DIRECT_SAMPLING_HIT_SHADER_OFFSET,  //sbt offset
+        0,                                  //sbt stride
+        missIdx,                            //miss index
+        position,                           //origin
+        0.0,                                //t_min
+        direction,                          //direction
+        dist,                               //t_max
+        DIRECT_RAY_PAYLOAD_LOCATION         //payload location
     );
     //read back result code and notify if nothing happens
     if (directRay.result == RESULT_CODE_RAY_ABSORBED) {
