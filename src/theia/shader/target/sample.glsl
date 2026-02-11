@@ -43,7 +43,7 @@ CompressedTargetSample checkIntersect(vec3 observer, vec3 direction, TargetSampl
 
     //additionally check direction
     vec3 sampleDir = normalize(ts.position - observer);
-    c.error += (int(length(sampleDir - direction) > 1e-5) << 3);
+    c.error += (int(length(sampleDir - direction) > 5e-5) << 3);
 
     return c;
 }

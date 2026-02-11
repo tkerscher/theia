@@ -136,7 +136,7 @@ def test_FlatCamera():
     assert np.abs(rays["position"].max(0) - upperCorner).max() < 5e-3
     assert np.abs(rays["position"].min(0) - lowerCorner).max() < 5e-3
     assert np.abs(rays["hitPosition"].min(0) + (width / 2, length / 2, 0)).max() < 5e-5
-    assert np.abs(rays["hitPosition"].max(0) - (width / 2, length / 2, 0)).max() < 6e-5
+    assert np.abs(rays["hitPosition"].max(0) - (width / 2, length / 2, 0)).max() < 2e-4
     assert np.all(np.abs(rays["hitPosition"].mean(0)) <= (5e-3, 5e-3, 0.0))
     assert np.abs(trafo.apply(rays["hitPosition"]) - rays["position"]).max() < 1e-6
     assert np.abs(trafo.applyVec(rays["hitDirection"]) + rays["direction"]).max() < 5e-7

@@ -9,12 +9,15 @@ uniform PhiloxParams {
     uvec2 key;
     uvec4 baseCount;
 } philoxParams;
-vec4 philoxBuffer = vec4(-1.0);
-uint philoxBufferCount = 0;
 
-void philox(uint stream, uint i) {
-    //get counter (divide by 4)
-    uint carry = i << 2; //reuse carry
+vec4 philoxBuffer = vec4(0.0);
+uint philoxBufferIndex = 0xFFFFFFFFu;
+//since we will divide dim by 4, we will never reach this value
+//-> marks uninitialized buffer
+
+uvec4 philox(uint stream, uint i) {
+    //add index to base count
+    uint carry = i; //reuse carry
     uvec4 state = philoxParams.baseCount;
     state.x = uaddCarry(state.x, carry, carry);
     state.y = uaddCarry(state.y, carry, carry);
@@ -33,43 +36,35 @@ void philox(uint stream, uint i) {
     const uint M1 = 0xCD9E8D57u;
     for (int i = 0; i < PHILOX_ITERATION; ++i) {
         //1 Round of philox
-        {
-            umulExtended(M0, state.x, hi0, lo0);
-            umulExtended(M1, state.z, hi1, lo1);
-            state = uvec4(
-                hi1^state.y^key.x, lo1,
-                hi0^state.w^key.y, lo0
-            );
-        }
+        umulExtended(M0, state.x, hi0, lo0);
+        umulExtended(M1, state.z, hi1, lo1);
+        state = uvec4(
+            hi1^state.y^key.x, lo1,
+            hi0^state.w^key.y, lo0
+        );
         //bump key
-        {
-            key.x += 0x9E3779B9u;
-            key.y += 0xBB67AE85u;
-        }
+        key.x += 0x9E3779B9u;
+        key.y += 0xBB67AE85u;
     }
     
-    philoxBuffer = normalizeUint(state);
+    return state;
 }
 
 float random_s(uint stream, uint i) {
-    //get which element of buffer we need
-    uint count = i << 2; //divide by 4
-    uint idx = i & 0x03; //remainder
+    //philox produces four numbers at once
+    //-> use lower 2 bits as index into vec4
+    uint idx = i & 0x03;
+    i >>= 2;
 
-    //need to run philox?
-    bool update = (
-        philoxBuffer.x < 0.0 ||
-        count != philoxBufferCount ||
-        idx == 0
-    );
-    //check explicitly for subgroup uniformity as
-    //it may result in more efficient code
+    //check whether we need to update the buffer
+    //since we expect most invocations to be at the same position inside their
+    //streams, we use subgroup operations to skip divergent code paths.
+    bool update = i != philoxBufferIndex;
     if (subgroupAll(update)) {
-        philox(stream, i);
+        philoxBuffer = normalizeUint(philox(stream, i));
     }
     else if (subgroupAny(update)) {
-        //mixed update flags
-        if (update) philox(stream, i);
+        if (update) philoxBuffer = normalizeUint(philox(stream, i));
     }
 
     //return value
@@ -77,7 +72,6 @@ float random_s(uint stream, uint i) {
 }
 
 vec2 random2D_s(uint stream, uint i) {
-    //TODO: Maybe skip one value if last in buffer, to do only one update?
     return vec2(random_s(stream, i), random_s(stream, i+1));
 }
 
