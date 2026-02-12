@@ -195,6 +195,33 @@ ResultCode scatterRay(
     return RESULT_CODE_SUCCESS;
 }
 
+ResultCode updateMedium(
+    inout ForwardRay ray,
+    uint newMediumIdx
+) {
+    ray.mediumIdx = newMediumIdx;
+    return RESULT_CODE_SUCCESS;
+}
+
+ResultCode reflectRay(
+    inout ForwardRay ray,
+    vec3 newDir,
+    uint otherMediumIdx
+) {
+    ray.direction = newDir;
+    return RESULT_CODE_SUCCESS;
+}
+
+ResultCode transmitRay(
+    inout ForwardRay ray,
+    vec3 newDir,
+    uint otherMediumIdx
+) {
+    ray.direction = newDir;
+    ray.mediumIdx = otherMediumIdx;
+    return RESULT_CODE_SUCCESS;
+}
+
 #ifndef RAY_PARTICLE
 
 ResultCode propagateRay(
@@ -224,6 +251,33 @@ ResultCode scatterRay(
     vec3 newDir
 ) {
     ray.direction = newDir;
+    return RESULT_CODE_SUCCESS;
+}
+
+ResultCode updateMedium(
+    inout BackwardRay ray,
+    uint newMediumIdx
+) {
+    ray.mediumIdx = newMediumIdx;
+    return RESULT_CODE_SUCCESS;
+}
+
+ResultCode reflectRay(
+    inout BackwardRay ray,
+    vec3 newDir,
+    uint otherMediumIdx
+) {
+    ray.direction = newDir;
+    return RESULT_CODE_SUCCESS;
+}
+
+ResultCode transmitRay(
+    inout BackwardRay ray,
+    vec3 newDir,
+    uint otherMediumIdx
+) {
+    ray.direction = newDir;
+    ray.mediumIdx = otherMediumIdx;
     return RESULT_CODE_SUCCESS;
 }
 

@@ -1,8 +1,6 @@
 #ifndef _SCENE_INCLUDE
 #define _SCENE_INCLUDE
 
-#include "material.glsl"
-
 /**
  * Structure describing the intersection of a ray query with geometry.
  * Includes information about hit both in world space (where the ray lives)
@@ -10,16 +8,14 @@
  * applied.
 */
 struct SurfaceHit {
-    bool valid;                 ///< True, if an actual hit happened
-
     //Geometries mark a boundary between an inside and an outside volume.
     //Their normals distinguish them by pointing outwards.
     //Materials finally assign both volumes a medium.
 
     uint materialIdx;           ///< Material of the intersected geometry
-    bool inward;                ///< Direction of ray respective to geometry
-    int customId;               ///< Custom ID of the intersected geometry
     uint flags;                 ///< Material flags for specific direction (inward)
+    uint otherMediumIdx;        ///< Index of the medium on the other side
+    bool inward;                ///< Direction of ray respective to geometry
 
     //Variables defined in world space, i.e. the same as the ray
 

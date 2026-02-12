@@ -3,16 +3,32 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+from theia.compiler import loadShader
+
 from importlib.resources.abc import Traversable
 from typing import ClassVar, Type
+
+
+__all__ = [
+    "AbsorbingSurface",
+    "BorderSurface",
+    "DielectricSurface",
+    "SurfaceModel",
+    "SurfaceRNGDraws",
+]
+
+
+def __dir__():
+    return __all__
 
 
 @dataclass
 class SurfaceRNGDraws:
     """Amount of random numbers drawn for each surface model function"""
 
-    processSurfaceInteraction: int
-    processSurfaceTarget: int
+    prepareSurface: int
+    sampleSurfaceInteraction: int
+    processSurfaceTargetHit: int
 
 
 class SurfaceModel(ABC):
@@ -36,12 +52,18 @@ class SurfaceModel(ABC):
     def __init__(
         self,
         *,
-        rngDraws: SurfaceRNGDraws,
+        rngDraws: SurfaceRNGDraws | None,
         # sbtRecord: bytes | None = None,
         # supportsNEE: bool = False,
         requiredMediumProperties: set[str] = set(),
         requiredMaterialProperties: set[str] = set(),
     ) -> None:
+        if rngDraws is None:
+            rngDraws = SurfaceRNGDraws(
+                prepareSurface=0,
+                sampleSurfaceInteraction=0,
+                processSurfaceTargetHit=0,
+            )
         self.rngDraws = rngDraws
         # self.sbtRecord = sbtRecord
         # self.supportsNEE = supportsNEE
@@ -92,6 +114,56 @@ class SurfaceModel(ABC):
         return hash(self.name)
 
 
+class AbsorbingSurface(SurfaceModel, name="absorbing"):
+    """Models perfectly absorbing surfaces and detectors."""
+
+    def __init__(self) -> None:
+        super().__init__(rngDraws=None)
+
+    @property
+    def backwardSourceCode(self) -> str:
+        return loadShader("surface/absorbing/backward.glsl")
+
+    @property
+    def forwardSourceCode(self) -> str:
+        return loadShader("surface/absorbing/forward.glsl")
+
+    @classmethod
+    def load(cls, file: Traversable) -> AbsorbingSurface:
+        return AbsorbingSurface()
+
+    def __eq__(self, value: object) -> bool:
+        return type(value) == AbsorbingSurface
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+
+class BorderSurface(SurfaceModel, name="border"):
+    """Models border between two surfaces. Transmits all rays without altering them."""
+
+    def __init__(self) -> None:
+        super().__init__(rngDraws=None)
+
+    @property
+    def backwardSourceCode(self) -> str:
+        return loadShader("surface/border/backward.glsl")
+
+    @property
+    def forwardSourceCode(self) -> str:
+        return loadShader("surface/border/forward.glsl")
+
+    @classmethod
+    def load(cls, file: Traversable) -> BorderSurface:
+        return BorderSurface()
+
+    def __eq__(self, value: object) -> bool:
+        return type(value) == BorderSurface
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+
 class DielectricSurface(SurfaceModel, name="dielectric"):
     """
     Models transmission and reflection of perfectly specular surfaces between
@@ -100,8 +172,9 @@ class DielectricSurface(SurfaceModel, name="dielectric"):
 
     def __init__(self) -> None:
         draws = SurfaceRNGDraws(
-            processSurfaceInteraction=0,
-            processSurfaceTarget=0,
+            prepareSurface=1,
+            sampleSurfaceInteraction=0,
+            processSurfaceTargetHit=0,
         )
         super().__init__(
             rngDraws=draws,
@@ -110,11 +183,11 @@ class DielectricSurface(SurfaceModel, name="dielectric"):
 
     @property
     def backwardSourceCode(self) -> str:
-        raise NotImplementedError
+        return loadShader("surface/dielectric/backward.glsl")
 
     @property
     def forwardSourceCode(self) -> str:
-        raise NotImplementedError
+        return loadShader("surface/dielectric/forward.glsl")
 
     @classmethod
     def load(cls, file: Traversable) -> DielectricSurface:
