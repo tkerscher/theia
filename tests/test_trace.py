@@ -10,14 +10,14 @@ from theia.camera import FlatCamera, SphereCamera
 from theia.device import isRayTracingEnabled
 from theia.light import PencilLightSource, SphericalLightSource, UniformWavelengthSource
 from theia.material import Material, MaterialStore, getPropertySamples, VACUUM_IDX
-from theia.material import PureWaterModel
+from theia.material import BK7Model, PureWaterModel
 from theia.random import PhiloxRNG
 from theia.ray import UnpolarizedRay
 from theia.response import HitRecorder
-from theia.scene import Scene, Transform
-from theia.surface import AbsorbingSurface
+from theia.scene import MeshStore, Scene, Transform
+from theia.surface import AbsorbingSurface, BorderSurface, DielectricSurface
 from theia.target import SphereTarget
-from theia.volume import Attenuating
+from theia.volume import Attenuating, Transparent
 import theia.trace
 import theia.units as u
 
@@ -139,7 +139,7 @@ def test_TrackRecordCallback():
     # check result codes in range
     minCode = min(code.value for code in theia.trace.EventResultCode)
     maxCode = max(code.value for code in theia.trace.EventResultCode)
-    assert codes.min() >= minCode and codes.max() <= maxCode
+    assert minCode <= codes.min() and codes.max() <= maxCode
 
 
 def _parameterize_VolumeForwardTracer():
@@ -325,7 +325,6 @@ def test_VolumeBackwardTracer(
     philox = PhiloxRNG(key=0xC01DC0FFEE)
     photons = UniformWavelengthSource()
     light = SphericalLightSource(
-        photons,
         mediumIdx=medIdx,
         position=light_pos,
         timeRange=(T0, T1),
@@ -427,7 +426,6 @@ def test_VolumeDirectTracer(limitTime: bool):
     ray = UnpolarizedRay()
     photons = UniformWavelengthSource()
     light = SphericalLightSource(
-        photons,
         position=lightPos,
         budget=lightBudget,
         timeRange=(T0, T1),
@@ -526,7 +524,6 @@ def test_SceneDirectTracer(limitTime: bool):
     ray = UnpolarizedRay()
     photons = UniformWavelengthSource()
     light = SphericalLightSource(
-        photons,
         position=lightPos,
         budget=lightBudget,
         timeRange=(T0, T1),

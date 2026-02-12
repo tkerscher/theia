@@ -1075,7 +1075,7 @@ class TargetLightSource(LightSource):
         updateTarget: bool = True,
     ) -> None:
         # light source must be able to direct sample
-        if not light.supportBackward:
+        if light.backwardSourceCode is None:
             raise ValueError("Light source does not support backward mode!")
         # we need a valid wavelength source
         if wavelengthSource is None:
@@ -1093,8 +1093,6 @@ class TargetLightSource(LightSource):
         else:
             nRNG += target.nRNGSamples
         super().__init__(
-            supportForward=True,
-            supportBackward=False,
             nRNGForward=nRNG,
             wavelengthSource=wavelengthSource,
         )
@@ -1115,15 +1113,15 @@ class TargetLightSource(LightSource):
         return self._target
 
     @property
-    def sourceCode(self) -> str:
+    def forwardSourceCode(self) -> str:
         useCam = isinstance(self.target, Camera)
         code = loadShader("lightsource/guided.glsl")
         # encapsulate dependencies in renaming macros
-        # fmt: off
-        return "\n".join([
+        assert self.principalLight.backwardSourceCode is not None
+        parts = [
             "#define sampleLight principal_sampleLight",
             '#line 1 "principal_light.glsl"',
-            self.principalLight.sourceCode,
+            self.principalLight.backwardSourceCode,
             "#undef sampleLight",
             '#include "lightsource/target/common.glsl"',
             '#line 1 "light_target.glsl"',
@@ -1131,8 +1129,8 @@ class TargetLightSource(LightSource):
             "#define LIGHTSOURCE_GUIDED_USE_CAM" if useCam else "",
             '#line 1 "lightsource/guided.glsl"',
             code,
-        ])
-        # fmt: on
+        ]
+        return "\n".join(parts)
 
     def bindParams(self, program, i):
         super().bindParams(program, i)

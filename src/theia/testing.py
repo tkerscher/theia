@@ -74,6 +74,7 @@ class BackwardLightSampler(PipelineStage):
         batchSize: int,
         source: LightSource,
         ray: RayModel,
+        wavelengthSource: WavelengthSource,
         *,
         rng: RNG,
         materials: MaterialStore | None = None,
@@ -86,7 +87,7 @@ class BackwardLightSampler(PipelineStage):
             {"medium"},
         )
         # check params
-        if not source.supportBackward:
+        if source.backwardSourceCode is None:
             raise ValueError("Light source does not support backward mode")
         # process params
         if isinstance(medium, str):
@@ -115,6 +116,7 @@ class BackwardLightSampler(PipelineStage):
         self._rng = rng
         self._source = source
         self._materials = materials
+        self._photons = wavelengthSource
         self.setParams(
             _queueAdr=self._queue.tensor.address,
             _count=batchSize,
@@ -123,13 +125,12 @@ class BackwardLightSampler(PipelineStage):
         )
 
         # create program
-        lamSource = source.wavelengthSource
         preamble = createPreamble(DIM=0.5 * box_size)
         headers = {
             "ray.glsl": ray.sourceCode,
             "rng.glsl": rng.sourceCode,
-            "source.glsl": source.sourceCode,
-            "photon.glsl": "" if lamSource is None else lamSource.sourceCode,
+            "source.glsl": source.backwardSourceCode,
+            "photon.glsl": wavelengthSource.sourceCode,
             **materials.header,
         }
         code = compileShader("lightsource/sample/backward.glsl", preamble, headers)
@@ -183,16 +184,17 @@ class BackwardLightSampler(PipelineStage):
         """Source generating light rays"""
         return self._source
 
+    @property
+    def wavelengthSource(self) -> WavelengthSource:
+        """Source from which wavelengths are sampled"""
+        return self._photons
+
     def collectStages(self) -> list[PipelineStage]:
         """
         Returns a list of all stages involved with this sampler in the correct
         order suitable for creating a pipeline.
         """
-        stages: list[PipelineStage] = [self.rng]
-        if self.source.wavelengthSource is not None:
-            stages.append(self.source.wavelengthSource)
-        stages.extend([self.source, self])
-        return stages
+        return [self.rng, self.wavelengthSource, self.source, self]
 
     def run(self, i: int) -> list[hp.Command]:
         for stage in self.collectStages():
@@ -620,8 +622,13 @@ class SurfaceInteractionSampler(PipelineStage):
         forward = isinstance(source, LightSource)
         if forward and wavelengthSource is not None:
             raise ValueError("wavelength source can only be specified in backward mode")
+        if forward and source.forwardSourceCode is None:
+            raise ValueError("light source does not support forward mode")
         if forward:
+            source_code = source.forwardSourceCode
             self._photons = source.wavelengthSource
+        else:
+            source_code = source.sourceCode
         mode = "forward" if forward else "backward"
         rayItem = ray.forwardItem if forward else ray.backwardItem
         if rayItem is None:
@@ -658,7 +665,7 @@ class SurfaceInteractionSampler(PipelineStage):
         headers = {
             "ray.glsl": ray.sourceCode,
             "rng.glsl": rng.sourceCode,
-            "source.glsl": source.sourceCode,
+            "source.glsl": source_code,
             "photon.glsl": "" if self._photons is None else self._photons.sourceCode,
             "surface.glsl": srfCode,
             **materials.header,

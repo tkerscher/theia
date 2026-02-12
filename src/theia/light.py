@@ -404,15 +404,13 @@ class FunctionWavelengthSource(WavelengthSource):
         self.setParams(_table=table_adr, _contrib=contrib)
 
 
-class LightSource(SourceCodeMixin):
+class LightSource(PipelineStage):
     """Base class for samplers producing light rays"""
 
     name = "Light Source"
 
     def __init__(
         self,
-        supportForward: bool,
-        supportBackward: bool,
         nRNGForward: int = 0,
         nRNGBackward: int = 0,
         wavelengthSource: WavelengthSource | None = None,
@@ -420,21 +418,25 @@ class LightSource(SourceCodeMixin):
         extra: set[str] = set(),
     ) -> None:
         super().__init__(params, extra)
-        self._forward = supportForward
-        self._backward = supportBackward
         self._rngForward = nRNGForward
         self._rngBackward = nRNGBackward
         self._wavelengthSource = wavelengthSource
 
     @property
-    def supportForward(self) -> bool:
-        """True, if this light source supports forward tracer"""
-        return self._forward
+    def backwardSourceCode(self) -> str | None:
+        """
+        Source code implementing light source sampling in backward tracing.
+        `None` if backward tracing is not supported.
+        """
+        return None
 
     @property
-    def supportBackward(self) -> bool:
-        """True, if this light source supports backward tracer"""
-        return self._backward
+    def forwardSourceCode(self) -> str | None:
+        """
+        Source code implementing light source sampling in forward tracing.
+        `None` if forward tracing is not supported.
+        """
+        return None
 
     @property
     def nRNGForward(self) -> int:
@@ -450,6 +452,11 @@ class LightSource(SourceCodeMixin):
     def wavelengthSource(self) -> WavelengthSource | None:
         """Optional wavelength source used for sampling wavelengths"""
         return self._wavelengthSource
+
+    def run(self, i: int) -> list[hp.Command]:
+        # most light sources will not issue any commands
+        # so an empty list is a sensible default
+        return []
 
 
 class LightSampler(PipelineStage):
@@ -491,6 +498,8 @@ class LightSampler(PipelineStage):
         materials: MaterialStore | None = None,
     ) -> None:
         # check if we have RNG if needed
+        if source.forwardSourceCode is None:
+            raise ValueError("Light source does not support forward mode")
         if source.nRNGForward > 0 and rng is None:
             raise ValueError("Light source requires a RNG but none was given")
         super().__init__({"SampleParams": LightSampler.SampleParams})
@@ -517,7 +526,7 @@ class LightSampler(PipelineStage):
         # create code
         lamSource = source.wavelengthSource
         headers = {
-            "light.glsl": source.sourceCode,
+            "light.glsl": source.forwardSourceCode,
             "photon.glsl": "" if lamSource is None else lamSource.sourceCode,
             "ray.glsl": ray.sourceCode,
             "rng.glsl": "" if rng is None else rng.sourceCode,
@@ -614,8 +623,6 @@ class HostLightSource(LightSource):
         extra: set[str] = set(),
     ) -> None:
         super().__init__(
-            supportForward=True,
-            supportBackward=False,
             params={"LightParams": HostLightSource.LightParams},
             extra=extra,
         )
@@ -636,7 +643,7 @@ class HostLightSource(LightSource):
         return self._queue
 
     @property
-    def sourceCode(self) -> str:
+    def forwardSourceCode(self) -> str:
         return loadShader("lightsource/host.glsl")
 
     def update(self, i: int) -> None:
@@ -748,7 +755,7 @@ class ConeLightSource(LightSource):
     Parameters
     ----------
     wavelengthSource: WavelengthSource
-        Source to sample wavelengths from
+        Source to sample wavelengths from. Required for forward mode.
     mediumIdx: int
         Index of the medium the light source is located in
     position: (float, float, float), default=(0.0, 0.0, 0.0)
@@ -782,7 +789,7 @@ class ConeLightSource(LightSource):
 
     def __init__(
         self,
-        wavelengthSource: WavelengthSource,
+        wavelengthSource: WavelengthSource | None = None,
         *,
         mediumIdx: int,
         position: tuple[float, float, float] = (0.0, 0.0, 0.0),
@@ -792,10 +799,9 @@ class ConeLightSource(LightSource):
         budget: float = 1.0,
         emitParticles: bool = False,
     ) -> None:
+        lam = wavelengthSource
         super().__init__(
-            supportForward=True,
-            supportBackward=not emitParticles,
-            nRNGForward=wavelengthSource.nRNGSamples + 3,
+            nRNGForward=0 if lam is None else lam.nRNGSamples + 3,
             nRNGBackward=1,
             wavelengthSource=wavelengthSource,
             params={"LightParams": ConeLightSource.LightParams},
@@ -834,10 +840,20 @@ class ConeLightSource(LightSource):
         return self._emitParticles
 
     @property
-    def sourceCode(self) -> str:
-        preamble = createPreamble(LIGHT_SOURCE_EMIT_PARTICLE=self.emitsParticles)
-        code = loadShader("lightsource/cone.glsl")
-        return preamble + code
+    def backwardSourceCode(self) -> str | None:
+        if self.emitsParticles:
+            return None
+        else:
+            return loadShader("lightsource/cone/backward.glsl")
+
+    @property
+    def forwardSourceCode(self) -> str | None:
+        if self.wavelengthSource is None:
+            return None
+        else:
+            preamble = createPreamble(LIGHT_SOURCE_EMIT_PARTICLE=self.emitsParticles)
+            code = loadShader("lightsource/cone/forward.glsl")
+            return preamble + code
 
     def _finishParams(self, i: int) -> None:
         super()._finishParams(i)
@@ -897,8 +913,6 @@ class PencilLightSource(LightSource):
         emitParticles: bool = False,
     ) -> None:
         super().__init__(
-            supportForward=True,
-            supportBackward=False,
             nRNGForward=wavelengthSource.nRNGSamples + 1,
             wavelengthSource=wavelengthSource,
             params={"LightParams": PencilLightSource.LightParams},
@@ -936,7 +950,7 @@ class PencilLightSource(LightSource):
         return self._emitParticles
 
     @property
-    def sourceCode(self) -> str:
+    def forwardSourceCode(self) -> str:
         preamble = createPreamble(LIGHT_SOURCE_EMIT_PARTICLE=self.emitsParticles)
         code = loadShader("lightsource/pencil.glsl")
         return preamble + code
@@ -949,7 +963,7 @@ class SphericalLightSource(LightSource):
     Parameters
     ----------
     wavelengthSource: WavelengthSource
-        Source to sample wavelengths from
+        Source to sample wavelengths from. Required for forward mode.
     mediumIdx: int
         Index of the medium the light source is located in
     position: (float, float, float), default=(0.0, 0.0, 0.0)
@@ -975,7 +989,7 @@ class SphericalLightSource(LightSource):
 
     def __init__(
         self,
-        wavelengthSource: WavelengthSource,
+        wavelengthSource: WavelengthSource | None = None,
         *,
         mediumIdx: int,
         position: tuple[float, float, float] = (0.0, 0.0, 0.0),
@@ -983,10 +997,9 @@ class SphericalLightSource(LightSource):
         budget: float = 1.0,
         emitParticles: bool = False,
     ) -> None:
+        lam = wavelengthSource
         super().__init__(
-            supportForward=True,
-            supportBackward=not emitParticles,
-            nRNGForward=wavelengthSource.nRNGSamples + 3,
+            nRNGForward=0 if lam is None else lam.nRNGSamples + 3,
             nRNGBackward=1,
             wavelengthSource=wavelengthSource,
             params={"LightParams": SphericalLightSource.LightParams},
@@ -1023,10 +1036,20 @@ class SphericalLightSource(LightSource):
         return self._emitParticles
 
     @property
-    def sourceCode(self) -> str:
-        preamble = createPreamble(LIGHT_SOURCE_EMIT_PARTICLE=self.emitsParticles)
-        code = loadShader("lightsource/spherical.glsl")
-        return preamble + code
+    def forwardSourceCode(self) -> str | None:
+        if self.wavelengthSource is None:
+            return None
+        else:
+            preamble = createPreamble(LIGHT_SOURCE_EMIT_PARTICLE=self.emitsParticles)
+            code = loadShader("lightsource/spherical/forward.glsl")
+            return preamble + code
+
+    @property
+    def backwardSourceCode(self) -> str | None:
+        if self.emitsParticles:
+            return None
+        else:
+            return loadShader("lightsource/spherical/backward.glsl")
 
     def _finishParams(self, i: int) -> None:
         super()._finishParams(i)

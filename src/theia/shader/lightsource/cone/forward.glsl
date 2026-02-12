@@ -1,23 +1,9 @@
-#ifndef _INCLUDE_LIGHTSOURCE_CONE
-#define _INCLUDE_LIGHTSOURCE_CONE
+#ifndef _INCLUDE_LIGHTSOURCE_CONE_BACKWARD
+#define _INCLUDE_LIGHTSOURCE_CONE_BACKWARD
 
 #include "math.glsl"
 #include "util/jacobian.glsl"
-
-uniform LightParams {
-    vec3 direction;
-    float cosOpeningAngle;
-    vec3 position;
-
-    uint mediumIdx;
-
-    float contribFwd;
-    float contribBwd;
-
-    float t_min;
-    float t_max;
-
-} lightParams;
+#include "lightsource/cone/common.glsl"
 
 ForwardRay sampleLight(uint idx, inout uint dim) {
     //sample wavelength using wavelength source
@@ -59,36 +45,5 @@ ForwardRay sampleLight(uint idx, inout uint dim) {
         #endif
     );
 }
-
-#ifndef LIGHT_SOURCE_EMIT_PARTICLE
-
-ForwardRay sampleLight(
-    vec3 observer, vec3 normal,
-    float wavelength,
-    uint mediumIdx,
-    uint idx, inout uint dim
-) {
-    //get direction
-    vec3 rayDir = normalize(observer - lightParams.position);    
-    //calculate contribution (zero if outside cone)
-    float cos_angle = dot(rayDir, lightParams.direction);
-    float contrib = lightParams.contribBwd * float(cos_angle > lightParams.cosOpeningAngle);
-    contrib *= dw_dA(lightParams.position, observer, normal);
-    //sample start time
-    float u = random(idx, dim);
-    float startTime = mix(lightParams.t_min, lightParams.t_max, u);
-
-    //assemble forward ray
-    return createForwardRay(
-        lightParams.position,
-        rayDir,
-        wavelength,
-        lightParams.mediumIdx,
-        startTime,
-        contrib
-    );
-}
-
-#endif
 
 #endif

@@ -243,7 +243,6 @@ def test_ConeLightSource_bwd():
     philox = PhiloxRNG(key=0xC01DC0FFEE)
     photon = theia.light.ConstWavelengthSource()
     light = theia.light.ConeLightSource(
-        photon,
         mediumIdx=VACUUM_IDX,
         position=light_pos,
         direction=light_dir,
@@ -251,7 +250,7 @@ def test_ConeLightSource_bwd():
         cosOpeningAngle=light_opening,
         budget=budget,
     )
-    sampler = BackwardLightSampler(N, light, ray, rng=philox)
+    sampler = BackwardLightSampler(N, light, ray, photon, rng=philox)
     # run
     runPipeline(sampler.collectStages())
 
@@ -365,13 +364,12 @@ def test_SphericalLightSource_bwd():
     philox = PhiloxRNG(key=0xC0FFEE)
     photon = theia.light.ConstWavelengthSource()
     light = theia.light.SphericalLightSource(
-        photon,
         mediumIdx=VACUUM_IDX,
         position=light_pos,
         timeRange=(10.0, 10.0) * u.ns,
         budget=budget,
     )
-    sampler = BackwardLightSampler(N, light, ray, rng=philox)
+    sampler = BackwardLightSampler(N, light, ray, photon, rng=philox)
     # run
     runPipeline(sampler.collectStages())
 

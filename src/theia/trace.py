@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
+from itertools import chain, repeat
 
 import hephaistos as hp
 from hephaistos.pipeline import PipelineStage, SourceCodeMixin
@@ -336,14 +337,16 @@ class EventResultCode(IntEnum):
     """Ray meant to create a hit missed target"""
     MAX_ITER = -5
     """Tracing reached max iteration"""
-    ERROR_CODE_MAX_VALUE = -10
+    ERROR_CODE_MAX_VALUE = -1073741824
     """Max value for an error code"""
-    ERROR_UNKNOWN = -10
+    ERROR_UNKNOWN = -1073741825
     """Tracer encountered an unexpected error indicating a bug in the tracer"""
-    ERROR_MEDIA_MISMATCH = -11
+    ERROR_MEDIA_MISMATCH = -1073741826
     """Tracer encountered unexpected media"""
-    ERROR_TRACE_ABORT = -12
+    ERROR_TRACE_ABORT = -1073741827
     """Tracer reached a state it can't proceed from"""
+    ERROR_CODE_TOTAL_INTERNAL_REFLECTION = -1073741828
+    """Transmission through surface failed because of total internal reflection"""
 
 
 class Tracer(PipelineStage):
@@ -639,7 +642,7 @@ class VolumeForwardTracer(Tracer):
             raise ValueError("Ray model does not support forward tracing")
         if ray.isParticle and not volume.supportsParticle:
             raise ValueError("Volume has no particle support as required by ray")
-        if not source.supportForward:
+        if source.forwardSourceCode is None:
             raise ValueError("Light source does not support forward mode")
         if not disableTargetSampling and not volume.supportsNEE:
             raise ValueError("Volume supports no target sampling")
@@ -700,7 +703,7 @@ class VolumeForwardTracer(Tracer):
             "ray.glsl": ray.sourceCode,
             "response.glsl": response.sourceCode,
             "rng.glsl": rng.sourceCode,
-            "source.glsl": source.sourceCode,
+            "source.glsl": source.forwardSourceCode,
             "target.glsl": target.sourceCode,
             "volume.glsl": volume.forwardSourceCode,
             **materials.header,
@@ -892,7 +895,7 @@ class VolumeBackwardTracer(Tracer):
         # check components support backward tracing
         if not ray.supportsBackward:
             raise ValueError("Ray model does not support backward tracing")
-        if not source.supportBackward:
+        if source.backwardSourceCode is None:
             raise ValueError("Light source does not support backward mode")
         if not disableDirectLighting and not camera.supportDirect:
             raise ValueError("Camera does not support direct mode")
@@ -950,7 +953,7 @@ class VolumeBackwardTracer(Tracer):
             "ray.glsl": ray.sourceCode,
             "response.glsl": response.sourceCode,
             "rng.glsl": rng.sourceCode,
-            "source.glsl": source.sourceCode,
+            "source.glsl": source.backwardSourceCode,
             "target.glsl": "" if target is None else target.sourceCode,
             "volume.glsl": volume.backwardSourceCode,
             **materials.header,
@@ -1099,7 +1102,7 @@ class VolumeDirectTracer(Tracer):
         # check components support backward tracing
         if not ray.supportsBackward:
             raise ValueError("Ray model does not support backward tracing")
-        if not source.supportBackward:
+        if source.backwardSourceCode is None:
             raise ValueError("Light source does not support backward mode")
         if not camera.supportDirect:
             raise ValueError("Camera does not support direct mode")
@@ -1142,7 +1145,7 @@ class VolumeDirectTracer(Tracer):
             "ray.glsl": ray.sourceCode,
             "response.glsl": response.sourceCode,
             "rng.glsl": rng.sourceCode,
-            "source.glsl": source.sourceCode,
+            "source.glsl": source.backwardSourceCode,
             "target.glsl": "" if target is None else target.sourceCode,
             "volume.glsl": volume.backwardSourceCode,
             **materials.header,
@@ -1320,7 +1323,7 @@ class SceneDirectTracer(Tracer):
         # check components support direct sampling
         if not ray.supportsBackward:
             raise ValueError("Ray model does not support backward mode")
-        if not source.supportBackward:
+        if source.backwardSourceCode is None:
             raise ValueError("Light source does not support backward mode")
         if not camera.supportDirect:
             raise ValueError("Camera does not support direct mode")
@@ -1332,12 +1335,8 @@ class SceneDirectTracer(Tracer):
             raise ValueError(msg)
 
         # calculate number of rng samples drawn
-        nRNGApply = max(v.rngDraws.applyVolumeEffect for v in volModels)
-        nRNG = (
-            wavelengthSource.nRNGSamples
-            + source.nRNGBackward
-            + camera.nRNGDirect
-            + nRNGApply
+        nRNG = self.nRngSamples(
+            wavelengthSource, source, camera, scene.materials.volumeModels
         )
         super().__init__(
             batchSize,
@@ -1378,7 +1377,7 @@ class SceneDirectTracer(Tracer):
             "ray.glsl": ray.sourceCode,
             "response.glsl": response.sourceCode,
             "rng.glsl": rng.sourceCode,
-            "source.glsl": source.sourceCode,
+            "source.glsl": source.backwardSourceCode,
             **scene.materials.header,
         }
         rayGen_code = compileShader(
@@ -1441,6 +1440,19 @@ class SceneDirectTracer(Tracer):
     def wavelengthSource(self) -> WavelengthSource:
         """Sampler for wavelengths"""
         return self._photons
+
+    @staticmethod
+    def nRngSamples(
+        wavelengthSource: WavelengthSource,
+        source: LightSource,
+        camera: Camera,
+        volModels: Iterable[VolumeModel],
+    ) -> int:
+        n = wavelengthSource.nRNGSamples
+        n += source.nRNGBackward
+        n += camera.nRNGDirect
+        n += max(v.rngDraws.applyVolumeEffect for v in volModels)
+        return n
 
     def _collectStages(self) -> list[tuple[str, PipelineStage]]:
         return [
