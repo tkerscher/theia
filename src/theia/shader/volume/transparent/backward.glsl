@@ -37,4 +37,13 @@ ResultCode sampleVolumeInteraction(
     return ERROR_CODE_TRACE_ABORT;
 }
 
+ResultCode volumeScatterRay(
+    inout BackwardRay ray,
+    vec3 newDir,
+    uint idx, inout uint dim
+) {
+    //there is no volume interaction
+    return ERROR_CODE_TRACE_ABORT;
+}
+
 #endif

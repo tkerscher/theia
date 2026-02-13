@@ -61,7 +61,7 @@ ResultCode applyVolume(
  * Samples a volume interaction that scatters the ray into the given direction.
  * Is expected to update the ray accordingly, e.g. by calling `scatterRay`.
  *
- * OPTIONAL. Required for NEE
+ * OPTIONAL. Required for backward tracing and NEE
 */
 ResultCode volumeScatterRay(
     inout RAY ray,                  ///< Ray to scatter
