@@ -19,6 +19,14 @@ float signBit(float f) {
     return uintBitsToFloat((floatBitsToInt(f) & 0x80000000) | 0x3F800000);
 }
 
+//returns a new float with the same value as the first paramater, but using the
+//sign bit of the second parameter. Will also produce -0.0.
+float copySignBit(float f, float s) {
+    uint signBit = floatBitsToUint(f) & 0x80000000u;
+    uint absValue = floatBitsToUint(f) & 0x7FFFFFFFu;
+    return uintBitsToFloat(signBit | absValue);
+}
+
 //more accurate version to calculate ab-cd trying to mitigate the danger of
 //catastrophic cancelation. See PBRTv4: B.2.9
 float prodDiff(float a, float b, float c, float d) {
