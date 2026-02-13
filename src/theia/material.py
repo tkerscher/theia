@@ -5,7 +5,6 @@ import warnings
 
 import hephaistos as hp
 import numpy as np
-from ctypes import memmove
 
 import scipy.constants
 from scipy.integrate import cumulative_simpson
@@ -29,9 +28,7 @@ from theia.property import (
     PropertyTableEntry,
     TableProperty,
     createSlotMacros,
-    loadTable,
     loadTableEntry,
-    saveTable,
     saveTableEntry,
 )
 from theia.surface import SurfaceModel
@@ -791,10 +788,9 @@ class MaterialStore:
         mediaProps = {n: _createTableEntryFromMedium(m) for n, m in mediaDict.items()}
         self._mediaTable = PropertyTable(mediaProps, requiredSlots=mediaSlots)
         # create mapping from medium index to volume model index
-        if (n := len(mediaDict)) > 0:
-            self._volumeMap = hp.UnsignedIntTensor(n, mapped=True)
-            volMap = np.ascontiguousarray(self._volumeModelIndices)
-            memmove(self._volumeMap.memory, volMap.ctypes.data, volMap.nbytes)
+        if len(mediaDict) > 0:
+            volMap = np.ascontiguousarray(self._volumeModelIndices, dtype=np.uint32)
+            self._volumeMap = hp.Tensor(volMap)
         else:
             # we cannot create an empty tensor
             self._volumeMap = None
@@ -874,9 +870,8 @@ class MaterialStore:
         program.bindParams(
             MediaTable=self.media.tensor,
             MaterialTable=self.materials.tensor,
+            MediumMap=self.volumeModelMapTensor,
         )
-        if self.volumeModelMapTensor is not None:
-            program.bindParams(MediumMap=self.volumeModelMapTensor)
 
     def __len__(self) -> int:
         return len(self.materials)
