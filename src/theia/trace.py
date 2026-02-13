@@ -32,13 +32,14 @@ import theia.units as u
 
 from enum import IntEnum
 from numpy.typing import NDArray
-from typing import Iterable, Literal
+from typing import Iterable, Literal, Sequence
 
 
 __all__ = [
     "EmptyEventCallback",
     "EventResultCode",
     "EventStatisticCallback",
+    "SceneBackwardTracer",
     "SceneDirectTracer",
     "TraceEventCallback",
     "Tracer",
@@ -1258,6 +1259,53 @@ def _compileMultiTemplateShader(
     ]
 
 
+def _createVolumeProxies(
+    materials: MaterialStore,
+    mode: Literal["forward", "backward"],
+    ray: RayModel,
+    rng: RNG,
+    session: hp.CompilerSession,
+) -> list[hp.CallableShader]:
+    """
+    Creates callables used by the volume proxy. Returns an empty list if the
+    volume modules should be inlines instead.
+    """
+
+    # if we have only a single volume model (besides transparent) we can
+    # inline the volume module and skip unnecessary creation of callables
+    if len(materials.volumeModels) <= 2:
+        return []
+
+    proxy_ray = "ForwardRay" if mode == "forward" else "BackwardRay"
+    preamble = createPreamble(PROXY_RAY=proxy_ray)
+    headers = {
+        "ray.glsl": ray.sourceCode,
+        "rng.glsl": rng.sourceCode,
+        **materials.header,
+    }
+    apply_code, applySampled_code, sampleLength_code = _compileMultiTemplateShader(
+        # The first one is always transparent, which will be always
+        # inlined as it is simple enough
+        materials.volumeModels[1:],
+        "backward",
+        [
+            "tracer/scene/volume/applyVolume.rcall.glsl",
+            "tracer/scene/volume/applyVolumeSampled.rcall.glsl",
+            "tracer/scene/volume/sampleInteractionLength.rcall.glsl",
+        ],
+        preamble,
+        headers,
+        hp.ShaderStage.CALLABLE,
+        session,
+    )
+    shaders = [
+        (hp.CallableShader(code) for code in apply_code),
+        (hp.CallableShader(code) for code in applySampled_code),
+        (hp.CallableShader(code) for code in sampleLength_code),
+    ]
+    return [*chain.from_iterable(zip(*shaders))]
+
+
 class SceneDirectTracer(Tracer):
     """
     Path tracer sampling both camera and light source to create direct
@@ -1471,6 +1519,360 @@ class SceneDirectTracer(Tracer):
         if self._dispatchIndirect:
             tensor = self._getParamsTensor("TraceParams", i)
             offset = SceneDirectTracer.TraceParams._batchSize.offset
+            return [
+                self._pipeline.traceRaysIndirect(tensor, offset=offset, **self._sbt)
+            ]
+        else:
+            return [self._pipeline.traceRays(self.capacity, 1, 1, **self._sbt)]
+
+
+class SceneBackwardTracer(Tracer):
+    """
+    Path tracer sampling paths starting at the camera and creating complete ones
+    by sampling the light source independently at each volume interaction point.
+    Traces rays against geometries defined by the provided scene to simulate
+    accurate intersections and shadowing. Depending on the geometry's material
+    rays may reflect from or transmit through them.
+
+    Parameters
+    ----------
+    batchSize: int
+        Number of rays to simulate per run. Note that a single ray may generate
+        up to `maxPathLength` hits.
+    ray: RayModel
+        Model of the ray to propagate
+    source: LightSource
+        Source producing light rays. Must support backward mode.
+    camera: Camera
+        Source producing camera rays. If direct lighting is enabled must support
+        direct mode.
+    wavelengthSource: WavelengthSource
+        Source to sample wavelengths from
+    response: HitResponse
+        Response function simulating the detector
+    rng: RNG
+        Generator for creating random numbers
+    scene: Scene
+        Scene in which the rays are traced
+    capacity: int | None, default=None
+        Maximum batch size. If None, same as `batchSize`.
+    callback: TraceEventCallback, default=EmptyEventCallback()
+        Callback called for each tracing event. See `TraceEventCallback`.
+    maxPathLength: int, default=64
+        Maximum length of paths to simulate
+    sampleCoefficient: float, default=NaN
+        Optional coefficient used for sampling ray lengths. If the value is NaN
+        or negative, the volume will sample the ray length instead. Will always
+        be disabled, if the ray is a particle.
+    maxTime: float, default=inf
+        Rays exceeding this limit will aborted with code `decayed`.
+    disableDirectLighting: bool, default=False
+        Whether to ignore contributions from direct lighting, i.e. paths with
+        no scattering. Usefull if a dedicated tracer or estimator for direct
+        light contributions is additionally used.
+
+    Stage Parameters
+    ----------------
+    sampleCoefficient: float
+        Coefficient used for sampling ray lengths. Negative values or NaN will
+        cause the tracer to use the respective volume's interaction length
+        instead. A value of zero disables volume interaction all together.
+    maxTime: float
+        Max total time including delay from the source and travel time, after
+        which a ray gets stopped
+
+    Note
+    ----
+    No hits will be created if scattering is disabled.
+    """
+
+    name = "Scene Backward Tracer"
+
+    class TraceParams(Structure):
+        _fields_ = [
+            ("_tlas", buffer_reference),
+            ("maxTime", c_float),
+            ("_maxDist", c_float),
+            ("_lowerBBoxCorner", vec3),
+            ("_upperBBoxCorner", vec3),
+            ("sampleCoefficient", c_float),
+            ("_batchSize", c_uint32),
+            ("_rayCountY", c_uint32),
+            ("_rayCountZ", c_uint32),
+        ]
+
+    def __init__(
+        self,
+        batchSize: int,
+        ray: RayModel,
+        source: LightSource,
+        camera: Camera,
+        wavelengthSource: WavelengthSource,
+        response: HitResponse,
+        rng: RNG,
+        scene: Scene,
+        *,
+        capacity: int,
+        callback: TraceEventCallback = EmptyEventCallback(),
+        maxPathLength: int = 64,
+        sampleCoefficient: float = float("NaN"),
+        maxTime: float = float("inf"),
+        disableDirectLighting: bool = False,
+    ) -> None:
+        # we need ray tracing for this
+        if not isRayTracingEnabled():
+            raise RuntimeError("The device does not support ray tracing")
+        # check components support backward tracing
+        if not ray.supportsBackward:
+            raise ValueError("Ray model does not support backward mode")
+        if source.backwardSourceCode is None:
+            raise ValueError("Light source does not support backward mode")
+        if not disableDirectLighting and not camera.supportDirect:
+            raise ValueError("Camera does not support direct mode")
+        volModels = scene.materials.volumeModels
+        errModels = [m.name for m in volModels if m.backwardSourceCode is None]
+        if errModels:
+            msg = "The following volume models do not support backward mode: "
+            msg += ", ".join(errModels)
+            raise ValueError(msg)
+        srfModels = scene.materials.surfaceModels
+        errModels = [m.name for m in srfModels if m.backwardSourceCode is None]
+        if errModels:
+            msg = "The following surface models do not support backward mode: "
+            msg += ", ".join(errModels)
+            raise ValueError(msg)
+
+        maxHitsPerRay = maxPathLength - 1 if disableDirectLighting else maxPathLength
+        # calculate number RNG draws
+        nRngInit = wavelengthSource.nRNGSamples
+        nRngDirect = SceneDirectTracer.nRngSamples(
+            wavelengthSource, source, camera, scene.materials.volumeModels
+        )
+        if not disableDirectLighting:
+            nRngInit += nRngDirect
+        cameraSampleRngDim = nRngInit  # save for later
+        nRngInit += camera.nRNGSamples
+        nRngProp = max(self._nRngProp(v) for v in volModels)
+        nRngMiss = max(self._missRngStride(source, response, v) for v in volModels)
+        nRngHit = max(self._hitRngStride(s) for s in srfModels)
+        nRngLoop = max(nRngProp + nRngHit, nRngMiss)
+        nRNG = nRngInit + maxPathLength * nRngLoop
+        # init
+        super().__init__(
+            batchSize,
+            ray,
+            response,
+            rng,
+            {"TraceParams": SceneBackwardTracer.TraceParams},
+            capacity=capacity,
+            callback=callback,
+            maxPathLength=maxPathLength,
+            nRNGSamples=nRNG,
+            maxHitsPerRay=maxHitsPerRay,
+        )
+        # save params
+        self._photons = wavelengthSource
+        self._source = source
+        self._camera = camera
+        self._scene = scene
+        self._directLightingDisabled = disableDirectLighting
+        self.setParams(
+            _tlas=scene.tlas.address,
+            maxTime=maxTime,
+            _maxDist=scene.bbox.diagonal,
+            sampleCoefficient=sampleCoefficient,
+            _lowerBBoxCorner=scene.bbox.lowerCorner,
+            _upperBBoxCorner=scene.bbox.upperCorner,
+            _batchSize=batchSize,
+            _rayCountY=1,
+            _rayCountZ=1,
+        )
+
+        # prepare code compilation
+        session = createCompilerSession()
+        volumeProxies = _createVolumeProxies(
+            scene.materials, "backward", ray, rng, session
+        )
+        # if we have only a single volume model (besides transparent) we can
+        # inline the volume module and skip unnecessary creation of callables
+        inlineVolModule = len(volumeProxies) == 0
+        self._dispatchIndirect = getEnabledRayTracingFeatures().indirectDispatch
+        preamble = createPreamble(
+            CAMERA_SAMPLE_RNG_DIM=cameraSampleRngDim,
+            DIRECT_RAY_PAYLOAD_LOCATION=2,
+            DIRECT_SAMPLING_RNG_STRIDE=nRngDirect,
+            DISABLE_DIRECT_LIGHTING=disableDirectLighting,
+            INLINE_VOLUME_MODEL=inlineVolModule,
+            INDIRECT_DISPATCH=self._dispatchIndirect,
+            MISS_STRIDE=2 if disableDirectLighting else 3,
+            PATH_LENGTH=maxPathLength,
+            PROXY_STRIDE=len(scene.materials.volumeModels) - 1,  # no transparent proxy
+            TRACE_RNG_STRIDE=nRngLoop,
+        )
+        headers = {
+            "callback.glsl": callback.sourceCode,
+            "camera.glsl": camera.sourceCode,
+            "photon.glsl": wavelengthSource.sourceCode,
+            "ray.glsl": ray.sourceCode,
+            "response.glsl": response.sourceCode,
+            "rng.glsl": rng.sourceCode,
+            "source.glsl": source.backwardSourceCode,
+            **scene.materials.header,
+        }
+        # compile code
+        # we start with miss shaders, as later we might inline the non transparent model
+        traverse_miss_code, nee_miss_code = _compileMultiTemplateShader(
+            scene.materials.volumeModels,
+            "backward",
+            [
+                "tracer/scene/backward/traverse.rmiss.glsl",
+                "tracer/scene/backward/nee.rmiss.glsl",
+            ],
+            preamble,
+            headers,
+            hp.ShaderStage.MISS,
+            session,
+        )
+        if inlineVolModule:
+            volModel = scene.materials.volumeModels[1]
+            assert volModel.backwardSourceCode is not None
+            headers["volume.glsl"] = volModel.backwardSourceCode
+        # compile code
+        raygen_code = compileShader(
+            "tracer/scene/backward/raygen.rgen.glsl",
+            preamble,
+            headers,
+            stage=hp.ShaderStage.RAYGEN,
+            session=session,
+        )
+        hit_code = _compileTemplateShader(
+            scene.materials.surfaceModels,
+            "backward",
+            "tracer/scene/backward/traverse.rchit.glsl",
+            preamble,
+            headers,
+            hp.ShaderStage.CLOSEST_HIT,
+            session,
+        )
+        # direct sampling requires a special miss shader
+        miss_shaders = [
+            (hp.RayMissShader(code) for code in traverse_miss_code),
+            (hp.RayMissShader(code) for code in nee_miss_code),
+        ]
+        if not disableDirectLighting:
+            direct_miss_code = _compileTemplateShader(
+                scene.materials.volumeModels,
+                "backward",
+                "tracer/scene/direct/direct.rmiss.glsl",
+                preamble,
+                headers,
+                hp.ShaderStage.MISS,
+                session,
+            )
+            miss_shaders.append((hp.RayMissShader(code) for code in direct_miss_code))
+        # create ray tracing pipeline
+        shaders = [
+            hp.RayGenerateShader(raygen_code),
+            *(hp.RayHitShader(code) for code in hit_code),
+            # we interleave miss shaders to make the code agnostic to the total count
+            *chain.from_iterable(zip(*miss_shaders)),
+            # same thing with callables
+            *volumeProxies,
+        ]
+        self._pipeline = hp.RayTracingPipeline(shaders, maxRecursionDepth=2)
+        scene.materials.bindParams(self._pipeline)
+        # create shader binding table
+        nS = len(scene.materials.surfaceModels)
+        nV = len(scene.materials.volumeModels)
+        nMiss = 2 * nV if disableDirectLighting else 3 * nV
+        _createSBT = lambda entries: self._pipeline.createShaderBindingTable(entries)
+        _range = lambda i, n: range(i, i + n)
+        _zip = lambda *x: list(chain.from_iterable(zip(*x)))
+        self._sbt = {
+            "rayGenShaders": _createSBT([0]),
+            # SBT offset in TLAS has a stride of two
+            # -> every other SBT entry has to be empty
+            "hitShaders": _createSBT(_zip(_range(1, nS), repeat(None))),
+            "missShaders": _createSBT(list(_range(1 + nS, nMiss))),
+        }
+        if not inlineVolModule:
+            self._sbt["callableShaders"] = _createSBT([*_range(1 + nS + nMiss, 3 * nV)])
+
+    @Tracer.batchSize.setter
+    def batchSize(self, value) -> None:
+        assert Tracer.batchSize.fset is not None  # to make linter happy
+        Tracer.batchSize.fset(self, value)
+        self.setParam("_batchSize", value)
+
+    @property
+    def camera(self) -> Camera:
+        """Camera producing camera rays"""
+        return self._camera
+
+    @property
+    def directLightingDisabled(self) -> bool:
+        """Whether direct lighting is disabled"""
+        return self._directLightingDisabled
+
+    @property
+    def scene(self) -> Scene:
+        """Scene the tracer propagates rays in"""
+        return self._scene
+
+    @property
+    def source(self) -> LightSource:
+        """Source producing rays"""
+        return self._source
+
+    @property
+    def wavelengthSource(self) -> WavelengthSource:
+        """Sampler for wavelengths"""
+        return self._photons
+
+    @staticmethod
+    def _missRngStride(light: LightSource, resp: HitResponse, vol: VolumeModel) -> int:
+        """number rng samples per miss including propagation"""
+        n = max(1, vol.rngDraws.sampleInteractionLength)
+        n += vol.rngDraws.applyVolumeEffect
+        n += light.nRNGBackward
+        n += vol.rngDraws.volumeScatterRay
+        n += vol.rngDraws.applyVolumeEffect
+        n += resp.nRNGSamples
+        n += vol.rngDraws.sampleVolumeInteraction
+        return n
+
+    @staticmethod
+    def _nRngProp(vol: VolumeModel) -> int:
+        """number rng samples drawn before surface hit"""
+        n = max(1, vol.rngDraws.sampleInteractionLength)
+        n += vol.rngDraws.applyVolumeEffect
+        return n
+
+    @staticmethod
+    def _hitRngStride(srf: SurfaceModel) -> int:
+        """number rng samples per surface hit minus propagation"""
+        n = srf.rngDraws.prepareSurface
+        n += srf.rngDraws.sampleSurfaceInteraction
+        return n
+
+    def _collectStages(self) -> list[tuple[str, PipelineStage]]:
+        return [
+            ("rng", self.rng),
+            ("photons", self.wavelengthSource),
+            ("source", self.source),
+            ("camera", self.camera),
+            ("tracer", self),
+            ("callback", self.callback),
+            ("response", self.response),
+        ]
+
+    def run(self, i: int) -> list[hp.Command]:
+        for _, stage in self.collectStages():
+            stage.bindParams(self._pipeline, i)
+
+        if self._dispatchIndirect:
+            tensor = self._getParamsTensor("TraceParams", i)
+            offset = SceneBackwardTracer.TraceParams._batchSize.offset
             return [
                 self._pipeline.traceRaysIndirect(tensor, offset=offset, **self._sbt)
             ]

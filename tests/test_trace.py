@@ -577,3 +577,132 @@ def test_SceneDirectTracer(limitTime: bool):
     assert n == tracer.batchSize
     assert stats.detected == len(hits)
     assert stats.absorbed > 0
+
+
+@pytest.mark.parametrize("inlineVolumeModels", [True, False])
+@pytest.mark.parametrize("disableDirect", [True, False])
+@pytest.mark.parametrize("disableScattering", [True, False])
+def test_SceneBackwardTracer(
+    inlineVolumeModels: bool,
+    disableDirect: bool,
+    disableScattering: bool,
+) -> None:
+    if not isRayTracingEnabled():
+        pytest.skip("ray tracing is not supported")
+
+    N = 32 * 256
+    MAX_LENGTH = 8
+    T0, T1 = 10.0 * u.ns, 20.0 * u.ns
+    T_MAX = 100000.0 * u.us
+    capacity = 48 * 256
+    light_pos = (-1.0, -7.0, 0.0) * u.m
+    light_budget = 1000.0
+
+    # create materials
+    attenuate = Attenuating()
+    absorbing = Attenuating(absorb=True)
+    water = PureWaterModel().createMedium(physicModel=attenuate)
+    water2 = PureWaterModel().createMedium(physicModel=absorbing, name="water2")
+    glass = BK7Model().createMedium()
+    absorber = AbsorbingSurface()
+    border = BorderSurface()
+    dielectric = DielectricSurface()
+    mat = Material("mat", glass, water, dielectric, flags=("DR", "B"))
+    matAbs = Material("abs", None, water, absorber)
+    matVol = Material("vol", water if inlineVolumeModels else water2, water, border)
+    matStore = MaterialStore([mat, matAbs, matVol])
+    waterIdx = matStore.media["water"]
+    if inlineVolumeModels:
+        assert len(matStore.volumeModels) == 2
+    else:
+        assert len(matStore.volumeModels) == 3
+    # create scene
+    store = MeshStore({"cube": "assets/cube.ply", "sphere": "assets/sphere.stl"})
+    r, d = 40.0 * u.m, 5.0 * u.m
+    r_scale = 0.99547149974733 * u.m  # radius of inscribed sphere (icosphere)
+    r_insc = r * r_scale
+    x, y, z = 10.0, 5.0, -5.0
+    t1 = Transform.TRS(scale=r, translate=(x, y, z + r + d))
+    c1 = store.createInstance("sphere", "mat", t1, detectorId=0)
+    t2 = Transform.TRS(scale=r, translate=(x, y, z - r - d))
+    c2 = store.createInstance("sphere", "mat", t2, detectorId=1)
+    t3 = Transform.TRS(scale=r, translate=(-x, -y, z + r + d))
+    c3 = store.createInstance("sphere", "abs", t3)
+    t4 = Transform.TRS(scale=r, translate=(-x, -y, z - r - d))
+    c4 = store.createInstance("sphere", "vol", t4)
+    scene = Scene([c1, c2, c3, c4], matStore)
+
+    # calculate min time
+    target_pos = (x, y, z - r - d) * u.m  # detector #1
+    d_min = np.sqrt(np.square(np.subtract(target_pos, light_pos)).sum(-1)) - r
+    vg = theia.material.getPropertySamples(water, "group_velocity")
+    assert vg is not None
+    v_max = np.max(vg)
+    t_min = d_min / v_max + T0
+
+    # create pipeline
+    rng = PhiloxRNG(key=0xC01DC0FFEE)
+    ray = UnpolarizedRay()
+    photons = UniformWavelengthSource()
+    source = SphericalLightSource(
+        mediumIdx=waterIdx,
+        position=light_pos,
+        timeRange=(T0, T1),
+        budget=light_budget,
+    )
+    camera = SphereCamera(
+        mediumIdx=waterIdx,
+        position=target_pos,
+        radius=r,
+    )
+    recorder = HitRecorder()
+    stats = theia.trace.EventStatisticCallback()
+    tracer = theia.trace.SceneBackwardTracer(
+        N,
+        ray,
+        source,
+        camera,
+        photons,
+        recorder,
+        rng,
+        scene,
+        capacity=capacity,
+        callback=stats,
+        maxPathLength=MAX_LENGTH,
+        sampleCoefficient=0.0 if disableScattering else float("NaN"),
+        maxTime=T_MAX,
+        disableDirectLighting=disableDirect,
+    )
+    # run pipeline
+    pl.runPipeline(tracer.collectStages())
+
+    # check hits
+    assert recorder.queue is not None
+    hits = recorder.queue.view(0)
+
+    if disableScattering and disableDirect:
+        # We can only connect to the light source at scatter points -> expect no hits
+        assert stats.scattered == 0
+        assert hits.count == 0
+        return  # nothing more to test
+    assert hits.count > 0
+    assert hits.count <= tracer.maxHits
+    hits = hits[: hits.count]
+
+    assert np.max(hits["time"]) <= T_MAX
+    assert np.min(hits["time"]) >= t_min
+
+    # check config via stats
+    assert stats.absorbed > 0
+    assert stats.volume > 0
+    if disableScattering:
+        assert stats.scattered == 0
+    else:
+        assert stats.scattered > 0
+    if disableDirect:
+        assert stats.created == tracer.batchSize
+        # there will only be hits from shadow rays
+        assert stats.detected == 0
+    else:
+        assert stats.created == 2 * tracer.batchSize
+        assert stats.detected > 0
