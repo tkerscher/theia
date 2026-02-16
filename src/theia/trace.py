@@ -13,7 +13,8 @@ from numpy.ctypeslib import as_array
 
 from theia.camera import Camera
 from theia.compiler import (
-    createCompilerSession,
+    CompilerSession,
+    RayTracingPipelineBuilder,
     createPreamble,
     compileShader,
     loadShader,
@@ -26,13 +27,15 @@ from theia.ray import RayModel
 from theia.response import HitResponse, TraceConfig
 from theia.scene import RectBBox, Scene
 from theia.surface import SurfaceModel
-from theia.target import Target
+from theia.target import Target, TargetGuide
 from theia.volume import VolumeModel
+from theia.util import flat_zip
 import theia.units as u
 
+from collections.abc import Iterable, Sequence
 from enum import IntEnum
 from numpy.typing import NDArray
-from typing import Iterable, Literal, Sequence
+from typing import Callable, Literal, TypeVar, overload
 
 
 __all__ = [
@@ -41,6 +44,7 @@ __all__ = [
     "EventStatisticCallback",
     "SceneBackwardTracer",
     "SceneDirectTracer",
+    "SceneForwardTracer",
     "TraceEventCallback",
     "Tracer",
     "TrackRecordCallback",
@@ -1208,18 +1212,72 @@ class VolumeDirectTracer(Tracer):
         return [self._program.dispatch(groups)]
 
 
+def _checkVolumeModels(scene: Scene, mode: Literal["forward", "backward"]):
+    models = scene.materials.volumeModels
+    if mode == "forward":
+        check = lambda x: x.forwardSourceCode is None
+    else:
+        check = lambda x: x.backwardSourceCode is None
+    errModels = [m.name for m in models if check(m)]
+    if errModels:
+        msg = f"The following volume models do not support {mode} mode: "
+        msg += ", ".join(errModels)
+        raise ValueError(msg)
+    return models
+
+
+def _checkSurfaceModels(scene: Scene, mode: Literal["forward", "backward"]):
+    models = scene.materials.surfaceModels
+    if mode == "forward":
+        check = lambda x: x.forwardSourceCode is None
+    else:
+        check = lambda x: x.backwardSourceCode is None
+    errModels = [m.name for m in models if check(m)]
+    if errModels:
+        msg = f"The following surface models do not support {mode} mode: "
+        msg += ", ".join(errModels)
+        raise ValueError(msg)
+    return models
+
+
+M = TypeVar("M", SurfaceModel, VolumeModel)
+
+
+@overload
 def _compileTemplateShader(
-    models: Iterable[VolumeModel | SurfaceModel],
+    models: Iterable[M],
     mode: Literal["forward", "backward"],
-    templatePath: str,
-    preamble: str,
-    headers: dict[str, str],
-    stage: hp.ShaderStage,
-    session: hp.CompilerSession,
-) -> list[bytes]:
+    template: str,
+    session: CompilerSession,
+    *,
+    compileIf: None = None,
+) -> Sequence[bytes]: ...
+@overload
+def _compileTemplateShader(
+    models: Iterable[M],
+    mode: Literal["forward", "backward"],
+    template: str,
+    session: CompilerSession,
+    *,
+    compileIf: Callable[[M], bool],
+) -> Sequence[bytes | None]: ...
+
+
+def _compileTemplateShader(
+    models: Iterable[M],
+    mode: Literal["forward", "backward"],
+    template: str,
+    session: CompilerSession,
+    *,
+    compileIf: Callable[[M], bool] | None = None,
+) -> Sequence[bytes | None]:
     """Util function compiling the given template for each volume model"""
-    result: list[bytes] = []
+    result: list[bytes | None] = []
     for model in models:
+        if compileIf and not compileIf(model):
+            result.append(None)
+            continue
+
         if mode == "forward":
             assert model.forwardSourceCode is not None
             source = model.forwardSourceCode
@@ -1227,35 +1285,47 @@ def _compileTemplateShader(
             assert model.backwardSourceCode is not None
             source = model.backwardSourceCode
         if isinstance(model, SurfaceModel):
-            _headers = {"surface.glsl": source, **headers}
+            extra = {"surface.glsl": source}
         elif isinstance(model, VolumeModel):
-            _headers = {"volume.glsl": source, **headers}
+            extra = {"volume.glsl": source}
         else:
             raise ValueError(f"Unexpected model: {model}")
-        code = compileShader(
-            templatePath,
-            preamble,
-            _headers,
-            stage=stage,
-            session=session,
-        )
-        result.append(code)
+        result.append(session.compile(template, extra))
     return result
 
 
+@overload
 def _compileMultiTemplateShader(
-    models: Iterable[VolumeModel | SurfaceModel],
+    models: Iterable[M],
     mode: Literal["forward", "backward"],
-    templatePaths: Iterable[str],
-    preamble: str,
-    headers: dict[str, str],
-    stage: hp.ShaderStage,
-    session: hp.CompilerSession,
-) -> list[list[bytes]]:
+    templates: Iterable[str],
+    session: CompilerSession,
+    *,
+    compileIf: None = None,
+) -> Sequence[Sequence[bytes]]: ...
+@overload
+def _compileMultiTemplateShader(
+    models: Iterable[M],
+    mode: Literal["forward", "backward"],
+    templates: Iterable[str],
+    session: CompilerSession,
+    *,
+    compileIf: Callable[[M], bool],
+) -> Sequence[Sequence[bytes | None]]: ...
+
+
+def _compileMultiTemplateShader(
+    models: Iterable[M],
+    mode: Literal["forward", "backward"],
+    templates: Iterable[str],
+    session: CompilerSession,
+    *,
+    compileIf: Callable[[M], bool] | None = None,
+) -> Sequence[Sequence[bytes | None]]:
     """similar to `_compileMultiTemplateShader` but takes multiple templates"""
     return [
-        _compileTemplateShader(models, mode, path, preamble, headers, stage, session)
-        for path in templatePaths
+        _compileTemplateShader(models, mode, temp, session, compileIf=compileIf)
+        for temp in templates
     ]
 
 
@@ -1263,47 +1333,38 @@ def _createVolumeProxies(
     materials: MaterialStore,
     mode: Literal["forward", "backward"],
     ray: RayModel,
-    rng: RNG,
-    session: hp.CompilerSession,
-) -> list[hp.CallableShader]:
+    session: CompilerSession,
+) -> list[bytes | None]:
     """
     Creates callables used by the volume proxy. Returns an empty list if the
     volume modules should be inlines instead.
     """
+    # sanity check
+    if mode == "backward" and ray.isParticle:
+        raise ValueError("Cannot trace particle in backward mode")
 
     # if we have only a single volume model (besides transparent) we can
     # inline the volume module and skip unnecessary creation of callables
     if len(materials.volumeModels) <= 2:
         return []
 
-    proxy_ray = "ForwardRay" if mode == "forward" else "BackwardRay"
-    preamble = createPreamble(PROXY_RAY=proxy_ray)
-    headers = {
-        "ray.glsl": ray.sourceCode,
-        "rng.glsl": rng.sourceCode,
-        **materials.header,
-    }
-    apply_code, applySampled_code, sampleLength_code = _compileMultiTemplateShader(
+    # applyVolume() is not available in particle tracing
+    templates = [
+        "tracer/scene/volume/sampleInteractionLength.rcall.glsl",
+        "tracer/scene/volume/applyVolumeSampled.rcall.glsl",
+    ]
+    if not ray.isParticle:
+        templates.append("tracer/scene/volume/applyVolume.rcall.glsl")
+
+    codes = _compileMultiTemplateShader(
         # The first one is always transparent, which will be always
         # inlined as it is simple enough
         materials.volumeModels[1:],
-        "backward",
-        [
-            "tracer/scene/volume/applyVolume.rcall.glsl",
-            "tracer/scene/volume/applyVolumeSampled.rcall.glsl",
-            "tracer/scene/volume/sampleInteractionLength.rcall.glsl",
-        ],
-        preamble,
-        headers,
-        hp.ShaderStage.CALLABLE,
+        mode,
+        templates,
         session,
     )
-    shaders = [
-        (hp.CallableShader(code) for code in apply_code),
-        (hp.CallableShader(code) for code in applySampled_code),
-        (hp.CallableShader(code) for code in sampleLength_code),
-    ]
-    return [*chain.from_iterable(zip(*shaders))]
+    return list(flat_zip(*codes))
 
 
 class SceneDirectTracer(Tracer):
@@ -1375,12 +1436,7 @@ class SceneDirectTracer(Tracer):
             raise ValueError("Light source does not support backward mode")
         if not camera.supportDirect:
             raise ValueError("Camera does not support direct mode")
-        volModels = scene.materials.volumeModels
-        errorModels = [m.name for m in volModels if m.backwardSourceCode is None]
-        if errorModels:
-            msg = "The following volume models do not support direct mode: "
-            msg = ", ".join(errorModels)
-            raise ValueError(msg)
+        _checkVolumeModels(scene, "backward")
 
         # calculate number of rng samples drawn
         nRNG = self.nRngSamples(
@@ -1412,7 +1468,6 @@ class SceneDirectTracer(Tracer):
 
         # compile code
         self._dispatchIndirect = getEnabledRayTracingFeatures().indirectDispatch
-        session = createCompilerSession()
         preamble = createPreamble(
             INDIRECT_DISPATCH=self._dispatchIndirect,
             DIRECT_SAMPLING_RNG_STRIDE=nRNG,
@@ -1428,40 +1483,22 @@ class SceneDirectTracer(Tracer):
             "source.glsl": source.backwardSourceCode,
             **scene.materials.header,
         }
-        rayGen_code = compileShader(
-            "tracer/scene/direct/sample.rgen.glsl",
-            preamble,
-            headers,
-            stage=hp.ShaderStage.RAYGEN,
-            session=session,
-        )
+        session = CompilerSession(preamble, headers)
+        rayGen_code = session.compile("tracer/scene/direct/sample.rgen.glsl")
         miss_code = _compileTemplateShader(
             scene.materials.volumeModels,
             "backward",
             "tracer/scene/direct/direct.rmiss.glsl",
-            preamble,
-            headers,
-            hp.ShaderStage.MISS,
             session,
         )
         # create ray tracing pipeline
-        shaders = [
-            hp.RayGenerateShader(rayGen_code),
-            *(hp.RayMissShader(c) for c in miss_code),
-        ]
-        self._pipeline = hp.RayTracingPipeline(shaders)
-        scene.materials.bindParams(self._pipeline)
-        # create shader binding tables
+        builder = RayTracingPipelineBuilder()
+        builder.addRayGen(rayGen_code)
+        builder.addMissShaders(miss_code)
         nSbtHitEntries = len(scene.materials.surfaceModels) * Scene.sbtHitStride
-        createSBT = lambda x: self._pipeline.createShaderBindingTable(x)
-        _range = lambda i, n: range(i, i + n)
-        self._sbt = {
-            "rayGenShaders": createSBT([0]),
-            "missShaders": createSBT(list(_range(1, len(miss_code)))),
-            # sbt indices for hit shaders are determined by the TLAS too
-            # so we have to create an entry for each possible index
-            "hitShaders": createSBT([None] * nSbtHitEntries),
-        }
+        builder.addHitShaders([None] * nSbtHitEntries)
+        self._pipeline, self._sbt = builder.finish()
+        scene.bindParams(self._pipeline)
 
     @Tracer.batchSize.setter
     def batchSize(self, value) -> None:
@@ -1612,7 +1649,7 @@ class SceneBackwardTracer(Tracer):
         rng: RNG,
         scene: Scene,
         *,
-        capacity: int,
+        capacity: int | None = None,
         callback: TraceEventCallback = EmptyEventCallback(),
         maxPathLength: int = 64,
         sampleCoefficient: float = float("NaN"),
@@ -1629,18 +1666,8 @@ class SceneBackwardTracer(Tracer):
             raise ValueError("Light source does not support backward mode")
         if not disableDirectLighting and not camera.supportDirect:
             raise ValueError("Camera does not support direct mode")
-        volModels = scene.materials.volumeModels
-        errModels = [m.name for m in volModels if m.backwardSourceCode is None]
-        if errModels:
-            msg = "The following volume models do not support backward mode: "
-            msg += ", ".join(errModels)
-            raise ValueError(msg)
-        srfModels = scene.materials.surfaceModels
-        errModels = [m.name for m in srfModels if m.backwardSourceCode is None]
-        if errModels:
-            msg = "The following surface models do not support backward mode: "
-            msg += ", ".join(errModels)
-            raise ValueError(msg)
+        srfModels = _checkSurfaceModels(scene, "backward")
+        volModels = _checkVolumeModels(scene, "backward")
 
         maxHitsPerRay = maxPathLength - 1 if disableDirectLighting else maxPathLength
         # calculate number RNG draws
@@ -1689,13 +1716,7 @@ class SceneBackwardTracer(Tracer):
         )
 
         # prepare code compilation
-        session = createCompilerSession()
-        volumeProxies = _createVolumeProxies(
-            scene.materials, "backward", ray, rng, session
-        )
-        # if we have only a single volume model (besides transparent) we can
-        # inline the volume module and skip unnecessary creation of callables
-        inlineVolModule = len(volumeProxies) == 0
+        inlineVolModule = len(volModels) <= 2
         self._dispatchIndirect = getEnabledRayTracingFeatures().indirectDispatch
         preamble = createPreamble(
             CAMERA_SAMPLE_RNG_DIM=cameraSampleRngDim,
@@ -1706,7 +1727,7 @@ class SceneBackwardTracer(Tracer):
             INDIRECT_DISPATCH=self._dispatchIndirect,
             MISS_STRIDE=2 if disableDirectLighting else 3,
             PATH_LENGTH=maxPathLength,
-            PROXY_STRIDE=len(scene.materials.volumeModels) - 1,  # no transparent proxy
+            PROXY_RAY="BackwardRay",
             TRACE_RNG_STRIDE=nRngLoop,
         )
         headers = {
@@ -1719,84 +1740,55 @@ class SceneBackwardTracer(Tracer):
             "source.glsl": source.backwardSourceCode,
             **scene.materials.header,
         }
+        session = CompilerSession(preamble, headers)
         # compile code
+        volumeProxies = _createVolumeProxies(scene.materials, "backward", ray, session)
         # we start with miss shaders, as later we might inline the non transparent model
-        traverse_miss_code, nee_miss_code = _compileMultiTemplateShader(
+        traverse_miss_code = _compileTemplateShader(
             scene.materials.volumeModels,
             "backward",
-            [
-                "tracer/scene/backward/traverse.rmiss.glsl",
-                "tracer/scene/backward/nee.rmiss.glsl",
-            ],
-            preamble,
-            headers,
-            hp.ShaderStage.MISS,
+            "tracer/scene/backward/traverse.rmiss.glsl",
             session,
+        )
+        nee_miss_code = _compileTemplateShader(
+            scene.materials.volumeModels,
+            "backward",
+            "tracer/scene/backward/nee.rmiss.glsl",
+            session,
+            compileIf=lambda m: m.supportsNEE,
         )
         if inlineVolModule:
             volModel = scene.materials.volumeModels[1]
             assert volModel.backwardSourceCode is not None
-            headers["volume.glsl"] = volModel.backwardSourceCode
-        # compile code
-        raygen_code = compileShader(
-            "tracer/scene/backward/raygen.rgen.glsl",
-            preamble,
-            headers,
-            stage=hp.ShaderStage.RAYGEN,
-            session=session,
-        )
+            session.headers["volume.glsl"] = volModel.backwardSourceCode
+        raygen_code = session.compile("tracer/scene/backward/raygen.rgen.glsl")
         hit_code = _compileTemplateShader(
             scene.materials.surfaceModels,
             "backward",
             "tracer/scene/backward/traverse.rchit.glsl",
-            preamble,
-            headers,
-            hp.ShaderStage.CLOSEST_HIT,
             session,
         )
         # direct sampling requires a special miss shader
-        miss_shaders = [
-            (hp.RayMissShader(code) for code in traverse_miss_code),
-            (hp.RayMissShader(code) for code in nee_miss_code),
-        ]
+        miss_shaders = [traverse_miss_code, nee_miss_code]
         if not disableDirectLighting:
             direct_miss_code = _compileTemplateShader(
                 scene.materials.volumeModels,
                 "backward",
                 "tracer/scene/direct/direct.rmiss.glsl",
-                preamble,
-                headers,
-                hp.ShaderStage.MISS,
                 session,
             )
-            miss_shaders.append((hp.RayMissShader(code) for code in direct_miss_code))
+            miss_shaders.append(direct_miss_code)
         # create ray tracing pipeline
-        shaders = [
-            hp.RayGenerateShader(raygen_code),
-            *(hp.RayHitShader(code) for code in hit_code),
-            # we interleave miss shaders to make the code agnostic to the total count
-            *chain.from_iterable(zip(*miss_shaders)),
-            # same thing with callables
-            *volumeProxies,
-        ]
-        self._pipeline = hp.RayTracingPipeline(shaders, maxRecursionDepth=2)
-        scene.materials.bindParams(self._pipeline)
-        # create shader binding table
-        nS = len(scene.materials.surfaceModels)
-        nV = len(scene.materials.volumeModels)
-        nMiss = 2 * nV if disableDirectLighting else 3 * nV
-        _createSBT = lambda entries: self._pipeline.createShaderBindingTable(entries)
-        _range = lambda i, n: range(i, i + n)
-        _zip = lambda *x: list(chain.from_iterable(zip(*x)))
-        self._sbt = {
-            "rayGenShaders": _createSBT([0]),
-            # SBT offset in TLAS has a stride of two
-            # -> every other SBT entry has to be empty
-            "hitShaders": _createSBT(_zip(_range(1, nS), repeat(None))),
-            "missShaders": _createSBT(list(_range(1 + nS, nMiss))),
-        }
+        builder = RayTracingPipelineBuilder()
+        builder.addRayGen(raygen_code)
+        # SBT offset in TLAS has a stride of two
+        # -> every other SBT entry has to be empty
+        builder.addHitShaders(flat_zip(hit_code, repeat(None)))
+        builder.addMissShaders(flat_zip(*miss_shaders))
         if not inlineVolModule:
-            self._sbt["callableShaders"] = _createSBT([*_range(1 + nS + nMiss, 3 * nV)])
+            builder.addCallableShaders(volumeProxies)
+        self._pipeline, self._sbt = builder.finish(maxRecursionDepth=2)
+        scene.bindParams(self._pipeline)
 
     @Tracer.batchSize.setter
     def batchSize(self, value) -> None:

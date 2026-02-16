@@ -7,14 +7,18 @@ from functools import cache
 
 from theia.device import getEnabledAtomics, getEnabledRayTracingFeatures
 
+from collections.abc import Iterable
 from importlib.resources.abc import Traversable
-from typing import Any
+from typing import Any, overload
 
 
 __all__ = [
+    "CompilerSession",
+    "RayTracingPipelineBuilder",
     "addIncludeDir",
     "compileShader",
     "createPreamble",
+    "deduceStage",
     "findShader",
     "getCompiler",
     "getPreamble",
@@ -174,3 +178,135 @@ def compileShader(
     # finally ask compiler to compile the code
     compiler = session or getCompiler()
     return compiler.compile(code, headers, stage=stage)
+
+
+def deduceStage(file: str) -> hp.ShaderStage:
+    """Tries to deduct the shader stage based on the given files name"""
+    if file.endswith(".rgen.glsl"):
+        return hp.ShaderStage.RAYGEN
+    if file.endswith(".rchit.glsl"):
+        return hp.ShaderStage.CLOSEST_HIT
+    if file.endswith(".rmiss.glsl"):
+        return hp.ShaderStage.MISS
+    if file.endswith(".rcall.glsl"):
+        return hp.ShaderStage.CALLABLE
+    if file.endswith(".glsl"):
+        return hp.ShaderStage.COMPUTE
+    else:
+        raise ValueError("Unrecognized file extension")
+
+
+class CompilerSession:
+    """Util class for compiling multiple files within a single session"""
+
+    def __init__(
+        self, preamble: str = "", headers: dict[str, str] | None = None
+    ) -> None:
+        self.session = createCompilerSession()
+        self.preamble = preamble
+        self.headers: dict[str, str] = headers or {}
+
+    @overload
+    def compile(
+        self, file: str, extraHeaders: dict[str, str] | None = None
+    ) -> bytes: ...
+    @overload
+    def compile(
+        self, file: list[str], extraHeaders: dict[str, str] | None = None
+    ) -> list[bytes]: ...
+
+    def compile(
+        self,
+        file: str | list[str],
+        extraHeaders: dict[str, str] | None = None,
+    ) -> bytes | list[bytes]:
+        """Compiles the given files. Deduces the corresponding stages automatically."""
+        if extraHeaders:
+            headers = {**extraHeaders, **self.headers}
+        else:
+            headers = self.headers
+        comp = lambda f: compileShader(
+            f, self.preamble, headers, stage=deduceStage(f), session=self.session
+        )
+        if isinstance(file, str):
+            return comp(file)
+        else:
+            return [comp(f) for f in file]
+
+
+RTShader = hp.RayGenerateShader | hp.RayMissShader | hp.RayHitShader | hp.CallableShader
+"""Union of all ray tracing shaders types"""
+
+
+class RayTracingPipelineBuilder:
+    """Utility class for creating ray tracing pipelines"""
+
+    def __init__(self) -> None:
+        self._shaders: list[RTShader] = []
+        self._sbt: dict[str, list[int | None]] = {}
+
+    def _addShader(self, shader: RTShader | None) -> int | None:
+        if shader is None:
+            return None
+        idx = len(self._shaders)
+        self._shaders.append(shader)
+        return idx
+
+    def addRayGen(self, code: bytes) -> None:
+        """Adds the ray generation shader"""
+        if "rayGenShaders" in self._sbt:
+            raise RuntimeError("ray gen shaders have already been added")
+        idx = self._addShader(hp.RayGenerateShader(code))
+        self._sbt["rayGenShaders"] = [idx]
+
+    def addMissShaders(self, code: Iterable[bytes | None]) -> None:
+        """adds miss shaders"""
+        if "missShaders" in self._sbt:
+            raise RuntimeError("miss shaders have already been added")
+        f = lambda c: None if c is None else hp.RayMissShader(c)
+        idx = [self._addShader(f(c)) for c in code]
+        self._sbt["missShaders"] = idx
+
+    def addHitShaders(self, code: Iterable[bytes | None]) -> None:
+        """adds hit shaders"""
+        if "hitShaders" in self._sbt:
+            raise RuntimeError("Hit shaders have already been added")
+        f = lambda c: None if c is None else hp.RayHitShader(c)
+        idx = [self._addShader(f(c)) for c in code]
+        self._sbt["hitShaders"] = idx
+
+    def addCallableShaders(self, code: Iterable[bytes | None]) -> None:
+        """adds optional callable shaders"""
+        if "callableShaders" in self._sbt:
+            raise RuntimeError("Callable shaders have already been added")
+        f = lambda c: None if c is None else hp.CallableShader(c)
+        idx = [self._addShader(f(c)) for c in code]
+        if len(idx) > 0:
+            self._sbt["callableShaders"] = idx
+
+    def finish(
+        self, *, maxRecursionDepth: int = 1
+    ) -> tuple[hp.RayTracingPipeline, dict[str, hp.ShaderBindingTable]]:
+        """Builds the ray tracing pipeline and corresponding SBT"""
+        # check everthing was added
+        if "rayGenShaders" not in self._sbt:
+            raise RuntimeError("Ray gen shaders missing")
+        if "missShaders" not in self._sbt:
+            raise RuntimeError("Miss shaders missing")
+        if "hitShaders" not in self._sbt:
+            raise RuntimeError("Hit shaders missing")
+        # callable shaders are optional
+
+        # create pipeline
+        pipeline = hp.RayTracingPipeline(
+            self._shaders, maxRecursionDepth=maxRecursionDepth
+        )
+        # create sbt
+        sbt = {}
+        for shaderType, entries in self._sbt.items():
+            sbt[shaderType] = pipeline.createShaderBindingTable(entries)
+        # to prevent from creating the same pipeline twice, delete everything
+        del self._shaders
+        del self._sbt
+        # done
+        return pipeline, sbt
