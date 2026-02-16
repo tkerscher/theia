@@ -35,11 +35,10 @@ void main() {
     if (traceData.result < 0) return;
 
     //propagate ray to hit
-    traceData.result = propagateToHit(
+    traceData.result = propagateSampledToHit(
         traceData.ray,
         hit.worldPos,
         hit.rayNrm,
-        true,
         params.propagation,
         gl_LaunchIDEXT.x,
         traceData.dim

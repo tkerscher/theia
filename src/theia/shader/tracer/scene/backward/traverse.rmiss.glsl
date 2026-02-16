@@ -27,6 +27,8 @@ struct NeeData {
 };
 layout(location = 1) rayPayloadEXT NeeData neeData;
 
+#ifndef VOLUME_MODEL_NO_SCATTERING
+
 void neeEstimate(
     BackwardRay ray,
     inout uint dim
@@ -64,6 +66,8 @@ void neeEstimate(
     //(saves a bit of memory bandwidth)
 }
 
+#endif
+
 void main() {
     //propagate ray
     traceData.result = propagateSampled(
@@ -75,8 +79,11 @@ void main() {
     );
     if (traceData.result < 0) return;
 
+    //do not bother with NEE if the volume does not support it anyway
+    #ifndef VOLUME_MODEL_NO_SCATTERING
     //NEE estimate to complete path
     neeEstimate(traceData.ray, traceData.dim);
+    #endif
 
     //sample new direction
     traceData.result = sampleVolumeInteraction(

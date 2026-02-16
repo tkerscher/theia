@@ -14,9 +14,8 @@ ResultCode applyVolumeSampled(
     bool hit,
     uint idx, inout uint dim
 ) {
-    //there is no volume interactions. If we did not hit anything,
-    //we must have lost the ray
-    return hit ? RESULT_CODE_SUCCESS : RESULT_CODE_RAY_LOST;
+    //there is no volume interaction
+    return RESULT_CODE_SUCCESS;
 }
 
 ResultCode applyVolume(
@@ -26,7 +25,7 @@ ResultCode applyVolume(
     uint idx, inout uint dim
 ) {
     //same as applyVolumeSampled
-    return hit ? RESULT_CODE_SUCCESS : RESULT_CODE_RAY_LOST;   
+    return RESULT_CODE_SUCCESS;
 }
 
 ResultCode sampleVolumeInteraction(
@@ -37,13 +36,7 @@ ResultCode sampleVolumeInteraction(
     return ERROR_CODE_TRACE_ABORT;
 }
 
-ResultCode volumeScatterRay(
-    inout BackwardRay ray,
-    vec3 newDir,
-    uint idx, inout uint dim
-) {
-    //there is no volume interaction
-    return ERROR_CODE_TRACE_ABORT;
-}
+//There is no scattering in transparent media
+#define VOLUME_MODEL_NO_SCATTERING
 
 #endif

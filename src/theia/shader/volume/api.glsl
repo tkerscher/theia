@@ -57,6 +57,13 @@ ResultCode applyVolume(
     uint idx, inout uint dim
 );
 
+//If the modeled volume does not scatter, instead of implementing the following
+//scattering function one can define the following macro. This tells the tracer
+//to skip any NEE calculations as their contributions are trivially zero anyway.
+//You do not need to define this macro for particle tracing, as in that case NEE
+//is always disabled.
+#define VOLUME_MODEL_NO_SCATTERING
+
 /**
  * Samples a volume interaction that scatters the ray into the given direction.
  * Is expected to update the ray accordingly, e.g. by calling `scatterRay`.
@@ -72,7 +79,7 @@ ResultCode volumeScatterRay(
 /**
  * Importance samples a scattering direction at the ray's current position.
  *
- * OPTIONAL. Required for NEE
+ * OPTIONAL. Required for MIS
 */
 vec3 sampleVolumeScattering(
     inout RAY ray,                  ///< Ray to sample
@@ -85,7 +92,7 @@ vec3 sampleVolumeScattering(
  * the probability the same direction would have been sampled by
  * `sampleVolumeScattering`.
  *
- * OPTIONAL. Required for NEE.
+ * OPTIONAL. Required for MIS
 */
 float volumeScatterProb(
     RAY ray,                        ///< Ray to sample
