@@ -3,12 +3,15 @@ from __future__ import annotations
 import numpy as np
 import importlib.resources
 
+from itertools import chain
+
 from ctypes import _SimpleCData, Array, Structure, c_uint32
 from hephaistos.glsl import uvec4, uvec2
 from numpy.ctypeslib import as_array
 
+from collections.abc import Iterable
 from numpy.typing import NDArray
-from typing import Sequence
+from typing import Sequence, TypeVar
 
 
 class classproperty:
@@ -88,3 +91,11 @@ def packUint64(value: int) -> uvec2:
 def unpackUint64(value: uvec2) -> int:
     """Unpacks a packed 64 bit unsigned integer"""
     return value.x + (value.y << 32)
+
+
+T = TypeVar("T")
+
+
+def flat_zip(*streams: Iterable[T]) -> Iterable[T]:
+    """creates a flat iterable from the given streams"""
+    return chain.from_iterable(zip(*streams))
