@@ -48,6 +48,8 @@ ResultCode applyVolumeSampled_proxy(
     return applyVolumeSampled_model(ray, dist, hit, gl_LaunchIDEXT.x, dim);
 }
 
+#ifndef RAY_PARTICLE
+
 ResultCode applyVolume_proxy(
     inout PROXY_RAY ray,
     float dist,
@@ -57,6 +59,8 @@ ResultCode applyVolume_proxy(
 ) {
     return applyVolume_model(ray, dist, hit, gl_LaunchIDEXT.x, dim);
 }
+
+#endif
 
 #else //#ifdef INLINE_VOLUME_MODEL
 
@@ -75,10 +79,16 @@ struct ApplyData{
 };
 layout(location = 1) callableDataEXT ApplyData applyData;
 
+#ifdef RAY_PARTICLE
+#define PROXY_STRIDE 2
+#else
+#define PROXY_STRIDE 3
+#endif
+
 float sampleInteractionLength_proxy(
     const PROXY_RAY ray, uint volIdx, inout uint dim
 ) {
-    uint callableIdx = 3 * (volIdx - 1) + 2;
+    uint callableIdx = PROXY_STRIDE * (volIdx - 1) + 0;
     lengthData.ray = ray;
     lengthData.dim = dim;
     executeCallableEXT(callableIdx, 0);
@@ -94,7 +104,7 @@ ResultCode applyVolumeSampled_proxy(
     uint volIdx,
     inout uint dim
 ) {
-    uint callableIdx = 3 * (volIdx - 1) + 1;
+    uint callableIdx = PROXY_STRIDE * (volIdx - 1) + 1;
     applyData.ray = ray;
     //put hit flag into sign of dist
     applyData.dist = hit ? -dist : dist;
@@ -107,6 +117,8 @@ ResultCode applyVolumeSampled_proxy(
     return applyData.result;
 }
 
+#ifndef RAY_PARTICLE
+
 ResultCode applyVolume_proxy(
     inout PROXY_RAY ray,
     float dist,
@@ -114,7 +126,7 @@ ResultCode applyVolume_proxy(
     uint volIdx,
     inout uint dim
 ) {
-    uint callableIdx = 3 * (volIdx - 1) + 0;
+    uint callableIdx = PROXY_STRIDE * (volIdx - 1) + 2;
     applyData.ray = ray;
     //put hit flag into sign of dist
     applyData.dist = hit ? -dist : dist;
@@ -126,6 +138,8 @@ ResultCode applyVolume_proxy(
     dim = applyData.dim;
     return applyData.result;
 }
+
+#endif
 
 #endif
 
@@ -158,6 +172,8 @@ ResultCode applyVolumeSampled(
     return applyVolumeSampled_proxy(ray, dist, hit, volIdx, dim);
 }
 
+#ifndef RAY_PARTICLE
+
 ResultCode applyVolume(
     inout PROXY_RAY ray,
     float dist,
@@ -172,5 +188,7 @@ ResultCode applyVolume(
     //otherwise delegate call to correct model via proxy
     return applyVolume_proxy(ray, dist, hit, volIdx, dim);
 }
+
+#endif
 
 #endif
