@@ -617,23 +617,26 @@ def test_SceneBackwardTracer(
     else:
         assert len(matStore.volumeModels) == 3
     # create scene
+    # it will consist of 6 spheres arranged in an octahedron
     store = MeshStore({"cube": "assets/cube.ply", "sphere": "assets/sphere.stl"})
     r, d = 40.0 * u.m, 5.0 * u.m
+    a = 60.0 * u.m  # >= (2r+ d) / sqrt(2)
     r_scale = 0.99547149974733 * u.m  # radius of inscribed sphere (icosphere)
     r_insc = r * r_scale
     x, y, z = 10.0, 5.0, -5.0
-    t1 = Transform.TRS(scale=r, translate=(x, y, z + r + d))
-    c1 = store.createInstance("sphere", "mat", t1, detectorId=0)
-    t2 = Transform.TRS(scale=r, translate=(x, y, z - r - d))
-    c2 = store.createInstance("sphere", "mat", t2, detectorId=1)
-    t3 = Transform.TRS(scale=r, translate=(-x, -y, z + r + d))
-    c3 = store.createInstance("sphere", "abs", t3)
-    t4 = Transform.TRS(scale=r, translate=(-x, -y, z - r - d))
-    c4 = store.createInstance("sphere", "vol", t4)
-    scene = Scene([c1, c2, c3, c4], matStore)
+    _t = lambda dx, dy, dz: Transform.TRS(scale=r, translate=(x + dx, y + dy, z + dz))
+    instances = [
+        store.createInstance("sphere", "mat", _t(0, 0, a), detectorId=1),
+        store.createInstance("sphere", "mat", _t(0, 0, -a), detectorId=2),
+        store.createInstance("sphere", "abs", _t(0, a, 0)),
+        store.createInstance("sphere", "abs", _t(0, -a, 0)),
+        store.createInstance("sphere", "vol", _t(a, 0, 0)),
+        store.createInstance("sphere", "vol", _t(-a, 0, 0)),
+    ]
+    scene = Scene(instances, matStore)
 
     # calculate min time
-    target_pos = (x, y, z - r - d) * u.m  # detector #1
+    target_pos = (x, y, z + a) * u.m  # detector #1
     d_min = np.sqrt(np.square(np.subtract(target_pos, light_pos)).sum(-1)) - r
     vg = theia.material.getPropertySamples(water, "group_velocity")
     assert vg is not None
@@ -693,6 +696,7 @@ def test_SceneBackwardTracer(
     assert np.min(hits["time"]) >= t_min
 
     # check config via stats
+    assert stats.mismatch == 0
     assert stats.absorbed > 0
     assert stats.volume > 0
     if disableScattering:
