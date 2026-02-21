@@ -17,6 +17,7 @@ import theia.units as u
 
 from collections.abc import Iterable, Mapping
 from numpy.typing import NDArray, ArrayLike
+from typing import Final
 
 
 __all__ = [
@@ -460,6 +461,7 @@ class MeshInstance:
         triangleCount: int,
         bbox: RectBBox,
         material: str,
+        objectId: int = 0,
     ) -> None:
         self._instance = instance
         self._vertices = vertices
@@ -468,6 +470,7 @@ class MeshInstance:
         self._localBbox = bbox
         self._bbox = self.localBBox.transform(self.transform)
         self.material = material
+        self._objectId = objectId
 
     @property
     def bbox(self) -> RectBBox:
@@ -502,6 +505,15 @@ class MeshInstance:
     @material.setter
     def material(self, value: str) -> None:
         self._material = value
+
+    @property
+    def objectId(self) -> int:
+        """Object id reported when instance is used as detector/target"""
+        return self._objectId
+
+    @objectId.setter
+    def objectId(self, value: int) -> None:
+        self._objectId = value
 
     @property
     def triangleCount(self) -> int:
@@ -587,8 +599,8 @@ class MeshStore:
             self._triangleCounts[idx],
             self._bbox[idx],
             material,
+            detectorId,
         )
-        instance.instance.customIndex = detectorId
         if scale is None:
             # default to 1m
             scale = 1.0 * u.m
@@ -634,27 +646,30 @@ class Scene:
             bbox = RectBBox((-1.0, -1.0, -1.0) * u.km, (1.0, 1.0, 1.0) * u.km)
         self.bbox = bbox
 
-        # TODO: We need a mapping from instanceID -> objectID
-
         # fill in missing data in instances. This is namely:
         # - customIndex storing the index into the material table
         # - sbtOffset mapping to surface model index
         # Note, that we will have two hit shaders per surface model (one for
         # tracing, one for NEE), so the sbtOffset is actually twice the index
+        objectIdMap: list[int] = []
         geomInstances: list[hp.GeometryInstance] = []
         for inst in instances:
             if inst.material not in materials:
                 raise ValueError(f'Unknown material "{inst.material}"')
             matIdx = materials[inst.material]
             srfIdx = materials.surfaceModelMap[matIdx]
+            objectIdMap.append(inst.objectId)
 
             geom = inst.instance
             geom.customIndex = matIdx
             geom.instanceSBTOffset = self.sbtHitStride * srfIdx
 
             geomInstances.append(geom)
-        # finally, create the acceleration structure
+        # create the acceleration structure
         self._tlas = hp.AccelerationStructure(geomInstances)
+        # create object id map
+        objectIdMapValues = np.ascontiguousarray(objectIdMap, dtype=np.int32)
+        self._objectIdMap = hp.Tensor(objectIdMapValues)
 
     @property
     def bbox(self) -> RectBBox:
@@ -671,9 +686,18 @@ class Scene:
         return self._materials
 
     @property
+    def objectIdMapTensor(self) -> hp.Tensor:
+        """Tensor containing the mapping from instance id to object id"""
+        return self._objectIdMap
+
+    @property
     def tlas(self) -> hp.AccelerationStructure:
         """The acceleration structure describing the scene's geometry"""
         return self._tlas
+
+    def bindParams(self, program: hp.Program | hp.RayTracingPipeline) -> None:
+        self.materials.bindParams(program)
+        program.bindParams(ObjectIdMap=self.objectIdMapTensor)
 
 
 class SceneTemplate:
