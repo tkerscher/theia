@@ -6,7 +6,7 @@
 #include "rng.glsl"
 #include "surface.glsl"
 
-#include "tracer/scene/volume/proxy.backward.glsl"
+#include "tracer/scene/volume/proxy.glsl"
 #include "tracer/propagate/backward.glsl"
 #include "scene/intersect.glsl"
 
@@ -27,14 +27,14 @@ hitAttributeEXT vec2 attribs; //default implementation reports barys here
 void main() {
     //resolve hit
     SurfaceHit hit;
-    traceData.result = resolveIntersection(
+    ResultCode intersectResult = resolveIntersection(
         traceData.ray.mediumIdx,
         attribs,
         hit
     );
-    if (traceData.result < 0) return;
-
-    //propagate ray to hit
+    //propagate even if intersection failed to get better data for debugging
+    //intersect should only fail with ERROR_CODE_MEDIA_MISMATCH so the actual
+    //intersection should still be good
     traceData.result = propagateSampledToHit(
         traceData.ray,
         hit.worldPos,
@@ -43,7 +43,15 @@ void main() {
         gl_LaunchIDEXT.x,
         traceData.dim
     );
+    if (intersectResult < 0)
+        traceData.result = intersectResult;
     if (traceData.result < 0) return;
+
+    //skip any surface sampling if surface is marked as absorber and return early
+    if ((hit.flags & MATERIAL_BLACK_BODY_BIT) != 0) {
+        traceData.result = RESULT_CODE_RAY_ABSORBED;
+        return;
+    }
 
     //if the surface model requests it, prepare interaction
     #ifdef SurfaceProperties

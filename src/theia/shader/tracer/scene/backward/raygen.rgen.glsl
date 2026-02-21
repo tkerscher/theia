@@ -7,7 +7,7 @@
 #include "camera.glsl"
 #include "photon.glsl"
 
-#include "tracer/scene/volume/proxy.backward.glsl"
+#include "tracer/scene/volume/proxy.glsl"
 #include "tracer/propagate/backward.glsl"
 
 #ifndef DISABLE_DIRECT_LIGHTING
