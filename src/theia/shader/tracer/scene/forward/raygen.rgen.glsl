@@ -7,20 +7,15 @@
 #include "photon.glsl"
 #include "source.glsl"
 
-#include "tracer/scene/volume/proxy.forward.glsl"
+#include "tracer/scene/volume/proxy.glsl"
 #include "tracer/propagate/forward.glsl"
 
-uniform TraceParams {
-    uvec2 tlas;
-    PropagationParams propagation;
-    uint batchSize;
-} params;
+#include "tracer/scene/forward/io.glsl"
 
-struct TraceData{
-    ForwardRay ray;
-    uint dim;
-    ResultCode result;
-};
+#ifndef DISABLE_NEE
+#include "tracer/scene/forward/nee.glsl"
+#endif
+
 layout(location = 0) rayPayloadEXT TraceData traceData;
 
 ResultCode trace(
@@ -28,7 +23,7 @@ ResultCode trace(
     inout uint dim
 ) {
     //sample distance to propagate in volume
-    float dist = sampleStepSize(ray, dim);
+    float dist = sampleStepSize(ray, params.propagation, gl_LaunchIDEXT.x, dim);
 
     //setup trace payload
     traceData.ray = ray;
@@ -41,6 +36,7 @@ ResultCode trace(
         0,                                      //sbt offset
         0,                                      //sbt stride
         getVolumeIdx(ray.mediumIdx) + 1,        //miss index
+        ray.position,                           //origin
         0.0,                                    //t_min
         ray.direction,                          //direction
         dist,                                   //t_max
@@ -67,7 +63,7 @@ void main() {
 
     //Direct light sampling by extending ray to light source
     #if !defined(DISABLE_DIRECT_LIGHTING) && !defined(DISABLE_NEE)
-    #error "TODO"
+    traceNEE(ray, params.tlas, dim);
     #endif
 
     //trace loop

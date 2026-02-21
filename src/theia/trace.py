@@ -344,13 +344,13 @@ class EventResultCode(IntEnum):
     """Tracing reached max iteration"""
     ERROR_CODE_MAX_VALUE = -1073741824
     """Max value for an error code"""
-    ERROR_UNKNOWN = -1073741825
+    ERROR_UNKNOWN = -1073741823
     """Tracer encountered an unexpected error indicating a bug in the tracer"""
-    ERROR_MEDIA_MISMATCH = -1073741826
+    ERROR_MEDIA_MISMATCH = -1073741822
     """Tracer encountered unexpected media"""
-    ERROR_TRACE_ABORT = -1073741827
+    ERROR_TRACE_ABORT = -1073741821
     """Tracer reached a state it can't proceed from"""
-    ERROR_CODE_TOTAL_INTERNAL_REFLECTION = -1073741828
+    ERROR_CODE_TOTAL_INTERNAL_REFLECTION = -1073741820
     """Transmission through surface failed because of total internal reflection"""
 
 
@@ -1865,6 +1865,358 @@ class SceneBackwardTracer(Tracer):
         if self._dispatchIndirect:
             tensor = self._getParamsTensor("TraceParams", i)
             offset = SceneBackwardTracer.TraceParams._batchSize.offset
+            return [
+                self._pipeline.traceRaysIndirect(tensor, offset=offset, **self._sbt)
+            ]
+        else:
+            return [self._pipeline.traceRays(self.capacity, 1, 1, **self._sbt)]
+
+
+class SceneForwardTracer(Tracer):
+    """
+    Path tracer simulating light travelling through media originating at a light
+    source and ending at detectors. Traces rays against the geometries defined
+    by the provided scene to simulate accurate intersections and shadowing.
+    Depending on the geometry's material, rays may reflect or transmit through
+    them.
+
+    Parameters
+    ----------
+    batchSize: int
+        Number of rays to simulate per run. Note that a single run may generate
+        up to twice `maxPathLength` hits.
+    ray: RayModel
+        Model of the ray to propagate.
+    source: LightSource
+        Source producing light rays
+    response: HitResponse
+        Response function simulating the detector
+    rng: RNG
+        Generator for creating random numbers
+    scene: Scene
+        Scene in which the rays are traced
+    capacity: int | None, default=None
+        Maximum batch size. If None, same as `batchSize`.
+    callback: TraceEventCallback, default=EmptyEventCallback()
+        Callback called for each tracing event. See `TraceEventCallback`.
+    maxPathLength: int, default=64
+        Maximum length of paths to simulate
+    targetId: int | None, default=None
+        Optionally limits responses to a single target id. Hits on other objects
+        even if they have the detector flag will be ignored.
+    sampleCoefficient: float, default=NaN
+        Optional coefficient used for sampling ray lengths. If the value is NaN
+        or negative, the volume will sample the ray length instead. Will always
+        be disabled, if the ray is a particle.
+    maxTime: float, default=inf
+        Rays exceeding this limit will aborted with code `decayed`.
+    targetGuide: TargetGuide | None, default=None
+        Optional target guide acting as proxy for the detector in next event
+        estimation. Used to sample alternative light paths connecting the light
+        source with the detector early during tracing.
+    disableDirectLighting: bool, default=False
+        Whether to ignore contributions from direct lighting, i.e. paths with
+        no scattering. Usefull if a dedicated tracer or estimator for direct
+        light contributions is additionally used.
+    """
+
+    name = "Scene Forward Tracer"
+
+    class TraceParams(Structure):
+        _fields_ = [
+            ("_tlas", buffer_reference),
+            ("maxTime", c_float),
+            ("_maxDist", c_float),
+            ("_lowerBBoxCorner", vec3),
+            ("_upperBBoxCorner", vec3),
+            ("sampleCoefficient", c_float),
+            ("_targetId", c_int32),
+            ("_batchSize", c_uint32),
+            ("_rayCountY", c_uint32),
+            ("_rayCountZ", c_uint32),
+        ]
+
+    def __init__(
+        self,
+        batchSize: int,
+        ray: RayModel,
+        source: LightSource,
+        response: HitResponse,
+        rng: RNG,
+        scene: Scene,
+        *,
+        capacity: int | None = None,
+        callback: TraceEventCallback = EmptyEventCallback(),
+        maxPathLength: int = 64,
+        targetId: int | None = None,
+        sampleCoefficient: float = float("NaN"),
+        maxTime: float = float("inf"),
+        targetGuide: TargetGuide | None = None,
+        disableDirectLighting: bool = False,
+    ) -> None:
+        # we need ray tracing for this
+        if not isRayTracingEnabled():
+            raise RuntimeError("The device does not support ray tracing")
+        # check components support forward tracing
+        if ray.isParticle and targetGuide is not None:
+            raise ValueError("Cannot have a target guide when tracing particles")
+        if ray.isParticle and disableDirectLighting:
+            raise ValueError("Cannot disable direct light contribution with particles")
+        if not ray.supportsForward:
+            raise ValueError("Ray model does not support forward mode")
+        if source.forwardSourceCode is None:
+            raise ValueError("Light source does not support forward mode")
+        srfModels = _checkSurfaceModels(scene, "forward")
+        volModels = _checkVolumeModels(scene, "forward")
+
+        # calculate number RNG draws
+        nRNGInit = source.nRNGForward
+        if targetGuide is None:
+            nRngNee = None
+        else:
+            nRngNee = self._nRngNee(scene.materials)
+            nRNGInit += nRngNee
+        nHitLoop = self._nRngHit(scene.materials, nRngNee)
+        nMissLoop = self._nRngMiss(scene.materials, targetGuide)
+        nRngLoop = max(nHitLoop, nMissLoop)
+        nTraces = maxPathLength if targetGuide is None else maxPathLength - 1
+        nRNG = nRNGInit + nTraces * nRngLoop
+        # init
+        super().__init__(
+            batchSize,
+            ray,
+            response,
+            rng,
+            {"TraceParams": SceneForwardTracer.TraceParams},
+            {"targetId"},
+            capacity=capacity,
+            callback=callback,
+            maxPathLength=maxPathLength,
+            nRNGSamples=nRNG,
+            maxHitsPerRay=maxPathLength - 1 if disableDirectLighting else maxPathLength,
+        )
+        # save params
+        self._source = source
+        self._scene = scene
+        self._guide = targetGuide
+        self.targetId = targetId
+        self._directLightingDisabled = disableDirectLighting
+        self.setParams(
+            _tlas=scene.tlas.address,
+            maxTime=maxTime,
+            _maxDist=scene.bbox.diagonal,
+            sampleCoefficient=sampleCoefficient,
+            _lowerBBoxCorner=scene.bbox.lowerCorner,
+            _upperBBoxCorner=scene.bbox.upperCorner,
+            _batchSize=batchSize,
+            _rayCountY=1,
+            _rayCountZ=1,
+        )
+
+        # prepare code compilation
+        # if we have only a single volume model (besides transparent) we can
+        # inline the volume module and skip unnecessary creation of callables
+        inlineVolModule = len(volModels) <= 2
+        self._dispatchIndirect = getEnabledRayTracingFeatures().indirectDispatch
+        preamble = createPreamble(
+            DISABLE_DIRECT_LIGHTING=disableDirectLighting,
+            DISABLE_NEE=targetGuide is None,
+            DISPATCH_INDIRECT=self._dispatchIndirect,
+            INLINE_VOLUME_MODEL=inlineVolModule,
+            PATH_LENGTH=nTraces,
+            PROXY_RAY="ForwardRay",
+            TRACE_RNG_STRIDE=nRngLoop,
+        )
+        lamSource = source.wavelengthSource
+        headers = {
+            "callback.glsl": callback.sourceCode,
+            "photon.glsl": "" if lamSource is None else lamSource.sourceCode,
+            "ray.glsl": ray.sourceCode,
+            "response.glsl": response.sourceCode,
+            "rng.glsl": rng.sourceCode,
+            "source.glsl": source.forwardSourceCode,
+            "target.glsl": "" if targetGuide is None else targetGuide.sourceCode,
+            **scene.materials.header,
+        }
+        # compile code
+        session = CompilerSession(preamble, headers)
+        volumeProxies = _createVolumeProxies(scene.materials, "forward", ray, session)
+        traverse_miss_code = _compileTemplateShader(
+            scene.materials.volumeModels,
+            "forward",
+            "tracer/scene/forward/traverse.rmiss.glsl",
+            session,
+        )
+        if inlineVolModule:
+            volModel = scene.materials.volumeModels[1]
+            assert volModel.forwardSourceCode is not None
+            session.headers["volume.glsl"] = volModel.forwardSourceCode
+        raygen_code = session.compile("tracer/scene/forward/raygen.rgen.glsl")
+        hit_templates = ["tracer/scene/forward/traverse.rchit.glsl"]
+        if targetGuide is not None:
+            hit_templates.append("tracer/scene/forward/nee.rchit.glsl")
+        hit_codes = _compileMultiTemplateShader(
+            scene.materials.surfaceModels,
+            "forward",
+            hit_templates,
+            session,
+        )
+        # create ray tracing pipeline
+        builder = RayTracingPipelineBuilder()
+        builder.addRayGen(raygen_code)
+        # For NEE we also need a empty miss shader
+        builder.addMissShaders([None, *traverse_miss_code])
+        if targetGuide is None:
+            builder.addHitShaders(flat_zip(*hit_codes, repeat(None)))
+        else:
+            builder.addHitShaders(flat_zip(*hit_codes))
+        builder.addCallableShaders(volumeProxies)
+        maxRecursion = 1 if targetGuide is None else 2
+        self._pipeline, self._sbt = builder.finish(maxRecursionDepth=maxRecursion)
+        scene.bindParams(self._pipeline)
+
+        # hit_shaders = [[hp.RayHitShader(c) for c in codes] for codes in hit_codes]
+        # shaders = [
+        #     hp.RayGenerateShader(raygen_code),
+        #     *(hp.RayMissShader(code) for code in traverse_miss_code),
+        #     # we interlave the hit shaders to make the code agnostic to total count
+        #     *chain.from_iterable(zip(*hit_shaders)),
+        #     # same with callables
+        #     *volumeProxies,
+        # ]
+        # self._pipeline = hp.RayTracingPipeline(shaders, maxRecursionDepth=maxRecursion)
+        # scene.bindParams(self._pipeline)
+        # # create shader binding table
+        # nH = len(hit_shaders)
+        # nS = len(scene.materials.surfaceModels)
+        # nV = len(scene.materials.volumeModels)
+        # _createSBT = lambda entries: self._pipeline.createShaderBindingTable(entries)
+        # _range = lambda i, n: range(i, i + n)
+        # _zip = lambda *x: list(chain.from_iterable(zip(*x)))
+        # self._sbt = {
+        #     "rayGenShaders": _createSBT([0]),
+        #     "missShaders": _createSBT([None, *_range(1, nV)]),
+        # }
+        # if targetGuide is None:
+        #     self._sbt["hitShaders"] = _createSBT(_zip(_range(1 + nV, nS), repeat(None)))
+        # else:
+        #     self._sbt["hitShaders"] = _createSBT(list(_range(1 + nV, 2 * nS)))
+        # if not inlineVolModule:
+        #     c0 = 1 + nV + nH * nS
+        #     nC = 2 * (nV - 1) if ray.isParticle else 3 * (nV - 1)  # skipped transparent
+        #     self._sbt["callableShaders"] = _createSBT(list(_range(c0, nC)))
+
+    @Tracer.batchSize.setter
+    def batchSize(self, value) -> None:
+        assert Tracer.batchSize.fset is not None  # to make linter happy
+        Tracer.batchSize.fset(self, value)
+        self.setParam("_batchSize", value)
+
+    @property
+    def directLightingDisabled(self) -> bool:
+        """Whether direct lighting is disabled"""
+        return self._directLightingDisabled
+
+    @property
+    def scene(self) -> Scene:
+        """Scene the tracer propagates rays in"""
+        return self._scene
+
+    @property
+    def source(self) -> LightSource:
+        """Source producing rays"""
+        return self._source
+
+    @property
+    def targetGuide(self) -> TargetGuide | None:
+        """Optional target guide used for next event estimates"""
+        return self._guide
+
+    @property
+    def targetId(self) -> int | None:
+        """Optional target id to limit responses"""
+        return None if (id := self.getParam("_targetId")) == -2147483648 else id
+
+    @targetId.setter
+    def targetId(self, value: int | None) -> None:
+        value = value or -2147483648  # replace None with 0x80000000
+        self.setParam("_targetId", value)
+
+    @targetId.deleter
+    def targetId(self) -> None:
+        self.targetId = None
+
+    @staticmethod
+    def _nRngNee(mats: MaterialStore) -> int:
+        """Calculates max amount of numbers drawn per NEE ray"""
+        maxProp = max(m.rngDraws.applyVolumeEffect for m in mats.volumeModels)
+        nSrf = lambda m: m.rngDraws.prepareSurface + m.rngDraws.processSurfaceTargetHit
+        maxSrf = max(nSrf(m) for m in mats.surfaceModels)
+        return maxProp + maxSrf
+
+    @staticmethod
+    def _nRngHit(mats: MaterialStore, nNee: int | None) -> int:
+        """Calculates max amount of numbers drawn per surface hit"""
+        lv = lambda m: m.rngDraws.sampleInteractionLength + m.rngDraws.applyVolumeEffect
+        nProp = max(lv(m) for m in mats.volumeModels)
+        ls = (
+            lambda m: m.rngDraws.prepareSurface
+            + m.rngDraws.processSurfaceTargetHit
+            + m.rngDraws.sampleSurfaceInteraction
+        )
+        nSrf = max(ls(m) for m in mats.surfaceModels)
+        nTotal = nProp + nSrf
+        if nNee:
+            nTotal += nNee
+        return nTotal
+
+    @staticmethod
+    def _nRngMiss(mats: MaterialStore, guide: TargetGuide | None) -> int:
+        """Calculates max amount of numbers drawn per miss"""
+        nSrf = lambda m: m.rngDraws.prepareSurface + m.rngDraws.processSurfaceTargetHit
+        if guide:
+            nNee = max(nSrf(m) for m in mats.surfaceModels)
+            nVPerModel = (
+                lambda m: m.rngDraws.sampleInteractionLength
+                + m.rngDraws.applyVolumeEffect
+                + m.rngDraws.sampleVolumeScattering
+                + 2 * m.rngDraws.volumeScatterRay
+                + m.rngDraws.sampleVolumeInteraction
+            )
+            nVol = max(nVPerModel(m) for m in mats.volumeModels)
+            return nVol + 2 * nNee + guide.nRNGSamples
+        else:
+            nVPerModel = (
+                lambda m: m.rngDraws.sampleInteractionLength
+                + m.rngDraws.applyVolumeEffect
+                + m.rngDraws.sampleVolumeInteraction
+            )
+            return max(nVPerModel(m) for m in mats.volumeModels)
+
+    def _collectStages(self) -> list[tuple[str, PipelineStage]]:
+        stages = [
+            ("rng", self.rng),
+            # ("photons", self.wavelengthSource),
+            ("lightSource", self.source),
+            # ("guide", self.targetGuide),
+            ("tracer", self),
+            ("callback", self.callback),
+            ("response", self.response),
+        ]
+        # target guides are optional
+        if self.targetGuide is not None:
+            stages.insert(2, ("guide", self.targetGuide))
+        # wavelength sources are optional, but need to be before the light source
+        if self.source.wavelengthSource is not None:
+            stages.insert(1, ("photons", self.source.wavelengthSource))
+        return stages
+
+    def run(self, i: int) -> list[hp.Command]:
+        for _, stage in self.collectStages():
+            stage.bindParams(self._pipeline, i)
+        if self._dispatchIndirect:
+            tensor = self._getParamsTensor("TraceParams", i)
+            offset = SceneForwardTracer.TraceParams._batchSize.offset
             return [
                 self._pipeline.traceRaysIndirect(tensor, offset=offset, **self._sbt)
             ]

@@ -16,7 +16,7 @@ from theia.ray import UnpolarizedRay
 from theia.response import HitRecorder
 from theia.scene import MeshStore, Scene, Transform
 from theia.surface import AbsorbingSurface, BorderSurface, DielectricSurface
-from theia.target import SphereTarget
+from theia.target import SphereTarget, SphereTargetGuide
 from theia.volume import Attenuating, Transparent
 import theia.trace
 import theia.units as u
@@ -710,3 +710,156 @@ def test_SceneBackwardTracer(
     else:
         assert stats.created == 2 * tracer.batchSize
         assert stats.detected > 0
+
+
+@pytest.mark.parametrize(
+    "particle,guide,targetId,inlineVolumeModels,disableDirect,disableScattering",
+    [
+        (True, False, False, True, False, False),
+        (True, False, False, False, False, False),
+        (True, False, True, True, False, False),
+        (False, True, True, True, False, False),
+        (False, True, True, False, False, True),
+        (False, False, False, True, True, True),
+        (False, True, True, False, False, False),
+        (False, False, True, True, False, False),
+        (False, False, True, False, False, False),
+        (False, False, False, False, False, False),
+        (False, False, True, False, True, False),
+        (False, False, False, True, True, False),
+        (False, False, True, False, False, True),
+        (False, False, False, True, False, False),
+    ],
+)
+def test_SceneForwardTracer(
+    particle: bool,
+    guide: bool,
+    targetId: bool,
+    inlineVolumeModels: bool,
+    disableDirect: bool,
+    disableScattering: bool,
+):
+    if not isRayTracingEnabled():
+        pytest.skip("ray tracing is not supported")
+
+    N = 32 * 256
+    MAX_LENGTH = 10
+    T0, T1 = 10.0 * u.ns, 20.0 * u.ns
+    T_MAX = 1.0 * u.us
+    capacity = 48 * 256
+    light_pos = (-1.0, -7.0, -10.0) * u.m
+    light_budget = 1000.0
+
+    # create materials
+    attenuate = Attenuating()
+    absorbing = Attenuating(absorb=True)
+    water = PureWaterModel().createMedium(physicModel=attenuate)
+    water2 = PureWaterModel().createMedium(physicModel=absorbing, name="water2")
+    glass = BK7Model().createMedium()
+    absorber = AbsorbingSurface()
+    border = BorderSurface()
+    dielectric = DielectricSurface()
+    mat = Material("mat", glass, water, dielectric, flags=("DR", "B"))
+    matAbs = Material("abs", None, water, absorber)
+    matVol = Material("vol", water if inlineVolumeModels else water2, water, border)
+    matStore = MaterialStore([mat, matAbs, matVol])
+    waterIdx = matStore.media["water"]
+    if inlineVolumeModels:
+        assert len(matStore.volumeModels) == 2
+    else:
+        assert len(matStore.volumeModels) == 3
+    # create scene
+    # it will consist of 6 spheres arranged in an octahedron
+    store = MeshStore({"cube": "assets/cube.ply", "sphere": "assets/sphere.stl"})
+    r, d = 40.0 * u.m, 5.0 * u.m
+    a = 60.0 * u.m  # >= (2r+d) / sqrt(2) = min dist between spheres
+    r_scale = 0.99547149974733 * u.m  # radius of inscribed sphere (icosphere)
+    r_insc = r * r_scale
+    x, y, z = 10.0, 5.0, -5.0
+    _t = lambda dx, dy, dz: Transform.TRS(scale=r, translate=(x + dx, y + dy, z + dz))
+    instances = [
+        store.createInstance("sphere", "mat", _t(0, 0, a), detectorId=1),
+        store.createInstance("sphere", "mat", _t(0, 0, -a), detectorId=2),
+        store.createInstance("sphere", "abs", _t(0, a, 0)),
+        store.createInstance("sphere", "abs", _t(0, -a, 0)),
+        store.createInstance("sphere", "vol", _t(a, 0, 0)),
+        store.createInstance("sphere", "vol", _t(-a, 0, 0)),
+    ]
+    scene = Scene(instances, matStore)
+
+    targetGuide = SphereTargetGuide(position=(-x, -y, z + r + d), radius=r)
+
+    # calculate min time
+    if targetId:
+        # detector #1 is farther away
+        target_pos = (x, y, z + a) * u.m  # detector #1
+        d_min = np.sqrt(np.square(np.subtract(target_pos, light_pos)).sum(-1)) - r
+    else:
+        target_pos = (x, y, z - a) * u.m  # detector #2
+        d_min = np.sqrt(np.square(np.subtract(target_pos, light_pos)).sum(-1)) - r
+    vg = theia.material.getPropertySamples(water, "group_velocity")
+    assert vg is not None
+    v_max = np.max(vg)
+    t_min = d_min / v_max + T0
+
+    # create pipeline
+    ray = UnpolarizedRay(particle=particle)
+    rng = PhiloxRNG(key=0xC01DC0FFEE)
+    photons = UniformWavelengthSource()
+    source = SphericalLightSource(
+        photons,
+        mediumIdx=waterIdx,
+        position=light_pos,
+        timeRange=(T0, T1),
+        budget=light_budget,
+        emitParticles=particle,
+    )
+    recorder = HitRecorder()
+    stats = theia.trace.EventStatisticCallback()
+    tracer = theia.trace.SceneForwardTracer(
+        N,
+        ray,
+        source,
+        recorder,
+        rng,
+        scene,
+        capacity=capacity,
+        callback=stats,
+        maxPathLength=MAX_LENGTH,
+        sampleCoefficient=0.0 if disableScattering else float("NaN"),
+        maxTime=T_MAX,
+        targetId=1 if targetId else None,
+        targetGuide=targetGuide if guide else None,
+        disableDirectLighting=disableDirect,
+    )
+    # run pipeline
+    pl.runPipeline(tracer.collectStages())
+    hp.checkCurrentDeviceHealth()
+
+    # check hits
+    assert recorder.queue is not None
+    hits = recorder.queue.view(0)
+
+    assert hits.count > 0
+    assert hits.count <= tracer.maxHits
+    hits = hits[: hits.count]
+
+    # check config via stats
+    assert stats.created == N
+    assert stats.mismatch == 0
+    assert stats.absorbed > 0
+    assert stats.volume > 0
+    if disableScattering:
+        assert stats.scattered == 0
+    else:
+        assert stats.scattered > 0
+
+    r_hits = np.sqrt(np.square(hits["position"]).sum(-1))
+    assert np.all((r_hits <= 1.0) & (r_hits >= r_scale))
+    assert np.allclose(np.square(hits["normal"]).sum(-1), 1.0)
+    assert np.min(hits["time"]) >= t_min
+    assert np.max(hits["time"]) <= T_MAX
+    if targetId:
+        assert np.all(hits["objectId"] == 1)
+    else:
+        assert np.all((hits["objectId"] == 1) | (hits["objectId"] == 2))
