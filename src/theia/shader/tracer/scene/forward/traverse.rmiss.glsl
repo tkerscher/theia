@@ -42,14 +42,13 @@ void traceNEE(
 //probability to a valid value as long as there is at least one that can sample
 //it
 
-//MIS: sample both scattering phase function & detector
-//also include factors of phase function and sample propability:
-//             p_XX^2        p_PX   <- scattering phase function
-// w_X = ---------------- * ------
-//        p_XX^2 + p_YX^2    p_XX   <- importance sampling
-//       \-------V------/
-//          MIS weight
-//to improve precision, we already reduce the fraction where possible
+//MIS: sample both phase function & detector
+//
+//  w_X(X)            p_X(X)
+// -------- = ---------------------
+//  p_X(X)     p_X(X)^2 + p_Y(X)^2
+//
+//  ^^^^^^ MIS weight divided by IS probability
 
 void sampleTargetMIS(ForwardRay ray, inout uint dim) {
     //Here we'll use the following naming scheme: pXY, where:
@@ -58,28 +57,25 @@ void sampleTargetMIS(ForwardRay ray, inout uint dim) {
     // T: target, P: phase
     //e.g. pTP: p_target(dir ~ phase)
 
-    //shorthand notation
-    vec3 obs = ray.position;
-    vec3 dir = ray.direction;
-
-    //sample phase function
+    //sample volume scattering
     float pPP;
     vec3 dirPhase = sampleVolumeScattering(ray, pPP, gl_LaunchIDEXT.x, dim);
+    TargetGuideSample phaseSample = evalTargetGuide(ray.position, dirPhase);
     //sample target guide
-    TargetGuideSample targetSample = sampleTargetGuide(obs, gl_LaunchIDEXT.x, dim);
+    TargetGuideSample targetSample = sampleTargetGuide(ray.position, gl_LaunchIDEXT.x, dim);
+    vec3 dirTarget = targetSample.dir;
     float pTT = targetSample.prob;
-    //calculate cross propabilities
-    TargetGuideSample phaseSample = evalTargetGuide(obs, dirPhase);
+    //calculate cross probabilities
+    float pPT = volumeScatterProb(ray, dirTarget);
     float pTP = phaseSample.prob;
-    float pPT = volumeScatterProb(ray, targetSample.dir);
 
-    //calculate MIS weight
-    float wTarget = pTT * pTT / (pTT*pTT + pPT*pPT);
-    float wPhase = pPP * pPP / (pPP*pPP + pTP*pTP);
+    //calculate MIS weights
+    float wPhase = pPP / (pPP*pPP + pTP*pTP);
+    float wTarget = pTT / (pTT*pTT + pPT*pPT);
 
     //trace shadow rays
     traceNEE(ray, dirPhase, phaseSample.dist, wPhase, dim);
-    traceNEE(ray, targetSample.dir, targetSample.dist, wTarget, dim);
+    traceNEE(ray, dirTarget, targetSample.dist, wTarget, dim);
 }
 
 #endif

@@ -83,6 +83,9 @@ ResultCode updateRayIS(
             // -> we need to divide by the scatter coef if we did not hit anything
             ray.lin_contrib /= params.sampleCoefficient;
         }
+
+        //apply volume effects
+        applyVolume(ray, dist, hit, idx, dim);
     }
     //If sampleCoefficient is zero, we didn't do any importance sampling
     // -> do nothing

@@ -69,6 +69,21 @@ void createResponse(
         response(item, idx, dim);
 }
 
+//MIS is a sampling method that combines multiple distributions using weights
+//to minimize variance increase. Allows to use specialized distributions (here
+//sampling the target sphere) to increase performance. Distributions need to
+//cover the variable space only jointly, i.e. they are allowed to assign zero
+//probability to a valid value as long as there is at least one that can sample
+//it
+
+//MIS: sample both phase function & target
+//
+//  w_X(X)            p_X(X)
+// -------- = ---------------------
+//  p_X(X)     p_X(X)^2 + p_Y(X)^2
+//
+//  ^^^^^^ MIS weight divided by IS probability
+
 void sampleTargetMIS(ForwardRay ray, uint idx, inout uint dim) {
     //Here we'll use the following naming scheme: pXY, where:
     // X: prob, evaluated distribution
@@ -76,29 +91,23 @@ void sampleTargetMIS(ForwardRay ray, uint idx, inout uint dim) {
     // T: target, P: phase
     //e.g. pTP: p_target(dir ~ phase)
 
-    //shorthand notation
-    vec3 obs = ray.position;
-    vec3 dir = ray.direction;
-
-    //sample phase function
+    //sample volume scattering
     float pPP;
     vec3 dirPhase = sampleVolumeScattering(ray, pPP, idx, dim);
-    TargetSample phaseHit = intersectTarget(obs, dirPhase);
-
+    TargetSample phaseHit = intersectTarget(ray.position, dirPhase);
     //sample target
-    TargetSample targetHit = sampleTarget(obs, idx, dim);
-    vec3 dirTarget = normalize(targetHit.position - obs);
-    float pTT = targetHit.prob * dA_dw(obs, targetHit.position, targetHit.normal);
-
+    TargetSample targetHit = sampleTarget(ray.position, idx, dim);
+    vec3 dirTarget = normalize(targetHit.position - ray.position);
+    float pTT = targetHit.prob * dA_dw(ray.position, targetHit.position, targetHit.normal);
     //calculate cross probabilities
     float pPT = volumeScatterProb(ray, dirTarget);
-    float pTP = phaseHit.prob * dA_dw(obs, phaseHit.position, phaseHit.normal);
+    float pTP = phaseHit.prob * dA_dw(ray.position, phaseHit.position, phaseHit.normal);
 
     //calculate MIS weights
-    float wTarget = pTT * pPT / (pTT*pTT + pPT*pPT);
-    float wPhase = pPP * pPP / (pPP*pPP + pTP*pTP);
+    float wPhase = pPP / (pPP*pPP + pTP*pTP);
+    float wTarget = pTT / (pTT*pTT + pPT*pPT);
 
-    //create hits
+    //trace shadow rays
     createResponse(ray, phaseHit, dirPhase, wPhase, true, idx, dim);
     createResponse(ray, targetHit, dirTarget, wTarget, true, idx, dim);
 }
