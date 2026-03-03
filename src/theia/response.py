@@ -190,7 +190,7 @@ class HitRecorder(HitResponse):
     def sourceCode(self) -> str:
         return loadShader("response/record.glsl")
 
-    def _finishParams(self, i: int) -> None:
+    def _initQueue(self) -> None:
         # lazy creation of queue
         if self.queue is None:
             raise RuntimeError("Response has not been prepared!")
@@ -199,10 +199,12 @@ class HitRecorder(HitResponse):
             assert self.queue.tensor is not None  # to make linter happy
             self.setParam("_queueAdr", self.queue.tensor.address)
 
+    def _finishParams(self, i: int) -> None:
+        self._initQueue()
+
     def run(self, i: int) -> list[hp.Command]:
-        if self.queue is None:
-            raise RuntimeError("Response has not been prepared!")
-        return self.queue.run(i)
+        self._initQueue()
+        return self.queue.run(i)  # type: ignore
 
 
 class HitReplay(PipelineStage):
