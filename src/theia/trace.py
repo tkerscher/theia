@@ -1472,6 +1472,7 @@ class SceneDirectTracer(Tracer):
             INDIRECT_DISPATCH=self._dispatchIndirect,
             DIRECT_SAMPLING_RNG_STRIDE=nRNG,
             DIRECT_RAY_PAYLOAD_LOCATION=0,
+            RAY_TRACING_PIPELINE=True,
         )
         headers = {
             "callback.glsl": callback.sourceCode,
@@ -1728,6 +1729,7 @@ class SceneBackwardTracer(Tracer):
             MISS_STRIDE=2 if disableDirectLighting else 3,
             PATH_LENGTH=maxPathLength,
             PROXY_RAY="BackwardRay",
+            RAY_TRACING_PIPELINE=True,
             TRACE_RNG_STRIDE=nRngLoop,
         )
         headers = {
@@ -2025,6 +2027,7 @@ class SceneForwardTracer(Tracer):
             INLINE_VOLUME_MODEL=inlineVolModule,
             PATH_LENGTH=nTraces,
             PROXY_RAY="ForwardRay",
+            RAY_TRACING_PIPELINE=True,
             TRACE_RNG_STRIDE=nRngLoop,
         )
         lamSource = source.wavelengthSource
