@@ -73,9 +73,9 @@ ResultCode trace(
     #endif
 
     //propagate ray even if self-shadowed for correct result code
-    ResultCode result = propagate(
+    ResultCode result = propagateSampled(
         ray, dist,
-        hit, true,
+        hit,
         params.propagation,
         idx, dim);
     if (hit) return RESULT_CODE_RAY_ABSORBED;

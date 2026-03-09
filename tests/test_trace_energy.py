@@ -527,3 +527,203 @@ def test_VolumeForwardTracer(
     # check for energy conservation
     estimate = process.total / (batch_size * n_batches)
     assert np.abs(estimate / contrib - 1.0) < err
+
+
+@pytest.mark.parametrize(
+    "mu_a,mu_s,g,disableDirect",
+    [
+        (0.0, 0.01, 0.0, False),
+        (0.05, 0.005, 0.0, False),
+        (0.05, 0.005, 0.5, True),
+        (0.01, 0.01, -0.5, False),
+    ],
+)
+@pytest.mark.parametrize("sampleCoef", [float("NaN"), 0.01])
+def test_VolumeBackwardTracer(
+    mu_a: float,
+    mu_s: float,
+    g: float,
+    disableDirect: bool,
+    sampleCoef: float,
+):
+    """Spherical light source placed within a spherical target"""
+
+    # Scene settings
+    position = (12.0, 15.0, 0.2) * u.m
+    radius = 100.0 * u.m
+    # light settings
+    budget = 1e9
+    t0 = 10.0 * u.ns
+    lam = 400.0 * u.nm
+    # tracer settings
+    max_length = 64
+    maxTime = float("inf")
+    # simulation settings
+    batch_size = 512 * 1024
+    n_batches = 40
+
+    # create medium
+    model = MediumModel(mu_a, mu_s, g)
+    medium = model.createMedium(physicModel=Attenuating())
+    store = MaterialStore([], media=[medium])
+    medIdx = store.media["homogenous"]
+    # create tracer
+    ray = UnpolarizedRay()
+    rng = PhiloxRNG(key=0xC0FFEE)
+    photons = UniformWavelengthSource(lambdaRange=(lam, lam))
+    light = SphericalLightSource(
+        photons,
+        mediumIdx=medIdx,
+        position=position,
+        timeRange=(t0, t0),
+        budget=budget,
+    )
+    camera = SphereCamera(mediumIdx=medIdx, position=position, radius=-radius)
+    # make target a bit larger to not occlude the camera
+    target = InnerSphereTarget(position=position, radius=radius * 1.001)
+    recorder = HitRecorder()
+    tracer = VolumeBackwardTracer(
+        batch_size,
+        ray,
+        light,
+        camera,
+        photons,
+        recorder,
+        rng,
+        store,
+        volume="homogenous",
+        maxPathLength=max_length,
+        target=target,
+        maxTime=maxTime,
+        sampleCoefficient=sampleCoef,
+        disableDirectLighting=disableDirect,
+    )
+    rng.autoAdvance = tracer.nRNGSamples
+
+    # create pipeline + scheduler
+    process = UndoAttenuationProcessFn(recorder, model, t0)
+    pipeline = pl.Pipeline(tracer.collectStages())
+    scheduler = pl.PipelineScheduler(pipeline, processFn=process)
+    # create batches
+    tasks = [{}] * n_batches
+    scheduler.schedule(tasks)
+    scheduler.wait()
+    # destroy scheduler to allow for freeing resources
+    scheduler.destroy()
+    hp.checkCurrentDeviceHealth()
+
+    # calculate direct contribution without attenuation
+    directContrib = budget * np.exp(-mu_s * radius)
+    # calculate expected contribution
+    contrib = budget - directContrib if disableDirect else budget
+    # check for energy conservation
+    estimate = process.total / (batch_size * n_batches)
+    thres = 0.02 if disableDirect else 5e-3  # give more leeway
+    assert np.abs(estimate / contrib - 1.0) < thres
+
+
+@pytest.mark.parametrize(
+    "mu_a,mu_s,g,disableDirect",
+    [
+        (0.0, 0.005, 0.0, False),
+        (0.0, 0.005, 0.0, True),
+        (0.05, 0.01, 0.0, False),
+        (0.05, 0.01, 0.0, True),
+        (0.05, 0.01, -0.9, False),
+        (0.05, 0.01, 0.9, False),
+    ],
+)
+@pytest.mark.parametrize("sampleCoef", [float("NaN"), 0.02])
+def test_SceneBackwardTracer(
+    mu_a: float,
+    mu_s: float,
+    g: float,
+    disableDirect: bool,
+    sampleCoef: float,
+):
+    """Similar to SceneForwardTracer_GroundTruth, but use backward tracer instead"""
+    if not isRayTracingEnabled():
+        pytest.skip("Ray tracing is not supported")
+
+    # Scene settings
+    position = (12.0, 15.0, 0.2) * u.m
+    radius = 50.0 * u.m
+    # Light settings
+    budget = 1e9
+    t0 = 10.0 * u.ns
+    lam = 400.0 * u.nm  # doesn't really matter
+    # tracer settings
+    max_length = 16
+    maxTime = float("inf")
+    # simulation settings
+    batch_size = 2 * 1024 * 1024
+    n_batches = 20
+
+    # create materials
+    model = MediumModel(mu_a, mu_s, g)
+    medium = model.createMedium(physicModel=Attenuating())
+    material = Material("det", medium, None, AbsorbingSurface(), flags="DB")
+    matStore = MaterialStore([material])
+    medIdx = matStore.media["homogenous"]
+
+    # create scene
+    meshStore = MeshStore({"sphere": "assets/sphere.stl"})
+    trafo = Transform.TRS(scale=radius, translate=position)
+    target = meshStore.createInstance("sphere", "det", trafo, detectorId=0)
+    scene = Scene([target], matStore)
+    # the mesh is not really a sphere
+    # to prevent all camera rays to be produced outside, we need to scale camera
+    r_scale = 0.99547149974733 * u.m  # radius of inscribed sphere (icosphere)
+    r_insc = radius * r_scale
+
+    # create light (delta pulse)
+    photons = UniformWavelengthSource(lambdaRange=(lam, lam))
+    light = SphericalLightSource(
+        photons,
+        mediumIdx=medIdx,
+        position=position,
+        timeRange=(t0, t0),
+        budget=budget,
+    )
+    # create camera
+    camera = SphereCamera(mediumIdx=medIdx, position=position, radius=-r_insc)
+    # create tracer
+    ray = UnpolarizedRay()
+    rng = PhiloxRNG(key=0xC0FFEE)
+    recorder = HitRecorder()
+    tracer = SceneBackwardTracer(
+        batch_size,
+        ray,
+        light,
+        camera,
+        photons,
+        recorder,
+        rng,
+        scene,
+        maxPathLength=max_length,
+        maxTime=maxTime,
+        sampleCoefficient=sampleCoef,
+        disableDirectLighting=disableDirect,
+    )
+    rng.autoAdvance = tracer.nRNGSamples
+
+    # create pipeline + scheduler
+    process = UndoAttenuationProcessFn(recorder, model, t0)
+    pipeline = pl.Pipeline(tracer.collectStages())
+    scheduler = pl.PipelineScheduler(pipeline, processFn=process)
+    # create batches
+    tasks = [{}] * n_batches
+    scheduler.schedule(tasks)
+    scheduler.wait()
+    # destroy scheduler to allow for freeing resources
+    scheduler.destroy()
+    hp.checkCurrentDeviceHealth()
+
+    # calculate direct contribution without attenuation
+    directContrib = budget * np.exp(-mu_s * r_insc)
+    # calculate expected contribution
+    contrib = budget - directContrib if disableDirect else budget
+
+    # check for energy conservation
+    estimate = process.total / (batch_size * n_batches)
+    assert np.abs(estimate / contrib - 1.0) < 6e-3

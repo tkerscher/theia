@@ -21,7 +21,8 @@ ResultCode combineRays(
     result = propagate(
         ray,
         distance(ray.position, source.position),
-        false, false,
+        true, //treat as if we hit the light source for correct propagation
+        false,
         params,
         idx, dim
     );
