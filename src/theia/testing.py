@@ -17,7 +17,7 @@ from theia.random import RNG
 from theia.ray import RayModel
 from theia.scene import RectBBox, Transform
 from theia.surface import SurfaceModel
-from theia.target import LightSourceTarget, Target
+from theia.target import LightSourceTarget, Target, TargetGuide
 import theia.units as u
 
 
@@ -446,8 +446,9 @@ class TargetSampler(PipelineStage):
         Target to draw samples from
     rng: RNG
         Random number generator
-    sampleBox: RectBBox
+    sampleBox: RectBBox | None, default=None
         Rectangular box from which the observer position will be sampled.
+        If `None`, defaults to a centered cube with 40m side length.
     """
 
     class Item(Structure):
@@ -534,6 +535,115 @@ class TargetSampler(PipelineStage):
         order suitable for creating a pipeline.
         """
         return [self.rng, self.target, self]
+
+    def run(self, i: int) -> list[hp.Command]:
+        for stage in self.collectStages():
+            stage.bindParams(self._program, i)
+        groups = -(self.batchSize // -512)
+        return [
+            self._program.dispatch(groups),
+            *self._queue.run(i),
+        ]
+
+
+class TargetGuideSampler(PipelineStage):
+    """
+    Test program for sampling target guide.
+
+    Parameters
+    ----------
+    batchSize: int
+        Number of samples to draw per run
+    guide: TargetGuide
+        TargetGuide to draw samples from
+    rng: RNG
+        Random number generator
+    sampleBox: RectBBox | None, default=None
+        Rectangular box from which the observer position will be sampled.
+        If `None`, defaults to a centered cube with 40m side length.
+    """
+
+    class Item(Structure):
+        _fields_ = [
+            ("observer", c_float * 3),
+            ("sampleDir", c_float * 3),
+            ("sampleDist", c_float),
+            ("sampleProb", c_float),
+            ("evalDir", c_float * 3),
+            ("evalDist", c_float),
+            ("evalProb", c_float),
+        ]
+
+    class SamplerParams(Structure):
+        _fields_ = [
+            ("_queueAdr", buffer_reference),
+            ("_queueSize", c_uint32),
+            ("_bboxMin", vec3),
+            ("_bboxMax", vec3),
+        ]
+
+    def __init__(
+        self,
+        batchSize: int,
+        guide: TargetGuide,
+        *,
+        rng: RNG,
+        sampleBBox: RectBBox | None = None,
+    ) -> None:
+        super().__init__({"SamplerParams": TargetGuideSampler.SamplerParams})
+        if sampleBBox is None:
+            sampleBBox = RectBBox((-20.0, -20.0, -20.0) * u.m, (20.0, 20.0, 20.0) * u.m)
+
+        self._guide = guide
+        self._rng = rng
+        self._batch = batchSize
+        self._queue = IOQueue(
+            TargetGuideSampler.Item,
+            batchSize,
+            mode="retrieve",
+            skipCounter=True,
+        )
+        assert self._queue.tensor is not None
+        self.setParams(
+            _queueAdr=self._queue.tensor.address,
+            _queueSize=batchSize,
+            _bboxMin=sampleBBox.lowerCorner,
+            _bboxMax=sampleBBox.upperCorner,
+        )
+
+        headers = {
+            "rng.glsl": rng.sourceCode,
+            "target_guide.glsl": guide.sourceCode,
+        }
+        code = compileShader("target_guide/sample.glsl", "", headers)
+        self._program = hp.Program(code)
+
+    @property
+    def batchSize(self) -> int:
+        """Number of samples to draw per run"""
+        return self._queueSize
+
+    @property
+    def guide(self) -> TargetGuide:
+        """Target guide being sampled"""
+        return self._guide
+
+    @property
+    def queue(self) -> IOQueue:
+        """Queue containing samples"""
+        return self._queue
+
+    @property
+    def rng(self) -> RNG:
+        """Random number generator"""
+        return self._rng
+
+    def collectStages(self) -> list[PipelineStage]:
+        """
+        Returns a list of all stages involved with this sampler in the correct
+        order suitable for creating a pipeline.
+        """
+        return [self.rng, self.guide, self]
 
     def run(self, i: int) -> list[hp.Command]:
         for stage in self.collectStages():

@@ -46,10 +46,11 @@ def test_sphereTargetGuide():
     philox = PhiloxRNG(key=0xC0FFEE)
     sampler = TargetGuideSampler(N, guide, rng=philox)
     # run
-    runPipeline([philox, guide, sampler])
+    runPipeline(sampler.collectStages())
 
     # check results
-    r = sampler.getResults(0)
+    r = sampler.queue.view(0)
+    assert len(r) > 0
     pos = np.array(pos)
     d = dist(pos, r["observer"])
     valid = d > radius
@@ -91,10 +92,11 @@ def test_diskTargetGuide():
     philox = PhiloxRNG(key=0xC0FFEE)
     sampler = TargetGuideSampler(N, guide, rng=philox)
     # run
-    runPipeline([philox, guide, sampler])
+    runPipeline(sampler.collectStages())
 
     # check results
-    r = sampler.getResults(0)
+    r = sampler.queue.view(0)
+    assert len(r) > 0
     objObs = w2o.apply(r["observer"])
     valid = objObs[:, 2] > 0.0
     assert np.all((r["sampleProb"] > 0.0) == valid)
@@ -149,10 +151,11 @@ def test_flatTargetGuide():
     philox = PhiloxRNG(key=0xC0FFEE)
     sampler = TargetGuideSampler(N, guide, rng=philox)
     # run
-    runPipeline([philox, guide, sampler])
+    runPipeline(sampler.collectStages())
 
     # check results
-    r = sampler.getResults(0)
+    r = sampler.queue.view(0)
+    assert len(r) > 0
     objObs = w2o.apply(r["observer"])
     valid = objObs[:, 2] > 0.0
     assert np.all((r["sampleProb"] > 0.0) == valid)
