@@ -247,11 +247,6 @@ class TrackRecordCallback(TraceEventCallback):
         return self._length
 
     @property
-    def polarized(self) -> bool:
-        """Whether polarization state is recorded"""
-        return self._polarized
-
-    @property
     def retrieve(self) -> bool:
         """Wether to retrieve the tracks from the device"""
         return self._retrieve
