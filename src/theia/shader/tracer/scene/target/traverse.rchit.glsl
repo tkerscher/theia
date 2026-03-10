@@ -7,14 +7,15 @@
 #include "surface.glsl"
 #include "response.glsl"
 
+#include "tracer/scene/target/config.glsl"
 #include "tracer/scene/volume/proxy.glsl"
-#include "tracer/propagate/forward.glsl"
+#include "tracer/scene/target/propagate.glsl"
 #include "scene/intersect.glsl"
 
-#include "tracer/scene/forward/io.glsl"
+#include "tracer/scene/target/io.glsl"
 
 #ifndef DISABLE_NEE
-#include "tracer/scene/forward/nee.glsl"
+#include "tracer/scene/target/nee.glsl"
 #endif
 
 //mapping from TLAS instance -> objectId
@@ -53,11 +54,11 @@ void main() {
     //the tracing loop. Otherwise, do it here.
     #ifdef DISABLE_NEE
     //did we hit a target?
-    bool isDet = (hit.flags & MATERIAL_DETECTOR_BIT) != 0;
+    bool isTarget = (hit.flags & MATERIAL_TARGET_BIT) != 0;
     //do we have a filter on the objectId? (0x80000000 marks no filter)
     int objectId = objectIdMap[gl_InstanceID];
     bool filtered = params.targetId != 0x80000000 && params.targetId != objectId;
-    if (isDet && !filtered) {
+    if (isTarget && !filtered) {
         HitItem item;
         bool success = processSurfaceTargetHit(
             traceData.ray,

@@ -1,12 +1,15 @@
 #ifndef _INCLUDE_TRACER_SCENE_FORWARD_NEE
 #define _INCLUDE_TRACER_SCENE_FORWARD_NEE
 
+//should already be included -> skip
+// #include "tracer/scene/target/config.glsl"
+
 #include "target_guide/common.glsl"
 #include "target.glsl"
 
 layout(location = 1) rayPayloadEXT NeeData neeData;
 
-void traceNEE(ForwardRay ray, float dist, float weight, uvec2 tlas, inout uint dim) {
+void traceNEE(TRACE_RAY ray, float dist, float weight, uvec2 tlas, inout uint dim) {
     //don't bother tracing if we don't expect any contribution
     if (weight == 0) return;
 
@@ -34,7 +37,7 @@ void traceNEE(ForwardRay ray, float dist, float weight, uvec2 tlas, inout uint d
     dim = neeData.dim;
 }
 
-void traceNEE(ForwardRay ray, uvec2 tlas, inout uint dim) {
+void traceNEE(TRACE_RAY ray, uvec2 tlas, inout uint dim) {
     //check if we have a chance to hit target
     TargetGuideSample guideSample = evalTargetGuide(ray.position, ray.direction);
     if (guideSample.prob == 0) return;

@@ -6,7 +6,7 @@ import numpy as np
 
 from itertools import product
 
-from theia.camera import FlatCamera, SphereCamera
+from theia.camera import FlatCamera, PointCamera, SphereCamera
 from theia.device import isRayTracingEnabled
 from theia.light import PencilLightSource, SphericalLightSource, UniformWavelengthSource
 from theia.material import Material, MaterialStore, getPropertySamples, VACUUM_IDX
@@ -139,7 +139,10 @@ def test_TrackRecordCallback():
     # check result codes in range
     minCode = min(code.value for code in theia.trace.EventResultCode)
     maxCode = max(code.value for code in theia.trace.EventResultCode)
-    assert minCode <= codes.min() and codes.max() <= maxCode
+    # codes after the individual path length are undefined and have to be filtered out
+    for i in range(N):
+        c = codes[i, : lengths[i].item()]
+        assert minCode <= c.min() and c.max() <= maxCode
 
 
 def _parameterize_VolumeForwardTracer():
@@ -829,6 +832,137 @@ def test_SceneForwardTracer(
         sampleCoefficient=0.0 if disableScattering else float("NaN"),
         maxTime=T_MAX,
         targetId=1 if targetId else None,
+        targetGuide=targetGuide if guide else None,
+        disableDirectLighting=disableDirect,
+    )
+    # run pipeline
+    pl.runPipeline(tracer.collectStages())
+    hp.checkCurrentDeviceHealth()
+
+    # check hits
+    assert recorder.queue is not None
+    hits = recorder.queue.view(0)
+
+    assert hits.count > 0
+    assert hits.count <= tracer.maxHits
+    hits = hits[: hits.count]
+
+    # check config via stats
+    assert stats.created == N
+    assert stats.mismatch == 0
+    assert stats.absorbed > 0
+    assert stats.volume > 0
+    if disableScattering:
+        assert stats.scattered == 0
+    else:
+        assert stats.scattered > 0
+
+    r_hits = np.sqrt(np.square(hits["position"]).sum(-1))
+    assert np.all((r_hits <= 1.0) & (r_hits >= r_scale))
+    assert np.allclose(np.square(hits["normal"]).sum(-1), 1.0)
+    assert np.min(hits["time"]) >= t_min
+    assert np.max(hits["time"]) <= T_MAX
+    if targetId:
+        assert np.all(hits["objectId"] == 1)
+    else:
+        assert np.all((hits["objectId"] == 1) | (hits["objectId"] == 2))
+
+
+# TODO: Maybe a bit excessive on the amount of configs...
+@pytest.mark.parametrize("guide", [True, False])
+@pytest.mark.parametrize("targetId", [True, False])
+@pytest.mark.parametrize("inlineVolumeModels", [True, False])
+@pytest.mark.parametrize("disableDirect", [True, False])
+@pytest.mark.parametrize("disableScattering", [True, False])
+def test_SceneBackwardTargetTracer(
+    guide: bool,
+    targetId: bool,
+    inlineVolumeModels: bool,
+    disableDirect: bool,
+    disableScattering: bool,
+) -> None:
+    if not isRayTracingEnabled():
+        pytest.skip("ray tracing is not supported")
+
+    N = 32 * 256
+    MAX_LENGTH = 10
+    T0, T1 = 10.0 * u.ns, 20.0 * u.ns
+    T_MAX = 1.0 * u.us
+    capacity = 48 * 256
+    cam_pos = (-1.0, -7.0, -10.0) * u.m
+
+    # create materials
+    attenuate = Attenuating()
+    absorbing = Attenuating(absorb=True)
+    water = PureWaterModel().createMedium(physicModel=attenuate)
+    water2 = PureWaterModel().createMedium(physicModel=absorbing, name="water2")
+    glass = BK7Model().createMedium()
+    absorber = AbsorbingSurface()
+    border = BorderSurface()
+    dielectric = DielectricSurface()
+    mat = Material("mat", glass, water, dielectric, flags=("RL", "B"))
+    matAbs = Material("abs", None, water, absorber)
+    matVol = Material("vol", water if inlineVolumeModels else water2, water, border)
+    matStore = MaterialStore([mat, matAbs, matVol])
+    waterIdx = matStore.media["water"]
+    if inlineVolumeModels:
+        assert len(matStore.volumeModels) == 2
+    else:
+        assert len(matStore.volumeModels) == 3
+    # create scene
+    # it will consist of 6 spheres arranged in an octahedron
+    store = MeshStore({"cube": "assets/cube.ply", "sphere": "assets/sphere.stl"})
+    r, d = 40.0 * u.m, 5.0 * u.m
+    a = 60.0 * u.m  # >= (2r+d) / sqrt(2) = min dist between spheres
+    r_scale = 0.99547149974733 * u.m  # radius of inscribed sphere (icosphere)
+    r_insc = r * r_scale
+    x, y, z = 10.0, 5.0, -5.0
+    _t = lambda dx, dy, dz: Transform.TRS(scale=r, translate=(x + dx, y + dy, z + dz))
+    instances = [
+        store.createInstance("sphere", "mat", _t(0, 0, a), detectorId=1),
+        store.createInstance("sphere", "mat", _t(0, 0, -a), detectorId=2),
+        store.createInstance("sphere", "abs", _t(0, a, 0)),
+        store.createInstance("sphere", "abs", _t(0, -a, 0)),
+        store.createInstance("sphere", "vol", _t(a, 0, 0)),
+        store.createInstance("sphere", "vol", _t(-a, 0, 0)),
+    ]
+    scene = Scene(instances, matStore)
+    targetGuide = SphereTargetGuide(position=(-x, -y, z + r + d), radius=r)
+
+    # calculate min time
+    if targetId:
+        # detector #1 is farther away
+        target_pos = (x, y, z + a) * u.m  # detector #1
+        d_min = np.sqrt(np.square(np.subtract(target_pos, cam_pos)).sum(-1)) - r
+    else:
+        target_pos = (x, y, z - a) * u.m  # detector #2
+        d_min = np.sqrt(np.square(np.subtract(target_pos, cam_pos)).sum(-1)) - r
+    vg = theia.material.getPropertySamples(water, "group_velocity")
+    assert vg is not None
+    v_max = np.max(vg)
+    t_min = d_min / v_max + T0
+
+    # create pipeline
+    ray = UnpolarizedRay()
+    rng = PhiloxRNG(key=0xC01DC0FFEE)
+    photons = UniformWavelengthSource()
+    camera = PointCamera(mediumIdx=waterIdx, position=cam_pos, timeDelta=T0)
+    recorder = HitRecorder()
+    stats = theia.trace.EventStatisticCallback()
+    tracer = theia.trace.SceneBackwardTargetTracer(
+        N,
+        ray,
+        camera,
+        photons,
+        recorder,
+        rng,
+        scene,
+        capacity=capacity,
+        callback=stats,
+        maxPathLength=MAX_LENGTH,
+        targetId=1 if targetId else None,
+        sampleCoefficient=0.0 if disableScattering else float("NaN"),
+        maxTime=T_MAX,
         targetGuide=targetGuide if guide else None,
         disableDirectLighting=disableDirect,
     )

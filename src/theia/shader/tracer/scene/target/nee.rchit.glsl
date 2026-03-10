@@ -7,11 +7,12 @@
 #include "surface.glsl"
 #include "response.glsl"
 
+#include "tracer/scene/target/config.glsl"
 #include "tracer/scene/volume/proxy.glsl"
-#include "tracer/propagate/forward.glsl"
+#include "tracer/scene/target/propagate.glsl"
 #include "scene/intersect.glsl"
 
-#include "tracer/scene/forward/io.glsl"
+#include "tracer/scene/target/io.glsl"
 
 //mapping from TLAS instance -> objectId
 readonly buffer ObjectIdMap{ int objectIdMap[]; };
@@ -26,9 +27,9 @@ void main() {
     ResultCode result = resolveIntersection(neeData.ray.mediumIdx, barys, hit);
     if (result < 0) return;
 
-    //check if we hit a detector
-    bool isDet = (hit.flags & MATERIAL_DETECTOR_BIT) != 0;
-    if (!isDet) return;
+    //check if we hit a target
+    bool isTarget = (hit.flags & MATERIAL_TARGET_BIT) != 0;
+    if (!isTarget) return;
     //check if we have a filter on acceptable targets
     //0x80000000 marks no filter (int32 min value)
     int objectId = objectIdMap[gl_InstanceID];

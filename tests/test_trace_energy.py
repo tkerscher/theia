@@ -5,9 +5,10 @@ import hephaistos as hp
 import hephaistos.pipeline as pl
 from hephaistos.queue import dumpQueue
 
-from theia.camera import SphereCamera
+from theia.camera import PointCamera, SphereCamera
 from theia.device import isRayTracingEnabled
-from theia.light import SphericalLightSource, UniformWavelengthSource
+from theia.light import ConstWavelengthSource, UniformWavelengthSource
+from theia.light import SphericalLightSource
 from theia.material import Material, MaterialStore
 from theia.material import DispersionFreeMedium, HenyeyGreensteinPhaseFunction
 from theia.ray import UnpolarizedRay
@@ -19,10 +20,15 @@ from theia.response import (
 )
 from theia.random import PhiloxRNG
 from theia.scene import MeshStore, Scene, Transform
-from theia.surface import AbsorbingSurface
+from theia.surface import AbsorbingSurface, DielectricSurface
 from theia.target import InnerSphereTarget, SphereTargetGuide
-from theia.trace import SceneBackwardTracer, SceneForwardTracer
-from theia.trace import VolumeBackwardTracer, VolumeForwardTracer
+from theia.trace import (
+    SceneBackwardTracer,
+    SceneBackwardTargetTracer,
+    SceneForwardTracer,
+    VolumeBackwardTracer,
+    VolumeForwardTracer,
+)
 from theia.volume import Attenuating
 import theia.units as u
 
@@ -727,3 +733,86 @@ def test_SceneBackwardTracer(
     # check for energy conservation
     estimate = process.total / (batch_size * n_batches)
     assert np.abs(estimate / contrib - 1.0) < 6e-3
+
+
+@pytest.mark.parametrize("sampleCoef", [float("NaN"), 0.3])
+def test_SceneBackwardTargetTracer(sampleCoef: float) -> None:
+    if not isRayTracingEnabled():
+        pytest.skip("ray tracing not supported")
+
+    # scene settings
+    position = (12.0, 15.0, 0.2) * u.m
+    cam_pos = (10.0, 16.0, 0.0) * u.m  # offset camera
+    radius = 10.0 * u.m
+    radius_inner = 5.0 * u.m
+    # the mesh is not really a sphere
+    # to prevent all camera rays to be produced outside, we need to scale camera
+    r_scale = 0.99547149974733 * u.m  # radius of inscribed sphere (icosphere)
+    r_insc = radius * r_scale
+    t0 = 10.0 * u.ns
+    lam = 400.0 * u.nm  # doesn't really matter
+    # tracer settings
+    max_length = 40
+    maxTime = float("inf")
+    # simulation settings
+    batch_size = 1024 * 1024
+    n_batches = 20
+
+    # create both media and material. Use Vacuum for outside
+    # set mu_a=0 so we can skip the calculation to remove it
+    n_inner, n_outer = 1.2, 1.8
+    model = lambda n: MediumModel(0.0, 0.04, 0.9, n=n, ng=n)
+    m_inner = model(n_inner).createMedium(name="inner", physicModel=Attenuating())
+    m_outer = model(n_outer).createMedium(name="outer", physicModel=Attenuating())
+    mat_det = Material("det", m_outer, None, AbsorbingSurface(), flags="BL")
+    # need both reflection and transmission to recover all the energy
+    mat_inner = Material("inner", m_inner, m_outer, DielectricSurface(), flags="TR")
+    matStore = MaterialStore([mat_det, mat_inner])
+    medIdx = matStore.media["inner"]
+
+    # create scene
+    meshStore = MeshStore({"sphere": "assets/sphere.stl"})
+    t_inner = Transform.TRS(scale=radius_inner, translate=position)
+    t_det = Transform.TRS(scale=radius, translate=position)
+    inner = meshStore.createInstance("sphere", "inner", t_inner)
+    det = meshStore.createInstance("sphere", "det", t_det, detectorId=1)
+    scene = Scene([inner, det], matStore)
+
+    # create tracer
+    ray = UnpolarizedRay()
+    rng = PhiloxRNG(key=0xC0FFEE)
+    photons = ConstWavelengthSource(lam)
+    camera = PointCamera(mediumIdx=medIdx, position=cam_pos, timeDelta=t0)
+    response = HistogramHitResponse(
+        UniformValueResponse(), binCount=400, binSize=100.0 * u.ns
+    )
+    tracer = SceneBackwardTargetTracer(
+        batch_size,
+        ray,
+        camera,
+        photons,
+        response,
+        rng,
+        scene,
+        maxPathLength=max_length,
+        targetId=1,
+        sampleCoefficient=sampleCoef,
+        maxTime=maxTime,
+    )
+    rng.autoAdvance = tracer.nRNGSamples
+    # create pipeline + scheduler
+    hists = []
+    process = lambda c, b, a: hists.append(np.copy(response.result(c)))
+    pipeline = pl.Pipeline(tracer.collectStages())
+    scheduler = pl.PipelineScheduler(pipeline, processFn=process)
+    scheduler.schedule([{}] * n_batches)
+    scheduler.wait()
+    # destroy scheduler to allow for freeing resources
+    scheduler.destroy()
+    # combine histograms
+    hist = np.mean(hists, 0)
+    estimate = hist.sum()
+
+    # check estimate
+    expected = 4.0 * np.pi * (n_inner / n_outer) ** 2
+    assert abs(estimate / expected - 1.0) < 0.002

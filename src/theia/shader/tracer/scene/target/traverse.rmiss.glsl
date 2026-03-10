@@ -5,10 +5,11 @@
 #include "rng.glsl"
 #include "volume.glsl"
 
+#include "tracer/scene/target/config.glsl"
+#include "tracer/scene/target/propagate.glsl"
 #include "tracer/scene/volume/index.glsl"
-#include "tracer/propagate/forward.glsl"
 
-#include "tracer/scene/forward/io.glsl"
+#include "tracer/scene/target/io.glsl"
 
 layout(location = 0) rayPayloadInEXT TraceData traceData;
 
@@ -16,10 +17,10 @@ layout(location = 0) rayPayloadInEXT TraceData traceData;
 //are trivially zero and we can skip them altogether.
 #if !defined(VOLUME_MODEL_NO_SCATTERING) && !defined(DISABLE_NEE)
 
-#include "tracer/scene/forward/nee.glsl"
+#include "tracer/scene/target/nee.glsl"
 
 void traceNEE(
-    ForwardRay ray,
+    TRACE_RAY ray,
     vec3 newDir,
     float dist,
     float weight,
@@ -50,7 +51,7 @@ void traceNEE(
 //
 //  ^^^^^^ MIS weight divided by IS probability
 
-void sampleTargetMIS(ForwardRay ray, inout uint dim) {
+void sampleTargetMIS(TRACE_RAY ray, inout uint dim) {
     //Here we'll use the following naming scheme: pXY, where:
     // X: prob, evaluated distribution
     // Y: sampled distribution

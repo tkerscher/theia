@@ -7,19 +7,20 @@
 #include "photon.glsl"
 #include "source.glsl"
 
+#include "tracer/scene/target/config.glsl"
 #include "tracer/scene/volume/proxy.glsl"
-#include "tracer/propagate/forward.glsl"
+#include "tracer/scene/target/propagate.glsl"
 
-#include "tracer/scene/forward/io.glsl"
+#include "tracer/scene/target/io.glsl"
 
 #ifndef DISABLE_NEE
-#include "tracer/scene/forward/nee.glsl"
+#include "tracer/scene/target/nee.glsl"
 #endif
 
 layout(location = 0) rayPayloadEXT TraceData traceData;
 
 ResultCode trace(
-    inout ForwardRay ray,
+    inout TRACE_RAY ray,
     inout uint dim
 ) {
     //sample distance to propagate in volume
@@ -57,9 +58,22 @@ void main() {
     if (idx >= params.batchSize) return;
     #endif
 
+    //sample source
+    #if TRACE_DIRECTION ==  TRACE_DIRECTION_FORWARD
     //sample light ray
     ForwardRay ray = sampleLight(idx, dim);
     onEvent(ray, RESULT_CODE_RAY_CREATED, idx, 0);
+    #elif TRACE_DIRECTION == TRACE_DIRECTION_BACKWARD
+    //sample camera
+    float lambdaContrib;
+    float lambda = sampleWavelength(lambdaContrib, idx, dim);
+    CameraHit camHit;
+    BackwardRay ray = sampleCameraRay(lambda, camHit, idx, dim);
+    ray.lin_contrib *= lambdaContrib;
+    onEvent(ray, RESULT_CODE_RAY_CREATED, idx, 0);
+    #else
+    #error "Invalid trace direction"
+    #endif
 
     //Direct light sampling by extending ray to light source
     #if !defined(DISABLE_DIRECT_LIGHTING) && !defined(DISABLE_NEE)

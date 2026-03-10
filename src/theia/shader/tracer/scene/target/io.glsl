@@ -9,13 +9,13 @@ uniform TraceParams {
 } params;
 
 struct TraceData{
-    ForwardRay ray;
+    TRACE_RAY ray;
     uint dim;
     ResultCode result;
 };
 
 struct NeeData {
-    ForwardRay ray;
+    TRACE_RAY ray;
     float weight;
     uint dim;
 };
