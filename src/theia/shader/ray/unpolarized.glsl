@@ -311,6 +311,28 @@ HitItem createHit(
 
 #ifndef RAY_PARTICLE
 
+HitItem createHit(
+    const BackwardRay ray,
+    vec3 objHitPosition,
+    vec3 objHitNormal,
+    int objectId,
+    mat3 worldToObj
+) {
+    //transform ray direction to object space
+    vec3 objHitDir = normalize(worldToObj * ray.direction);
+    return HitItem(
+        objHitPosition,
+        objHitDir,
+        objHitNormal,
+        objectId,
+        ray.wavelength
+        #ifdef RAY_TRANSIENT
+        ,ray.time
+        #endif
+        ,ray.lin_contrib * exp(ray.log_contrib)
+    );
+}
+
 ResultCode combineRaysAligned(
     ForwardRay forward,
     BackwardRay backward,
