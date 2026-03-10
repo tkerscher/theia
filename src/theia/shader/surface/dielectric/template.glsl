@@ -42,6 +42,51 @@ SurfaceProperties prepareSurface(
     return SurfaceProperties(r, n_i, n_o, doReflect);
 }
 
+bool processSurfaceTargetHit(
+    RAY ray,
+    const SurfaceHit hit,
+    const SurfaceProperties props,
+    int objectId,
+    out HitItem item,
+    uint idx, inout uint dim
+) {
+    //if requested, transmit ray before detecting
+    //(this does not change ray contribution)
+    bool transmitHit = (hit.flags & MATERIAL_TRANSMIT_HIT_BIT) != 0;
+    if (transmitHit) {
+        transmitRay(ray, hit);
+    }
+
+    #ifdef RAY_PARTICLE
+
+    //we can only detect whole particles -> ignore if we sampled reflection earlier
+    if (!props.doReflect) {
+        item = createHit(
+            ray,
+            hit.objPos,
+            hit.objNrm,
+            objectId,
+            hit.worldToObj
+        );
+    }
+    return !props.doReflect;
+
+    #else
+
+    //we have a local copy of the ray. Attenuate by reflectance before detecting
+    ray.lin_contrib *= (1.0 - props.reflectance);
+    item = createHit(
+        ray,
+        hit.objPos,
+        hit.objNrm,
+        objectId,
+        hit.worldToObj
+    );
+    return true;
+
+    #endif
+}
+
 ResultCode sampleSurfaceInteraction(
     inout RAY ray,
     const SurfaceHit hit,

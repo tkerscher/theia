@@ -9,4 +9,21 @@ ResultCode sampleSurfaceInteraction(
     return RESULT_CODE_RAY_ABSORBED;
 }
 
+bool processSurfaceTargetHit(
+    BackwardRay ray,
+    const SurfaceHit hit,
+    int objectId,
+    out HitItem item,
+    uint idx, inout uint dim
+) {
+    item = createHit(
+        ray,
+        hit.objPos,
+        hit.objNrm,
+        objectId,
+        hit.worldToObj
+    );
+    return true;
+}
+
 #endif

@@ -12,4 +12,15 @@ ResultCode sampleSurfaceInteraction(
     return result >= 0 ? RESULT_CODE_VOLUME_HIT : result;
 }
 
+bool processSurfaceTargetHit(
+    BackwardRay ray,
+    const SurfaceHit hit,
+    int objectId,
+    out HitItem item,
+    uint idx, inout uint dim
+) {
+    //volume borders cannot be detectors
+    return false;
+}
+
 #endif
