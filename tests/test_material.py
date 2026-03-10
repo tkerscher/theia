@@ -319,8 +319,8 @@ def test_serializeMaterial(tmp_path, rng):
     )
     # dummy material
     des = theia.surface.DielectricSurface()
-    mat1 = theia.material.Material("mat1", "med1", med2, des, flags=("R", "Tfb"))
-    mat2 = theia.material.Material("mat2", med1, None, des, flags=("B", "RbTf"))
+    mat1 = theia.material.Material("mat1", "med1", med2, des, flags=("RDt", "Tfb"))
+    mat2 = theia.material.Material("mat2", med1, None, des, flags=("BL", "RbTf"))
     mat2.properties = {
         "albedo": FloatProperty((1.0, 0.5)),
         "anisotropy": table(165, 1.0),

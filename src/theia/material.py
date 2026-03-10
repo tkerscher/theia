@@ -311,11 +311,21 @@ class MaterialFlags(IntFlag):
     unnoticed.
     """
 
+    TRANSMIT_HIT = 0x200
+    """
+    Indicates to the surface model, that it should use the transmitted ray to
+    create hits. If instead this bit is not set, the surface model may use the
+    incident or absorbed ray. The exact behavior depends on the specific surface
+    model.
+    """
+
 
 _materialFlagsMap = {
     "B": MaterialFlags.BLACK_BODY,
     "D": MaterialFlags.DETECTOR,
+    "Dt": MaterialFlags.DETECTOR | MaterialFlags.TRANSMIT_HIT,
     "L": MaterialFlags.LIGHT_SOURCE,
+    "Lt": MaterialFlags.LIGHT_SOURCE | MaterialFlags.TRANSMIT_HIT,
     "R": MaterialFlags.NO_REFLECT,
     "Rbf": MaterialFlags.NO_REFLECT,
     "Rfb": MaterialFlags.NO_REFLECT,
@@ -336,7 +346,8 @@ def parseMaterialFlags(flags: str) -> MaterialFlags:
     Parses the given string where each capital letter represents a flag as
     listed below. The flags `R` and `T` can further be specialized to only apply
     to forward or backward rays by appending a lower case `f` or `b`
-    respectively.
+    respectively. Similarly, `D` and `L` can be appended with `t` to set the
+    `TRANSMIT_HIT` bit.
 
     Flags:
      - `B` : `BLACK_BODY`

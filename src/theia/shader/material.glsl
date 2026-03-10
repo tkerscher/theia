@@ -68,8 +68,9 @@ const uint MATERIAL_NO_REFLECT_FWD_BIT      = 0x00000008; //Forward rays never r
 const uint MATERIAL_NO_REFLECT_BWD_BIT      = 0x00000010; //Backward rays never reflect
 const uint MATERIAL_NO_TRANSMIT_FWD_BIT     = 0x00000020; //Forward rays never transmit
 const uint MATERIAL_NO_TRANSMIT_BWD_BIT     = 0x00000040; //Backward rays never transmit
-const uint MATERIAL_VOLUME_BORDER_BIT       = 0x00000080; //No geometric effect on Rays
+// const uint MATERIAL_VOLUME_BORDER_BIT       = 0x00000080; //No geometric effect on Rays (deprecated)
 const uint MATERIAL_SKIP_MISMATCH_TEST_BIT  = 0x00000100; //Skip media mismatch test
+const uint MATERIAL_TRANSMIT_HIT_BIT        = 0x00000200; //Transmit hits before detection
 
 //util function for fetching media and flags
 //for material of the given idx, if inwards is true, fetches medium on the inside and
