@@ -288,8 +288,16 @@ class UniformWavelengthSource(WavelengthSource):
     lambdaRange: (float, float), default=(300.0, 700.0)
         min and max wavelength the source emits
     normalize: bool, default=True
-        If True, adds an extra factor of one over the lambdaRange to the
-        contribution to normalize the light source.
+        If True, sets the contribution per sampled wavelength to 1.0. Normally,
+        this would be the inverse sample probability, which here equals to the
+        lambda range.
+
+    Note
+    ----
+    In combination with light sources that allow settings the total amount of
+    photons per wavelength via e.g. a parameter `budget`, setting `normalize` to
+    `True` will make `budget` the total amount of photons regardless of
+    `lambdaRange`.
     """
 
     class SourceParams(Structure):
@@ -297,9 +305,6 @@ class UniformWavelengthSource(WavelengthSource):
             ("lambdaRange", vec2),
             ("_contrib", c_float),
         ]
-
-    # lazily load source code
-    source_code = None
 
     def __init__(
         self,
@@ -768,7 +773,7 @@ class ConeLightSource(LightSource):
         Cosine of the cones opening angle
     budget: float, default=1.0
         Total amount of energy or photons the light source distributes among the
-        sampled photons.
+        sampled photons per wavelength. Ignored if source emits particles.
     emitParticles: bool, default=False
         Whether to emit particles instead of rays. If so, `budget` will be
         ignored.
@@ -824,7 +829,7 @@ class ConeLightSource(LightSource):
     def budget(self) -> float:
         """
         Total energy or amount of photons the light source distributes among all
-        sampled rays. Ignored if source emits particles.
+        sampled rays per wavelength. Ignored if source emits particles.
         """
         return self._budget
 
@@ -884,7 +889,7 @@ class PencilLightSource(LightSource):
         start and stop time of the light source
     budget: float, default=1.0
         Total amount of energy or photons the light source distributes among the
-        sampled photons.
+        sampled photons per wavelength. Ignored if source emits particles.
     emitParticles: bool, default=False
         Whether to emit particles instead of rays. If so, `budget` will be
         ignored.
@@ -934,7 +939,7 @@ class PencilLightSource(LightSource):
     def budget(self) -> float:
         """
         Total energy or amount of photons the light source distributes among all
-        sampled rays. Ignored if source emits particles.
+        sampled rays per wavelength. Ignored if source emits particles.
         """
         return self._budget
 
@@ -972,7 +977,7 @@ class SphericalLightSource(LightSource):
         start and stop time of the light source
     budget: float, default=1.0
         Total amount of energy or photons the light source distributes among the
-        sampled photons.
+        sampled photons per wavelength. Ignored if source emits particles.
     emitParticles: bool, default=False
         Whether to emit particles instead of rays. If so, `budget` will be
         ignored.
@@ -1020,7 +1025,7 @@ class SphericalLightSource(LightSource):
     def budget(self) -> float:
         """
         Total energy or amount of photons the light source distributes among all
-        sampled rays. Ignored if source emits particles.
+        sampled rays per wavelength. Ignored if source emits particles.
         """
         return self._budget
 
