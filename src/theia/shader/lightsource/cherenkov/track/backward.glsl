@@ -31,10 +31,7 @@ ForwardRay sampleLight(
     vec3 rayDir = normalize(observer - position);
 
     //calculate contribution
-    float cos_nrm = (normal == vec3(0.0)) ? 1.0 : dot(rayDir, normal);
-    //set cosine to zero if we are on the wrong side (cos_nrm < 0.0)
-    cos_nrm = max(cos_nrm, 0.0);
-    float contrib = cos_nrm / distance(observer, position);
+    float contrib = abs(cos_theta) / distance(observer, position);
     //set contrib to zero if light source is not on track
     contrib *= float(mu >= 0.0 && mu <= lightParams.trackDist);
     //apply frank tamm if requested

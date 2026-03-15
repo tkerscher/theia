@@ -17,7 +17,7 @@ ForwardRay sampleLight(
     float u = random(idx, dim);
     float time = mix(lightParams.t_min, lightParams.t_max, u);
     //calculate contribution
-    float contrib = lightParams.contribBwd * dw_dA(lightParams.position, observer, normal);
+    float contrib = lightParams.contribBwd * dw_dA(lightParams.position, observer);
 
     //assemble ray
     return createForwardRay(

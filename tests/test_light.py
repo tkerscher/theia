@@ -275,9 +275,8 @@ def test_ConeLightSource_bwd():
     exp_dir /= d[:, None]
     assert np.allclose(result["direction"], exp_dir)
     assert np.all(startTime == 10.0 * u.ns)
-    cos_nrm = np.abs(np.multiply(result["normal"], result["direction"]).sum(-1))
     cos_angle = np.multiply(light_dir[None, :], result["direction"]).sum(-1)
-    exp_contrib = budget * cos_nrm / ((1.0 - light_opening) * 2.0 * np.pi * d**2)
+    exp_contrib = budget / ((1.0 - light_opening) * 2.0 * np.pi * d**2)
     exp_contrib = np.where(cos_angle >= light_opening, exp_contrib, 0.0)
     assert np.allclose(contrib, exp_contrib)
 
@@ -391,7 +390,7 @@ def test_SphericalLightSource_bwd():
     assert np.allclose(result["direction"], exp_dir)
     assert np.all(result["time"] == 10.0 * u.ns)
     cos_nrm = np.abs(np.multiply(result["normal"], result["direction"]).sum(-1))
-    exp_contrib = budget * cos_nrm / (4.0 * np.pi * d**2)
+    exp_contrib = budget / (4.0 * np.pi * d**2)
     # bit larger error, likely precission issues (float vs double)
     assert np.allclose(result["contrib"], exp_contrib, atol=1e-5)
 
@@ -517,8 +516,7 @@ def test_CherenkovLightSource_bwd(count: bool, frankTamm: bool):
     lam = result["wavelength"]
     n = model.refractive_index(lam)
     assert np.allclose(cos_theta, 1.0 / n)
-    cos_nrm = np.abs(np.multiply(result["direction"], result["normal"]).sum(-1))
-    exp_contrib = cos_nrm / d  # jacobian dA -> dw
+    exp_contrib = np.abs(cos_theta) / d  # jacobian dA -> dw
     if frankTamm:
         exp_contrib *= theia.light.frankTamm(lam, n, usePhotonCount=count)
         exp_contrib /= 2.0 * np.pi  # specific direction
@@ -846,12 +844,7 @@ def test_MuonTrackLightSource_bwd(
 
     # integrand
     def f(lam, x):
-        # evaluate frank tamm formula
         n = model.refractive_index(lam)
-        if frankTamm:
-            dN_dx = theia.light.frankTamm(lam, n, usePhotonCount=count)
-        else:
-            dN_dx = 2.0 * np.pi
         # calculate emission angle
         p = startPos + x * direction
         dir_p = observer - p
@@ -859,10 +852,14 @@ def test_MuonTrackLightSource_bwd(
         dir_p /= r
         cos_theta = np.multiply(dir_p, direction).sum()
         # evaluate emission profile
-        ang = trackAngularEmission_pdf(cos_theta, n, a=a_angular, b=b_angular)
-        area = 4.0 * np.pi * r**2
-
-        return dN_dx * energyScale * ang / area
+        result = trackAngularEmission_pdf(cos_theta, n, a=a_angular, b=b_angular)
+        result *= energyScale
+        result *= np.abs(cos_theta) / r**2  # jacobian dA -> dw
+        # apply frank tamm if requested
+        if frankTamm:
+            result *= theia.light.frankTamm(lam, n, usePhotonCount=count)
+            result /= 2.0 * np.pi
+        return result
 
     est, err = integrate.dblquad(f, 0, dist, *lam_range, epsrel=1e-4)
     est /= lam_range[1] - lam_range[0]
@@ -1062,13 +1059,11 @@ def test_ParticleCascadeLightSource_bwd(
         n = model.refractive_index(lam)
         result *= trackAngularEmission_pdf(cos_theta, n, a=a, b=b)
         result *= params["effectiveLength"]
-        result /= 4.0 * np.pi * (r**2)
+        result *= np.abs(cos_theta) / r**2  # jacobian dx -> dw
         # apply frank tamm, if requested
         if frankTamm:
             result *= theia.light.frankTamm(lam, n, usePhotonCount=count)
-        else:
-            # TODO: Check this. Not totally sure about it
-            result *= 2.0 * np.pi
+            result /= 2.0 * np.pi
         # done
         return result
 

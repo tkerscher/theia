@@ -31,7 +31,7 @@ ForwardRay sampleLight(
     float cos_theta = dot(rayDir, track.direction);
 
     //calculate contribution
-    float contrib = track.dist * dw_dA(rayPos, observer, normal); // 1 / p(x)
+    float contrib = track.dist * abs(cos_theta) * dw_dA(rayPos, observer); // 1 / p(x)
     contrib *= track.energyScale;
     contrib *= particle_evalEmissionAngle(n, track.a_angular, track.b_angular, cos_theta);
     //apply frank tamm if requested

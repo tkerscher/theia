@@ -30,7 +30,7 @@ ForwardRay sampleLight(
     float contrib = particle_evalEmissionAngle(
         n, cascade.a_angular, cascade.b_angular, cos_theta);
     //convert integral dA -> dw
-    contrib *= dw_dA(rayPos, observer, normal);
+    contrib *= abs(cos_theta) * dw_dA(rayPos, observer);
     
     //apply scaling factor
     contrib *= cascade.effectiveLength;

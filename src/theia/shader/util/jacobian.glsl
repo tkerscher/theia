@@ -12,7 +12,16 @@ float dw_dA(vec3 observer, vec3 target, vec3 normal) {
     dir = normalize(dir);
     
     float cos_nrm = (normal == vec3(0.0)) ? 1.0 : abs(dot(dir, normal));
-    return cos_nrm / r2;
+    float factor = cos_nrm / r2;
+    //if the division overflows, mark as invalid (return zero)
+    return isinf(factor) ? 0.0 : factor;
+}
+//specialization if we now normal is always zero vector
+float dw_dA(vec3 observer, vec3 target) {
+    vec3 dir = target - observer;
+    float factor = 1.0 / dot(dir, dir);
+    //if the division overflows, mark as invalid (return zero)
+    return isinf(factor) ? 0.0 : factor;
 }
 
 //jacobian transforming an integral over solid angled (dw) to one over area (dA)
@@ -27,6 +36,11 @@ float dA_dw(vec3 observer, vec3 target, vec3 normal) {
     //for dot(dir, nrm) near zero we might get inf as factor
     //-> mark as invalid (return zero)
     return isinf(factor) ? 0.0 : factor;
+}
+//specialization if we know normal is always zero vector
+float dA_dw(vec3 observer, vec3 target) {
+    vec3 dir = target - observer;
+    return dot(dir, dir);
 }
 
 #endif
