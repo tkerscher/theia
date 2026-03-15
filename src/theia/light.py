@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import scipy.constants as consts
 from scipy.integrate import quad
 from scipy.stats.sampling import NumericalInversePolynomial
 
@@ -25,6 +26,7 @@ from collections.abc import Callable
 from numpy.typing import ArrayLike, NDArray
 
 __all__ = [
+    "CherenkovLightSource",
     "ConeLightSource",
     "ConstWavelengthSource",
     "FunctionWavelengthSource",
@@ -32,12 +34,15 @@ __all__ = [
     "HostWavelengthSource",
     "LightSampler",
     "LightSource",
+    "MuonTrackLightSource",
+    "ParticleCascadeLightSource",
     "PencilLightSource",
     "SphericalLightSource",
     "StreamingHostLightSource",
     "StreamingHostWavelengthSource",
     "UniformWavelengthSource",
     "WavelengthSource",
+    "frankTamm",
 ]
 
 
@@ -1065,3 +1070,483 @@ class SphericalLightSource(LightSource):
         # -> divide contrib by parameter space volume
         c /= 4.0 * np.pi
         self.setParam("_contribBwd", c)
+
+
+def frankTamm(
+    wavelength: ArrayLike,
+    refractiveIndex: ArrayLike,
+    *,
+    beta: float = 1.0,
+    usePhotonCount: bool = True,
+) -> NDArray[np.float64]:
+    """Frank Tamm equation
+    
+    Evaluates the Frank-Tamm equation in units of [m^-1 nm^-1] for the given
+    wavelengths and refractive indices:
+
+       d^2 N          alpha  /            1       \\
+     --------- = 2pi ------- | 1 - -------------- |
+      dx dlam         lam^2 \\      (beta * n)^2  /
+    
+    if `usePhotonCount` is `True`. Otherwise it samples the emitted energy in
+    units of [eV m^-1 nm^-1]:
+
+       d^2 E                            1    /            1       \\
+     --------- = pi * c^2 * e * mu_0 ------- | 1 - -------------- |
+      dx dlam                         lam^3 \\      (beta * n)^2  /
+
+    where alpha is the finestructure constant and beta = v / c the particle's
+    speed relative to the speed of light.
+    """
+    lam = np.asarray(wavelength) / u.nm
+    n = beta * np.asarray(refractiveIndex)
+    if usePhotonCount:
+        # The 10^9 converts one of the [nm^-1] to [m^-1]
+        return 2.0 * np.pi * consts.alpha / lam**2 * (1.0 - (1.0 / n**2)) * 1e9
+    else:
+        c = np.pi * consts.c**2 * consts.e * consts.mu_0
+        return c / lam**3 * (1.0 - (1.0 / n**2)) * 1e18
+
+
+class CherenkovLightSource(LightSource):
+    """
+    Light source sampling Cherenkov light from a straight particle track.
+    Assumes particle travels at the speed of light (beta = 1.0).
+
+    Parameters
+    ----------
+    wavelengthSource: WavelengthSource
+        Source to sample wavelengths from. Required for forward mode.
+    mediumIdx: int
+        Index of the medium the light source is located in
+    trackStart: (float, float, float), default=(0.0,0.0,0.0)m
+        Start position of track
+    trackEnd: (float, float, float), default=(100.0,0.0,0.0)m
+        End position of track
+    startTime: float, default=0.0ns
+        Start time of track
+    endTime: float, default=100.0 m/c
+        End time of track
+    usePhotonCount: bool, default=True
+        If `True` sampled radiance has units of number photons, otherwise eV
+    emitParticles: bool, default=False
+        Whether to emit particles instead of rays. If so, `budget` will be
+        ignored.
+    """
+
+    name = "Cherenkov Light Source"
+
+    class LightParams(Structure):
+        _fields_ = [
+            ("trackStart", vec3),
+            ("startTime", c_float),
+            ("trackEnd", vec3),
+            ("endTime", c_float),
+            ("_trackDir", vec3),
+            ("_trackDist", c_float),
+            ("mediumIdx", c_uint32),
+        ]
+
+    def __init__(
+        self,
+        wavelengthSource: WavelengthSource | None = None,
+        *,
+        mediumIdx: int,
+        trackStart: tuple[float, float, float] = (0.0, 0.0, 0.0) * u.m,
+        trackEnd: tuple[float, float, float] = (100.0, 0.0, 0.0) * u.m,
+        startTime: float = 0.0 * u.ns,
+        endTime: float = 100.0 * u.m / u.c,
+        usePhotonCount: bool = True,
+        applyFrankTamm: bool = True,
+        emitParticles: bool = False,
+    ) -> None:
+        # check params
+        if applyFrankTamm and emitParticles:
+            raise ValueError("Cannot apply Frank-Tamm formula when emitting particles.")
+        if emitParticles and not usePhotonCount:
+            raise ValueError("Must use photon count when emitting particles")
+
+        lam = wavelengthSource
+        super().__init__(
+            nRNGForward=0 if lam is None else lam.nRNGSamples + 2,
+            nRNGBackward=0,
+            wavelengthSource=wavelengthSource,
+            params={"LightParams": CherenkovLightSource.LightParams},
+        )
+        # save params
+        self._applyFrankTamm = applyFrankTamm
+        self._emitParticles = emitParticles
+        self._usePhotonCount = usePhotonCount
+        self.setParams(
+            trackStart=trackStart,
+            trackEnd=trackEnd,
+            startTime=startTime,
+            endTime=endTime,
+            mediumIdx=mediumIdx,
+        )
+
+    @property
+    def emitsParticles(self) -> bool:
+        """Whether this light source emits particles instead of light rays"""
+        return self._emitParticles
+
+    @property
+    def isFrankTammApplied(self) -> bool:
+        """Whether the Frank Tamm equation is applied"""
+        return self._applyFrankTamm
+
+    @property
+    def usePhotonCount(self) -> bool:
+        """Whether to sample radiance in eV or #photons"""
+        return self._usePhotonCount
+
+    @property
+    def forwardSourceCode(self) -> str | None:
+        if self.wavelengthSource is None:
+            return None
+        preamble = createPreamble(
+            LIGHT_SOURCE_EMIT_PARTICLE=self.emitsParticles,
+            FRANK_TAMM_USE_ENERGY=not self.usePhotonCount,
+            FRANK_TAMM_IS=not self.isFrankTammApplied,
+        )
+        code = loadShader("lightsource/cherenkov/track/forward.glsl")
+        return preamble + code
+
+    @property
+    def backwardSourceCode(self) -> str | None:
+        if self.emitsParticles:
+            return None
+        preamble = createPreamble(
+            LIGHT_SOURCE_EMIT_PARTICLE=self.emitsParticles,
+            FRANK_TAMM_USE_ENERGY=not self.usePhotonCount,
+            FRANK_TAMM_IS=not self.isFrankTammApplied,
+        )
+        code = loadShader("lightsource/cherenkov/track/backward.glsl")
+        return preamble + code
+
+    def _finishParams(self, i: int) -> None:
+        super()._finishParams(i)
+        start = np.array(self.trackStart)
+        end = np.array(self.trackEnd)
+        dir = end - start
+        dist = np.sqrt(np.square(dir).sum(-1))
+        dir /= dist
+        self.setParams(_trackDir=dir, _trackDist=dist)
+
+
+class MuonTrackLightSource(LightSource):
+    """
+    Light source describing the Cherenkov light produced from a high energy
+    muon track and its secondaries particles up to 500 MeV in ice or water as
+    described in [1]_.
+
+    Parameters
+    ----------
+    wavelengthSource: WavelengthSource
+        Source to sample wavelengths from. Required for forward mode.
+    startPosition: (float, float, float), default=(0.0, 0.0, 0.0)
+        Start position of the track
+    startTime: float, default=0.0ns
+        Time at which the muon is at `startPosition`
+    endPosition: (float, float, float), default=(0.0, 0.0, 0.0)
+        End position of the track
+    endTime: float, default=0.0ns
+        Time at which the muon is at `endPosition`
+    muonEnergy: float, default=1GeV
+        Energy of the muon producing secondary particles
+    applyFrankTamm: bool, default=True
+        Whether to apply the Frank-Tamm equation describing the light yield as a
+        function of wavelength.
+    emitParticles: bool, default=False
+        Whether to emit particles instead of rays. If so, `budget` will be
+        ignored.
+
+    .. [1] L. Raedel "Simulation Studies of the Cherenkov Light Yield from
+           Relativistic Particles in High-Energy Neutrino Telescopes with
+           Geant 4" (2012)
+    """
+
+    name = "Muon Track Light Source"
+
+    class TrackParameters(Structure):
+        _fields_ = [
+            ("startPosition", vec3),
+            ("startTime", c_float),
+            ("endPosition", vec3),
+            ("endTime", c_float),
+            ("_direction", vec3),
+            ("_dist", c_float),
+            ("_energyScale", c_float),
+            ("_a_angular", c_float),
+            ("_b_angular", c_float),
+            ("mediumIdx", c_uint32),
+        ]
+
+    def __init__(
+        self,
+        wavelengthSource: WavelengthSource | None = None,
+        *,
+        mediumIdx: int,
+        startPosition: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        startTime: float = 0.0,
+        endPosition: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        endTime: float = 0.0,
+        muonEnergy: float = 1.0 * u.GeV,
+        applyFrankTamm: bool = True,
+        usePhotonCount: bool = True,
+        emitParticles: bool = False,
+    ) -> None:
+        # check params
+        if applyFrankTamm and emitParticles:
+            raise ValueError("Cannot apply Frank-Tamm formula when emitting particles.")
+        if emitParticles and not usePhotonCount:
+            raise ValueError("Must use photon count when emitting particles")
+
+        lam = wavelengthSource
+        super().__init__(
+            nRNGForward=0 if lam is None else lam.nRNGSamples + 3,
+            nRNGBackward=1,
+            wavelengthSource=wavelengthSource,
+            params={"MuonTrackParams": MuonTrackLightSource.TrackParameters},
+            extra={"muonEnergy"},
+        )
+        # set params
+        self.setParams(
+            startPosition=startPosition,
+            startTime=startTime,
+            endPosition=endPosition,
+            endTime=endTime,
+            mediumIdx=mediumIdx,
+        )
+        self.muonEnergy = muonEnergy
+        self._applyFrankTamm = applyFrankTamm
+        self._usePhotonCount = usePhotonCount
+        self._emitParticles = emitParticles
+
+    @property
+    def emitsParticles(self) -> bool:
+        """Whether this light source emits particles instead of light rays"""
+        return self._emitParticles
+
+    @property
+    def isFrankTammApplied(self) -> bool:
+        """Whether the Frank Tamm equation is applied"""
+        return self._applyFrankTamm
+
+    @property
+    def usePhotonCount(self) -> bool:
+        """Whether to sample radiance in eV or #photons"""
+        return self._usePhotonCount
+
+    @property
+    def muonEnergy(self) -> float:
+        """Energy of the muon producing secondary particles"""
+        return self._muonEnergy
+
+    @muonEnergy.setter
+    def muonEnergy(self, value: float) -> None:
+        self._muonEnergy = value
+        # calculate energy scale
+        self.setParam("_energyScale", 1.1880 + 0.0206 * np.log(value))
+        # calculate angular emission profile
+        # see notebooks/track_angular_dist_fit.ipynb
+        self.setParam("_a_angular", 0.86634 - 7.5624e-3 * np.log10(value))
+        self.setParam("_b_angular", 2.5030 + 3.0533e-2 * np.log10(value))
+
+    @property
+    def forwardSourceCode(self) -> str | None:
+        if self.wavelengthSource is None:
+            return None
+        preamble = createPreamble(
+            FRANK_TAMM_IS=not self.isFrankTammApplied,
+            FRANK_TAMM_USE_ENERGY=not self.usePhotonCount,
+            LIGHT_SOURCE_EMIT_PARTICLE=self.emitsParticles,
+        )
+        code = loadShader("lightsource/cherenkov/muon/forward.glsl")
+        return preamble + code
+
+    @property
+    def backwardSourceCode(self) -> str | None:
+        if self.emitsParticles:
+            return None
+        preamble = createPreamble(
+            FRANK_TAMM_IS=not self.isFrankTammApplied,
+            FRANK_TAMM_USE_ENERGY=not self.usePhotonCount,
+            LIGHT_SOURCE_EMIT_PARTICLE=self.emitsParticles,
+        )
+        code = loadShader("lightsource/cherenkov/muon/backward.glsl")
+        return preamble + code
+
+    def _finishParams(self, i: int) -> None:
+        super()._finishParams(i)
+        start = np.array(self.startPosition)
+        end = np.array(self.endPosition)
+        dir = end - start
+        dist = np.sqrt(np.square(dir).sum(-1))
+        dir /= dist
+        self.setParams(_direction=dir, _dist=dist)
+
+
+class ParticleCascadeLightSource(LightSource):
+    """
+    Light source describing the Cherenkov light emitted by secondary particles
+    in electro-magnetic or hadronic showers in water or ice caused by a primary
+    particle above 500 MeV as described in [1]_.
+
+    Parameters
+    ----------
+    wavelengthSource: WavelengthSource
+        Source to sample wavelengths from. Required for forward mode.
+    startPosition: (float, float, float), default=(0.0, 0.0, 0.0)
+        Start position of the cascade
+    startTime: float, default=0.0 ns
+        Time point at which the cascade started
+    direction: (float, float, float), default=(0.0, 0.0, 1.0)
+        Direction in which the cascade evolves, i.e. away from the start point.
+    effectiveLength: float, default=0.0
+        Length of a Cherenkov track producing the same amount of photons. See
+        e.g. eq. 4.7 in [1]_
+    a_angular: float, default=0.0
+        The a parameter of the angular light emission distribution (eq. 4.5 in
+        [1]_).
+    b_angular: float, default=0.0
+        The b parameter of the angular light emission distribution (eq. 4.5 in
+        [1]_)
+    a_long: float, default=0.0
+        The a parameter of the longitudinal light emission distribution (eq.
+        4.10 in [1]_).
+    b_long: float, default=0.0
+        The b parameter of the longitudinal light emission distribution. Note
+        that this differs from eq. 4.10 in [1]_ in order to match the definition
+        used by ice tray. Here (and in ice tray), this is the radiation length
+        X_0 divided by the b parameter of the underlying gamma distribution.
+    applyFrankTamm: bool, default=True
+        Whether to apply the Frank-Tamm equation describing the light yield as a
+        function of wavelength.
+    emitParticles: bool, default=False
+        Whether to emit particles instead of rays. If so, `budget` will be
+        ignored.
+
+    Note
+    ----
+    Raedel calculates the radiation length using the following formula:
+
+             1      716.4 [g cm^-2] A
+     X_0 = ----- ------------------------
+            rho   Z(Z+1) ln(287/sqrt(Z))
+
+    which turns out to be 39.75 cm in ice and 36.08 cm in water [2]_.
+
+    .. [1] L. Raedel "Simulation Studies of the Cherenkov Light Yield from
+           Relativistic Particles in High-Energy Neutrino Telescopes with
+           Geant 4" (2012)
+       [2] L. Raedel, C. Wiebusch: "Calculation of the Cherenkov light yield
+           from electromagnetic cascades in ice with Geant4" (2013)
+           arXiv:1210.5140v2
+    """
+
+    name = "Particle Cascade Light Source"
+
+    class CascadeParameters(Structure):
+        _fields_ = [
+            ("startPosition", vec3),
+            ("startTime", c_float),
+            ("direction", vec3),
+            ("effectiveLength", c_float),
+            ("a_angular", c_float),
+            ("b_angular", c_float),
+            ("a_long", c_float),
+            ("b_long", c_float),
+            ("mediumIdx", c_uint32),
+        ]
+
+    def __init__(
+        self,
+        wavelengthSource: WavelengthSource | None = None,
+        *,
+        mediumIdx: int,
+        startPosition: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        startTime: float = 0.0 * u.ns,
+        direction: tuple[float, float, float] = (0.0, 0.0, 1.0),
+        effectiveLength: float = 1.0,
+        a_angular: float = 0.0,
+        b_angular: float = 0.0,
+        a_long: float = 0.0,
+        b_long: float = 0.0,
+        applyFrankTamm: bool = True,
+        usePhotonCount: bool = True,
+        emitParticles: bool = False,
+    ) -> None:
+        # check params
+        if applyFrankTamm and emitParticles:
+            raise ValueError("Cannot apply Frank-Tamm formula when emitting particles.")
+        if emitParticles and not usePhotonCount:
+            raise ValueError("Must use photon count when emitting particles")
+
+        lam = wavelengthSource
+        super().__init__(
+            # unfortunately, the amount of samples drawn is not deterministic
+            # because of the rejection algorithm used for the gamma distribution
+            # for now we just report a large amount, but this is not nice
+            # (with Philox RNG it is not really a problem if we do not shift
+            # enough)
+            # TODO: fix this
+            nRNGForward=0 if lam is None else 12,
+            nRNGBackward=10,
+            wavelengthSource=wavelengthSource,
+            params={"CascadeParams": ParticleCascadeLightSource.CascadeParameters},
+        )
+        # save params
+        self.setParams(
+            startPosition=startPosition,
+            startTime=startTime,
+            direction=direction,
+            effectiveLength=effectiveLength,
+            a_angular=a_angular,
+            b_angular=b_angular,
+            a_long=a_long,
+            b_long=b_long,
+            mediumIdx=mediumIdx,
+        )
+        self._applyFrankTamm = applyFrankTamm
+        self._usePhotonCount = usePhotonCount
+        self._emitParticles = emitParticles
+
+    @property
+    def emitsParticles(self) -> bool:
+        """Whether this light source emits particles instead of light rays"""
+        return self._emitParticles
+
+    @property
+    def isFrankTammApplied(self) -> bool:
+        """Whether the Frank Tamm equation is applied"""
+        return self._applyFrankTamm
+
+    @property
+    def usePhotonCount(self) -> bool:
+        """Whether to sample radiance in eV or #photons"""
+        return self._usePhotonCount
+
+    @property
+    def forwardSourceCode(self) -> str | None:
+        if self.wavelengthSource is None:
+            return None
+        preamble = createPreamble(
+            FRANK_TAMM_IS=not self.isFrankTammApplied,
+            FRANK_TAMM_USE_ENERGY=not self.usePhotonCount,
+            LIGHT_SOURCE_EMIT_PARTICLE=self.emitsParticles,
+        )
+        code = loadShader("lightsource/cherenkov/cascade/forward.glsl")
+        return preamble + code
+
+    @property
+    def backwardSourceCode(self) -> str | None:
+        if self.emitsParticles:
+            return None
+        preamble = createPreamble(
+            FRANK_TAMM_IS=not self.isFrankTammApplied,
+            FRANK_TAMM_USE_ENERGY=not self.usePhotonCount,
+            LIGHT_SOURCE_EMIT_PARTICLE=self.emitsParticles,
+        )
+        code = loadShader("lightsource/cherenkov/cascade/backward.glsl")
+        return preamble + code

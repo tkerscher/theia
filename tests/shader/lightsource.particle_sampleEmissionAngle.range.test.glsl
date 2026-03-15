@@ -1,6 +1,6 @@
 layout(local_size_x = 32) in;
 
-#include "lightsource/particles/common.glsl"
+#include "lightsource/cherenkov/common.glsl"
 //rng
 #include "rng.glsl"
 

@@ -27,7 +27,7 @@ def test_createParamsFromParticle(pType: theia.cascades.ParticleType, rng) -> No
     source, params, lightYield = theia.cascades.createParamsFromParticle(
         particle, lightSourceName=""
     )
-    s = source(**params)
+    s = source(mediumIdx=0, **params)
     # check common parameters
     assert params["startTime"] == particle.startTime
     assert params["startPosition"] == particle.position
