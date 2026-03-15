@@ -1,6 +1,6 @@
 #include "math.glsl"
 #include "polarization.glsl"
-#include "scatter.volume.glsl"
+#include "volume/scatter.glsl"
 
 layout(local_size_x = 32) in;
 

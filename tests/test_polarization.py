@@ -7,13 +7,12 @@ from hephaistos.glsl import vec3, vec4, stackVector
 
 import theia.material
 import theia.random
-from theia.testing import WaterTestModel
-from theia.util import createPreamble
+from theia.compiler import createPreamble, compileShader
 
 from numpy.lib.recfunctions import structured_to_unstructured
 
 
-def test_polarizationRotate_phi(rng, shaderUtil):
+def test_polarizationRotate_phi(rng):
     N = 32 * 1024
 
     # reserve memory
@@ -34,10 +33,11 @@ def test_polarizationRotate_phi(rng, shaderUtil):
 
     store = theia.material.MaterialStore([])
     # create and run test
-    program = shaderUtil.createTestProgram(
+    code = compileShader(
         "polarization.rotate.phi.test.glsl",
         headers=store.header,
     )
+    program = hp.Program(code)
     program.bindParams(QueryBuffer=query_tensor, ResultBuffer=result_tensor)
     store.bindParams(program)
     (
@@ -68,7 +68,7 @@ def test_polarizationRotate_phi(rng, shaderUtil):
     assert np.abs(results - expected).max() < 5e-6
 
 
-def test_alignPolRef(shaderUtil):
+def test_alignPolRef():
     N = 32 * 1024
 
     # allocate memory
@@ -77,13 +77,14 @@ def test_alignPolRef(shaderUtil):
     # create and prepare test program
     store = theia.material.MaterialStore([])
     rng = theia.random.PhiloxRNG(key=0xC0FFEE)
-    program = shaderUtil.createTestProgram(
+    code = compileShader(
         "polarization.alignPolRef.test.glsl",
         headers={
             "random.glsl": rng.sourceCode,
             **store.header,
         },
     )
+    program = hp.Program(code)
     program.bindParams(ResultBuffer=result_tensor)
     store.bindParams(program)
     rng.bindParams(program, 0)
@@ -102,7 +103,7 @@ def test_alignPolRef(shaderUtil):
     assert np.allclose(result, np.identity(4)[None, ...], atol=5e-6)
 
 
-def test_polarizationRotate_dir(rng, shaderUtil):
+def test_polarizationRotate_dir(rng):
     N = 32 * 1024
 
     # reserve memory
@@ -142,10 +143,11 @@ def test_polarizationRotate_dir(rng, shaderUtil):
 
     # create and run test
     store = theia.material.MaterialStore([])
-    program = shaderUtil.createTestProgram(
+    code = compileShader(
         "polarization.rotate.dir.test.glsl",
         headers=store.header,
     )
+    program = hp.Program(code)
     program.bindParams(QueryBuffer=query_tensor, ResultBuffer=result_tensor)
     store.bindParams(program)
     (
@@ -182,10 +184,10 @@ def test_polarizationRotate_dir(rng, shaderUtil):
     # assert np.abs((ref_out * ref).sum(-1) - np.cos(phi))[mask].max() < 1e-5
 
 
-def test_phaseMatrix(rng, shaderUtil):
+def test_phaseMatrix(rng):
     N = 32 * 1024
 
-    water_model = WaterTestModel()
+    water_model = theia.material.PureWaterModel()
     water = water_model.createMedium()
     store = theia.material.MaterialStore([], media=[water])
 
@@ -206,9 +208,8 @@ def test_phaseMatrix(rng, shaderUtil):
     queries["stokes"] = stackVector([stokes], vec4)
 
     # create and run test
-    program = shaderUtil.createTestProgram(
-        "polarization.phaseMatrix.test.glsl", headers=store.header
-    )
+    code = compileShader("polarization.phaseMatrix.test.glsl", headers=store.header)
+    program = hp.Program(code)
     program.bindParams(QueryBuffer=query_tensor, ResultBuffer=result_tensor)
     store.bindParams(program)
     (
