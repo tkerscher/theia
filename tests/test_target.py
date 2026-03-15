@@ -286,7 +286,7 @@ def test_DiskLightTarget():
     hit = (t > 0) & (np.square(objHit[:, :2]).sum(-1) <= radius**2)
     assert np.all(hit)
     cos_nrm = np.abs(objDir[:, 2])  # normal in obj is z
-    exp_contrib = budget * radius**2 * cos_nrm / (4.0 * t**2)
+    exp_contrib = budget * radius**2 / (4.0 * t**2)
     assert np.allclose(exp_contrib, result["contrib"])
 
 
@@ -335,5 +335,5 @@ def test_FlatLightTarget():
     hit = (t > 0) & (2.0 * np.abs(objHit[:, :2]) <= (width, height)).min(-1)
     assert np.all(hit)
     cos_nrm = np.abs(objDir[:, 2])  # normal in obj is z
-    exp_contrib = width * height * budget * cos_nrm / (4.0 * np.pi * t**2)
+    exp_contrib = width * height * budget / (4.0 * np.pi * t**2)
     assert np.allclose(exp_contrib, result["contrib"])
