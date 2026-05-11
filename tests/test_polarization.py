@@ -187,7 +187,7 @@ def test_polarizationRotate_dir(rng):
 def test_phaseMatrix(rng):
     N = 32 * 1024
 
-    water_model = theia.material.PureWaterModel()
+    water_model = theia.model.PureWaterModel()
     water = water_model.createMedium()
     store = theia.material.MaterialStore([], media=[water])
 

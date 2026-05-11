@@ -10,7 +10,7 @@ from theia.device import isRayTracingEnabled
 from theia.light import ConstWavelengthSource, UniformWavelengthSource
 from theia.light import SphericalLightSource
 from theia.material import Material, MaterialStore
-from theia.material import DispersionFreeMedium, HenyeyGreensteinPhaseFunction
+from theia.model import DispersionFreeMedium, HenyeyGreensteinPhaseFunction
 from theia.ray import UnpolarizedRay
 from theia.response import (
     HistogramHitResponse,

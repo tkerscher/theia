@@ -6,7 +6,8 @@ from hephaistos.pipeline import runPipeline
 import theia.camera
 import theia.units as u
 from theia.light import ConstWavelengthSource
-from theia.material import Material, MaterialStore, PureWaterModel
+from theia.material import Material, MaterialStore
+from theia.model import PureWaterModel
 from theia.random import PhiloxRNG
 from theia.ray import UnpolarizedRay
 from theia.scene import MeshStore, Scene, Transform

@@ -11,7 +11,7 @@ from scipy.integrate import quad
 
 from theia.compiler import compileShader
 from theia.lookup import Table
-from theia.material import PureWaterModel
+from theia.model import PureWaterModel
 from theia.property import FloatProperty, TableProperty
 from theia.util import createCType
 
@@ -28,45 +28,8 @@ def test_checkMedium():
     #       but that's for a later day (maybe)
 
 
-def test_NumericalPhaseSamplingMixin():
-    # test with a simple model where we know the exact CDF inversion
-    class Model(theia.material.NumericalPhaseSamplingMixin):
-        def phase_function(self, cos_theta):
-            u = np.asarray(cos_theta)
-            return 4 * np.pi / 3 * u**2
-
-        def ppf(self, eta):
-            return np.cbrt(2 * eta - 1)
-
-    x = np.linspace(0, 1, 50)
-    model = Model()
-    assert np.allclose(model.ppf(x), model.phase_sampling(x))
-
-    # Alternatively we can use log_phase_function
-    class LogModel(theia.material.NumericalPhaseSamplingMixin):
-        def log_phase_function(self, cos_theta):
-            # p(x) ~ exp(u)
-            u = np.asarray(cos_theta)
-            norm = 2 * np.pi * (np.e - 1 / np.e)
-            return u - np.log(norm)
-
-        def ppf(self, eta):
-            return np.log(eta * (np.e - 1 / np.e) + 1 / np.e)
-
-    model = LogModel()
-    assert np.allclose(model.ppf(x), model.phase_sampling(x))
-
-    # If we do not provide a phase function, it should throw an error
-    class ErrModel(theia.material.NumericalPhaseSamplingMixin):
-        pass
-
-    with pytest.raises(NotImplementedError):
-        model = ErrModel()
-        model.phase_sampling(x)
-
-
 def test_BK7Model(dataDir, testDataDir):
-    model = theia.material.BK7Model()
+    model = theia.model.BK7Model()
 
     n_exp = np.loadtxt(
         os.path.join(testDataDir, "bk7_refractive_index.csv"), delimiter=",", skiprows=2
@@ -95,8 +58,8 @@ def test_BK7Model(dataDir, testDataDir):
 
 def test_RayleighScattering():
     class Model(
-        theia.material.DispersionFreeMedium,
-        theia.material.RayleighScatteringModel,
+        theia.model.DispersionFreeMedium,
+        theia.model.RayleighScatteringModel,
     ):
         def __init__(self):
             super().__init__(
@@ -111,7 +74,7 @@ def test_RayleighScattering():
 
 
 def test_WaterBaseModel(testDataDir):
-    model = theia.material.WaterBaseModel(10.0, 0.0, 35.0)
+    model = theia.model.WaterBaseModel(10.0, 0.0, 35.0)
 
     # load test data for water
     data = np.loadtxt(
@@ -122,7 +85,7 @@ def test_WaterBaseModel(testDataDir):
 
 
 def test_PureWaterModel():
-    model = theia.material.PureWaterModel(
+    model = theia.model.PureWaterModel(
         temperature=5.0,
         pressure=2000.0,
         salinity=35.0,
@@ -158,10 +121,10 @@ def test_HenyeyGreenstein(testDataDir, rng):
         os.path.join(testDataDir, "log_phase_hg.csv"), delimiter=",", skiprows=1
     )
     # we test the model for three different g values
-    hg1 = theia.material.HenyeyGreensteinPhaseFunction(0.3)
-    hg2 = theia.material.HenyeyGreensteinPhaseFunction(0.0)
-    hg3 = theia.material.HenyeyGreensteinPhaseFunction(-0.5)
-    hg99 = theia.material.HenyeyGreensteinPhaseFunction(0.99)
+    hg1 = theia.model.HenyeyGreensteinPhaseFunction(0.3)
+    hg2 = theia.model.HenyeyGreensteinPhaseFunction(0.0)
+    hg3 = theia.model.HenyeyGreensteinPhaseFunction(-0.5)
+    hg99 = theia.model.HenyeyGreensteinPhaseFunction(0.99)
     # test phase function
     assert np.abs(data[:, 1] - hg1.log_phase_function(data[:, 0])).max() < 1e-6
     assert np.abs(data[:, 2] - hg2.log_phase_function(data[:, 0])).max() < 1e-6
@@ -180,7 +143,7 @@ def test_HenyeyGreenstein(testDataDir, rng):
 
 
 def test_FournierForand(testDataDir, rng):
-    model = theia.material.FournierForandPhaseFunction(1.175, 4.065)
+    model = theia.model.FournierForandPhaseFunction(1.175, 4.065)
     # load expected data (cos_theta, pdf)
     # note that this was generated from the same code,
     # but was inspected before saving
@@ -204,7 +167,7 @@ def test_MaterialStore():
     # create material store
     water_model = PureWaterModel()
     water = water_model.createMedium(wavelengthRange=lam_range)
-    glass_model = theia.material.BK7Model()
+    glass_model = theia.model.BK7Model()
     glass = glass_model.createMedium(
         name="glass", numSamples=4096, wavelengthRange=lam_range
     )

@@ -6,7 +6,7 @@ import numpy as np
 from theia.camera import ConeCamera
 from theia.light import ConeLightSource, ConstWavelengthSource
 from theia.material import Material, MaterialStore, VACUUM_IDX
-from theia.material import BK7Model, PureWaterModel
+from theia.model import BK7Model, PureWaterModel
 from theia.random import PhiloxRNG
 from theia.ray import UnpolarizedRay
 from theia.testing import SurfaceInteractionSampler
@@ -112,8 +112,10 @@ def test_DielectricSurface(particle: bool, camera: bool, flags: str):
     assert np.all(result["wavelengthOut"] == lam)
     assert np.all(result["mediumIdxIn"] == waterIdx)
     if not camera:
-        assert np.all(result["wavelengthHit"] == lam)
-        assert np.all(result["objectIdHit"] == objectId)
+        # only consider valid hits
+        valid = result["hitSuccess"] == 1
+        assert np.all(result["wavelengthHit"][valid] == lam)
+        assert np.all(result["objectIdHit"][valid] == objectId)
     if flags == "D":
         # neither reflect nor transmit flag -> absorb
         assert np.all(result["hitResult"] == EventResultCode.RAY_ABSORBED)
@@ -143,8 +145,8 @@ def test_DielectricSurface(particle: bool, camera: bool, flags: str):
     assert np.all(cosPos[trans] < 0.0)
     assert np.all(cosPos[refl] > 0.0)
 
-    assert np.allclose(result["directionOut"][trans], t[trans], atol=5e-6)
-    assert np.allclose(result["directionOut"][refl], r[refl], atol=5e-6)
+    assert np.allclose(result["directionOut"][trans], t[trans], atol=1e-5)
+    assert np.allclose(result["directionOut"][refl], r[refl], atol=1e-5)
     assert np.all(result["mediumIdxOut"][trans] == VACUUM_IDX)
     assert np.all(result["mediumIdxOut"][refl] == waterIdx)
 

@@ -13,6 +13,7 @@ __all__ = [
     "light",
     "lookup",
     "material",
+    "model",
     "property",
     "random",
     "ray",

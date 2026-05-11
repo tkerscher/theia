@@ -10,7 +10,7 @@ from theia.camera import FlatCamera, PointCamera, SphereCamera
 from theia.device import isRayTracingEnabled
 from theia.light import PencilLightSource, SphericalLightSource, UniformWavelengthSource
 from theia.material import Material, MaterialStore, getPropertySamples, VACUUM_IDX
-from theia.material import BK7Model, PureWaterModel
+from theia.model import BK7Model, PureWaterModel
 from theia.random import PhiloxRNG
 from theia.ray import UnpolarizedRay
 from theia.response import HitRecorder
@@ -46,7 +46,7 @@ def test_TracerReportsConfig():
             self.updatedConfig = config
 
     vol = Attenuating()
-    medium = theia.material.PureWaterModel().createMedium(physicModel=vol)
+    medium = theia.model.PureWaterModel().createMedium(physicModel=vol)
     store = theia.material.MaterialStore([], media=[medium])
 
     ray = UnpolarizedRay()

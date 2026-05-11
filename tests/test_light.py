@@ -12,7 +12,8 @@ from ctypes import Structure, c_float
 import theia.light
 import theia.units as u
 from theia.compiler import compileShader
-from theia.material import MaterialStore, PureWaterModel, VACUUM_IDX
+from theia.material import MaterialStore, VACUUM_IDX
+from theia.model import PureWaterModel
 from theia.random import PhiloxRNG
 from theia.ray import UnpolarizedRay
 from theia.testing import BackwardLightSampler
