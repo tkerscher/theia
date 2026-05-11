@@ -23,8 +23,7 @@ ForwardRay sampleLight(uint idx, inout uint dim) {
     #endif
 
     //fetch refractive index
-    float u_lam = normalize_lambda(cascade.mediumIdx, wavelength);
-    float n = lookUpMediaTable1D(REFRACTIVE_INDEX, cascade.mediumIdx, u_lam, 1.0);
+    float n = lookUpMediaTable1D(REFRACTIVE_INDEX, cascade.mediumIdx, wavelength, 1.0);
 
     //sample emission direction
     vec2 u = random2D(idx, dim); //2D for stratification

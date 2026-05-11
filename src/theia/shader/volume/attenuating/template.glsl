@@ -15,9 +15,8 @@ float sampleInteractionLength(
     uint idx, inout uint dim
 ) {
     //fetch absorption and scattering coefficient
-    float lam = normalize_lambda(ray.mediumIdx, ray.wavelength);
-    float mu_a = lookUpMediaTable1D(ABSORPTION_COEF, ray.mediumIdx, lam, 0.0);
-    float mu_s = lookUpMediaTable1D(SCATTERING_COEF, ray.mediumIdx, lam, 0.0);
+    float mu_a = lookUpMediaTable1D(ABSORPTION_COEF, ray.mediumIdx, ray.wavelength, 0.0);
+    float mu_s = lookUpMediaTable1D(SCATTERING_COEF, ray.mediumIdx, ray.wavelength, 0.0);
     float mu_e = mu_a + mu_s;
 
     //sample exponential distribution
@@ -38,9 +37,8 @@ ResultCode applyVolumeSampled(
     if (hit) return RESULT_CODE_SUCCESS;
 
     //fetch absorption and scattering coefficient
-    float lam = normalize_lambda(ray.mediumIdx, ray.wavelength);
-    float mu_a = lookUpMediaTable1D(ABSORPTION_COEF, ray.mediumIdx, lam, 0.0);
-    float mu_s = lookUpMediaTable1D(SCATTERING_COEF, ray.mediumIdx, lam, 0.0);
+    float mu_a = lookUpMediaTable1D(ABSORPTION_COEF, ray.mediumIdx, ray.wavelength, 0.0);
+    float mu_s = lookUpMediaTable1D(SCATTERING_COEF, ray.mediumIdx, ray.wavelength, 0.0);
     float mu_e = mu_a + mu_s;
     //chance of scattering
     float p_scatter = mu_s / (mu_a + mu_s);
@@ -88,9 +86,8 @@ ResultCode applyVolume(
     uint idx, inout uint dim
 ) {
     //fetch absorption and scattering coefficient
-    float lam = normalize_lambda(ray.mediumIdx, ray.wavelength);
-    float mu_a = lookUpMediaTable1D(ABSORPTION_COEF, ray.mediumIdx, lam, 0.0);
-    float mu_s = lookUpMediaTable1D(SCATTERING_COEF, ray.mediumIdx, lam, 0.0);
+    float mu_a = lookUpMediaTable1D(ABSORPTION_COEF, ray.mediumIdx, ray.wavelength, 0.0);
+    float mu_s = lookUpMediaTable1D(SCATTERING_COEF, ray.mediumIdx, ray.wavelength, 0.0);
     float mu_e = mu_a + mu_s;
     
     //attenuate ray

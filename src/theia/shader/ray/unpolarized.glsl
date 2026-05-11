@@ -172,8 +172,7 @@ ResultCode propagateRay(
     ray.position += dist * ray.direction;
 
     #ifdef RAY_TRANSIENT
-    float lam = normalize_lambda(ray.mediumIdx, ray.wavelength);
-    float vg = lookUpMediaTable1D(GROUP_VELOCITY, ray.mediumIdx, lam, SPEED_OF_LIGHT);
+    float vg = lookUpMediaTable1D(GROUP_VELOCITY, ray.mediumIdx, ray.wavelength, SPEED_OF_LIGHT);
     ray.time += dist / vg;
     #endif
 
@@ -231,8 +230,7 @@ ResultCode propagateRay(
     ray.position += dist * ray.direction;
 
     #ifdef RAY_TRANSIENT
-    float lam = normalize_lambda(ray.mediumIdx, ray.wavelength);
-    float vg = lookUpMediaTable1D(GROUP_VELOCITY, ray.mediumIdx, lam, SPEED_OF_LIGHT);
+    float vg = lookUpMediaTable1D(GROUP_VELOCITY, ray.mediumIdx, ray.wavelength, SPEED_OF_LIGHT);
     ray.time += dist / vg;
     #endif
 

@@ -96,11 +96,10 @@ mat4 lookUpPhaseMatrix(const uint mediumIdx, float cos_theta) {
     Table1D phase_m33 = loadMediaSlot_Table1D(PHASE_M33, mediumIdx);
     Table1D phase_m34 = loadMediaSlot_Table1D(PHASE_M34, mediumIdx);
     //look up matrix elements
-    float t = 0.5 * (cos_theta + 1.0);
-    float m12 = lookUp(phase_m12, t, 0.0);
-    float m22 = lookUp(phase_m22, t, 0.0);
-    float m33 = lookUp(phase_m33, t, 0.0);
-    float m34 = lookUp(phase_m34, t, 0.0);
+    float m12 = lookUp(phase_m12, cos_theta, 0.0);
+    float m22 = lookUp(phase_m22, cos_theta, 0.0);
+    float m33 = lookUp(phase_m33, cos_theta, 0.0);
+    float m34 = lookUp(phase_m34, cos_theta, 0.0);
 
     //assemble matrix (column major!)
     return mat4(

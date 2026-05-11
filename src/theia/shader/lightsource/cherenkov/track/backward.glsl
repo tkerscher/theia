@@ -13,8 +13,7 @@ ForwardRay sampleLight(
     uint idx, inout uint dim
 ) {
     //fetch refractive index
-    float u_lam = normalize_lambda(lightParams.mediumIdx, wavelength);
-    float n = lookUpMediaTable1D(REFRACTIVE_INDEX, lightParams.mediumIdx, u_lam, 1.0);
+    float n = lookUpMediaTable1D(REFRACTIVE_INDEX, lightParams.mediumIdx, wavelength, 1.0);
     //calculate cherenkov angle
     float cos_theta = 1.0 / n;
     float sin_theta = sqrt(max((1.0 - cos_theta) * (1.0 + cos_theta), 0.0));

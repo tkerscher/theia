@@ -20,8 +20,7 @@ ForwardRay sampleLight(
     float time = cascade.startTime + z * INV_SPEED_OF_LIGHT;
 
     //fetch refractive index
-    float u_lam = normalize_lambda(cascade.mediumIdx, wavelength);
-    float n = lookUpMediaTable1D(REFRACTIVE_INDEX, cascade.mediumIdx, u_lam, 1.0);
+    float n = lookUpMediaTable1D(REFRACTIVE_INDEX, cascade.mediumIdx, wavelength, 1.0);
 
     //calculate emission direction
     vec3 rayDir = normalize(observer - rayPos);

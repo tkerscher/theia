@@ -37,6 +37,10 @@ def test_sampleTable1D(sampleData1D):
     assert np.abs(y - sample).max() < 5e-3  # TODO: what is a sensible value?
 
 
+class Push(Structure):
+    _fields_ = [("table", c_int64), ("normalization", c_float)]
+
+
 def test_lookUp1D_linear(sampleData1D):
     N = 8192
     # prepare gpu
@@ -49,9 +53,6 @@ def test_lookUp1D_linear(sampleData1D):
     program.bindParams(OutputBuffer=tensor)
 
     # run program
-    class Push(Structure):
-        _fields_ = [("table", c_int64), ("normalization", c_float)]
-
     push = Push(table=gpu_table.address, normalization=(N - 1.0))
     (
         hp.beginSequence()
@@ -92,9 +93,6 @@ def test_lookUp1D_cubic():
     program.bindParams(OutputBuffer=tensor)
 
     # run program
-    class Push(Structure):
-        _fields_ = [("table", c_int64), ("normalization", c_float)]
-
     push = Push(table=gpu_table.address, normalization=(N - 1.0))
     (
         hp.beginSequence()
@@ -143,9 +141,6 @@ def test_lookUp1D_steffen():
     program.bindParams(OutputBuffer=tensor)
 
     # run program
-    class Push(Structure):
-        _fields_ = [("table", c_int64), ("normalization", c_float)]
-
     push = Push(table=gpu_table.address, normalization=(N - 1.0))
     (
         hp.beginSequence()
@@ -162,6 +157,31 @@ def test_lookUp1D_steffen():
     assert type(interp) is theia.lookup.SteffenInterpolator
     y = interp(np.linspace(0, 1, len(y_out)))
     assert np.allclose(y, y_out)
+
+
+def test_lookUp1D_constant():
+    N = 256
+    value = 3.14
+    # prepare gpu
+    tablePtr = theia.lookup.Table.createConstantValuePtr(value)
+    tensor = hp.FloatTensor(N)
+    buffer = hp.FloatBuffer(N)
+    code = compileShader("lookup.test.1D.glsl")
+    program = hp.Program(code)
+    program.bindParams(OutputBuffer=tensor)
+
+    # run program
+    push = Push(table=tablePtr, normalization=2.0)
+    (
+        hp.beginSequence()
+        .And(program.dispatchPush(bytes(push), N // 32))
+        .Then(hp.retrieveTensor(tensor, buffer))
+        .Submit()
+        .wait()
+    )
+
+    # check results
+    assert np.all(buffer.numpy() == value)
 
 
 @pytest.fixture
@@ -212,9 +232,6 @@ def test_lookUp2D_linear():
     program.bindParams(outputImage=image)
 
     # run program
-    class Push(Structure):
-        _fields_ = [("table", c_int64), ("normalization", c_float)]
-
     push = Push(table=gpu_table.address, normalization=(N - 1.0))
     (
         hp.beginSequence()
@@ -255,9 +272,6 @@ def test_lookUp2D_cubic():
     program.bindParams(outputImage=image)
 
     # run program
-    class Push(Structure):
-        _fields_ = [("table", c_int64), ("normalization", c_float)]
-
     push = Push(table=gpu_table.address, normalization=(N - 1.0))
     (
         hp.beginSequence()
@@ -279,6 +293,30 @@ def test_lookUp2D_cubic():
     p = np.stack([x.flatten(), y.flatten()], -1)
     zz = interp(p)
     assert np.allclose(zz, buffer.numpy())
+
+
+def test_lookUp2D_constant():
+    N, Nx, Ny = 256, 32, 64
+    value = 3.14
+    # prepare gpu
+    tablePtr = theia.lookup.Table.createConstantValuePtr(value)
+    image = hp.Image(hp.ImageFormat.R32_SFLOAT, N, N)
+    buffer = hp.FloatBuffer(N * N)
+    program = hp.Program(compileShader("lookup.test.2D.glsl"))
+    program.bindParams(outputImage=image)
+
+    # run program
+    push = Push(table=tablePtr, normalization=1.0)
+    (
+        hp.beginSequence()
+        .And(program.dispatchPush(bytes(push), N // 4, N // 4))
+        .Then(hp.retrieveImage(image, buffer))
+        .Submit()
+        .wait()
+    )
+
+    # check result
+    assert np.all(buffer.numpy() == value)
 
 
 def test_getTableSize(sampleData1D, sampleData2D):
@@ -305,19 +343,21 @@ def test_uploadTables(rng):
         theia.lookup.Table(t3),
     ]
 
+    align_up = lambda x, a: (x + a - 1) & -a
+
     ptr_exp = tensor.address
     assert ptr_exp == ptr[0]
-    ptr_exp += tables[0].nbytes
+    ptr_exp = align_up(ptr_exp + tables[0].nbytes, theia.lookup.Table.ALIGNMENT)
     assert ptr_exp == ptr[1]
-    ptr_exp += tables[1].nbytes
+    ptr_exp = align_up(ptr_exp + tables[1].nbytes, theia.lookup.Table.ALIGNMENT)
     assert ptr_exp == ptr[2]
 
-    size = sum(t.nbytes for t in tables)
-    buffer = hp.ByteBuffer(size)
+    buffer = hp.ByteBuffer(tensor.nbytes)
     hp.execute(hp.retrieveTensor(tensor, buffer))
 
-    expected = np.empty(size, dtype=np.uint8)
-    ptr = expected.ctypes.data
-    for t in tables:
-        ptr += t.copy(ptr)
-    assert np.equal(buffer.numpy(), expected).all()
+    expected = np.empty(tensor.nbytes, dtype=np.uint8)
+    for i, t in enumerate(tables):
+        # copy each table separately to not check paddings
+        n = t.copy(expected.ctypes.data)
+        offset = ptr[i] - tensor.address
+        assert np.equal(buffer.numpy()[offset : offset + n], expected[:n]).all()

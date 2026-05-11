@@ -21,8 +21,7 @@ ForwardRay sampleLight(uint idx, inout uint dim) {
     float startTime = mix(lightParams.startTime, lightParams.endTime, u);
 
     //fetch refractive index
-    float u_lam = normalize_lambda(lightParams.mediumIdx, wavelength);
-    float n = lookUpMediaTable1D(REFRACTIVE_INDEX, lightParams.mediumIdx, u_lam, 1.0);
+    float n = lookUpMediaTable1D(REFRACTIVE_INDEX, lightParams.mediumIdx, wavelength, 1.0);
 
     //sample ray direction
     float cos_theta = 1.0 / n;

@@ -47,7 +47,7 @@ float sampleScatterDir(
         cos_theta = lookUp(phase_sampling, rng.y);
         cos_theta = clamp(cos_theta, -1.0, 1.0);
         //look up propability (assume that phase_sampling implies log_phase table)
-        return exp(lookUp(log_phase, 0.5 * (cos_theta + 1.0)));
+        return exp(lookUp(log_phase, cos_theta));
     }
     else {
         cos_theta = 2.0 * rng.y - 1.0;
@@ -82,7 +82,7 @@ float scatterProb(const uint mediumIdx, vec3 inDir, vec3 scatterDir) {
 
     //look up prob using scattered cos_theta
     float cos_theta = dot(inDir, scatterDir); //[-1,1]
-    float log_p = lookUp(log_phase, 0.5 * (cos_theta + 1.0));
+    float log_p = lookUp(log_phase, cos_theta);
     return exp(log_p);
 }
 

@@ -41,12 +41,12 @@ float lookUpMediaTable1D_imp(uint slotIdx, uint mediumIdx, float u, float def) {
 #define lookUpMediaTable1D(slot, idx, u, def) lookUpMediaTable1D_imp(MEDIA_SLOT_##slot, idx, u, def)
 
 //util function for mapping wavelength to unit range
-float normalize_lambda(uint mediumIdx, float wavelength) {
-    if (isVacuum(mediumIdx)) return 0.0;
+// float normalize_lambda(uint mediumIdx, float wavelength) {
+//     if (isVacuum(mediumIdx)) return 0.0;
 
-    vec2 range = loadMediaSlot_vec2(WAVELENGTH_RANGE, mediumIdx);
-    return clamp((wavelength - range.x) / (range.y - range.x), 0.0, 1.0);
-}
+//     vec2 range = loadMediaSlot_vec2(WAVELENGTH_RANGE, mediumIdx);
+//     return clamp((wavelength - range.x) / (range.y - range.x), 0.0, 1.0);
+// }
 
 readonly buffer MaterialTable {
     uint stride;

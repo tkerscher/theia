@@ -108,6 +108,9 @@ class Table:
     data: ArrayLike
         Values of the equidistant sampling points used for interpolation.
         Will be converted to floats.
+    *axis_range: tuple[float, float]
+        Optional ranges for each dimension or axis. If not specified, assumes
+        [0,1] for each.
     interpolation: Interpolation, default="linear"
         Interpolation method to apply
 
@@ -116,7 +119,7 @@ class Table:
     Data is stored as 32-bit floats.
     """
 
-    ALIGNMENT: Final[int] = 4
+    ALIGNMENT: Final[int] = 32
     """Memory alignment requirement on the GPU"""
     PADDING: Final[int] = 1
     """Amount of entries padded at both ends of each axis"""
@@ -124,7 +127,7 @@ class Table:
     def __init__(
         self,
         data: ArrayLike,
-        *,
+        *axis_range: tuple[float, float],
         interpolation: Interpolation = "linear",
     ) -> None:
         self._data = np.ascontiguousarray(_padTable(data), dtype=np.float32)
@@ -132,9 +135,35 @@ class Table:
         # subtract padding
         self._shape -= 2 * Table.PADDING
         self._interpolation = _toMethod(interpolation)
+        # check ranges
+        if len(axis_range) == 0:
+            self._range = ((0.0, 1.0),) * self._data.ndim
+        elif len(axis_range) != self._data.ndim:
+            raise ValueError("Number of specified axis ranges must match data")
+        else:
+            self._range = axis_range
         # ideally Table wouldn't need to know this, but for now we do the test here
         if self.interpolation is InterpolationMethod.STEFFEN and self._data.ndim != 1:
             raise ValueError("Steffen interpolation is only defined for 1D data!")
+
+    @staticmethod
+    def createConstantValuePtr(value: float) -> int:
+        """Creates a table pointer containing a constant value instead."""
+        # Since we require 32 byte alignment, a valid pointer will always have its
+        # lowest 5 bits set to zero. We can therefore use the lowest bit as flag
+        # to mark constant values and store the value in the upper word
+        # This way we can look up constant values directly from a property table
+        return unpack("<Q", pack("<If", 0xF, value))[0]
+
+    @property
+    def axisRanges(self) -> tuple[tuple[float, float], ...]:
+        """Ranges for data axis"""
+        return self._range
+
+    @property
+    def constant(self) -> bool:
+        """Whether the table is constant, i.e. only contains a single sample"""
+        return np.all(self.shape == 1).item()
 
     @property
     def data(self) -> NDArray[np.float32]:
@@ -154,7 +183,11 @@ class Table:
     @property
     def nbytes(self) -> int:
         """Required amount of bytes to store the table"""
-        return self._data.nbytes + self._shape.nbytes + 4
+        # header consists of:
+        #  - an integer for interpolation method
+        #  - 2 floats per dimension for range
+        #  - 1 int per dimension for sample count
+        return 12 * self.ndim + 4 + self.data.nbytes
 
     @property
     def ndim(self) -> int:
@@ -172,30 +205,34 @@ class Table:
         Copies the table to the given memory address and returns the amount of
         copied bytes.
         """
-        header = np.append(np.int32(self.interpolation), self.shape)
-        memmove(ptr, header.ctypes.data, header.nbytes)
-        ptr = ptr + header.nbytes  # dont alter initial ptr
+        # check alignment
+        if (ptr & (Table.ALIGNMENT - 1)) != 0:
+            raise ValueError("memory address is not properly aligned!")
+
+        # write header
+        header = self._packHeader()
+        memmove(ptr, header, len(header))
+        ptr = ptr + len(header)
+        # copy data
         memmove(ptr, self._data.ctypes.data, self._data.nbytes)
         return self.nbytes
 
     def upload(self) -> hp.Tensor:
         """Uploads the table to the GPU"""
         buffer = hp.Buffer(self.nbytes)
-        tensor = hp.Tensor(self.nbytes)
+        tensor = hp.Tensor(self.nbytes, alignment=Table.ALIGNMENT)
         self.copy(buffer.address)
         hp.execute(hp.updateTensor(buffer, tensor))
         return tensor
 
     def save(self, file: BufferedIOBase) -> None:
-        """
-        Writes the table to the given file.
-        Returns the total amount of bytes written.
-        """
-        # first, write the header. currently this only
-        # consists of the interpolation method
-        file.write(pack("<i", self.interpolation))
-        # followed by the actual numpy data
-        np.save(file, self.samples)
+        """Writes the table to the given file."""
+        np.savez(
+            file,
+            samples=self.samples,
+            interpolation=int(self.interpolation),
+            ranges=np.array(self.axisRanges),
+        )
 
     @classmethod
     def load(cls, file: BufferedIOBase) -> Self | None:
@@ -203,19 +240,27 @@ class Table:
         Loads the next table stored in the given file. Returns `None` if end
         of file has been reached.
         """
-        # first read interpolation method. will be empty if we already reached eof
-        # TODO: we are not guaranteed to get 4 bytes. E.g. on TCP streams, we might
-        #       get less, requiring additional read commands. For now this should
-        #       be fine though
-        header = file.read(4)
-        if not header or len(header) < 4:
+        try:
+            data = np.load(file)
+        except EOFError:
             return None
-        interpolation = unpack("<i", header)[0]
+        # extract meta data
+        axisRanges = tuple(map(tuple, data["ranges"].tolist()))
+        interpolation: int = data["interpolation"].item()
         if interpolation not in InterpolationMethod:
             raise RuntimeError(f"Unknown interpolation method {interpolation}")
         interpolation = InterpolationMethod(interpolation)
-        samples = np.load(file)
-        return cls(samples, interpolation=interpolation)
+        # create table
+        return cls(data["samples"], *axisRanges, interpolation=interpolation)
+
+    def _packHeader(self) -> bytes:
+        """util function assembling the header"""
+        result = b""
+        for axis in self.axisRanges:
+            result += pack("<ff", *axis)
+        result += pack("<i", self.interpolation)
+        result += self.shape.tobytes()
+        return result
 
 
 def getTableSize(a: ArrayLike | tuple[int, ...] | None) -> int:
@@ -229,8 +274,17 @@ def getTableSize(a: ArrayLike | tuple[int, ...] | None) -> int:
         a = np.shape(a)
     if len(a) == 0:
         raise RuntimeError("table cannot have zero shape!")
-    # header + padding + data
-    return (1 + len(a) + 2 * Table.PADDING * len(a) + sum(a)) * 4  # 4 bytes per item
+
+    result = 0  # words
+    # header
+    result += 2 * len(a)  # ranges
+    result += 1  # interpolation
+    result += len(a)  # sample count per axis
+    # padding
+    padded = tuple(axis + 2 * Table.PADDING for axis in a)
+    result += np.prod(padded).item()
+    # return size
+    return result * 4
 
 
 def uploadTables(data: list[NDArray]) -> tuple[hp.Tensor, list[int]]:
@@ -252,19 +306,31 @@ def uploadTables(data: list[NDArray]) -> tuple[hp.Tensor, list[int]]:
         Device addresses pointing to the individual tables on the device.
     """
     tables = [Table(d) for d in data]
-    size = sum([table.nbytes for table in tables])
+    size = 0
+    align_up = lambda x, a: (x + a - 1) & -a
+    for table in tables:
+        size = align_up(size, Table.ALIGNMENT)
+        size += table.nbytes
 
     buffer = hp.Buffer(size)
-    tensor = hp.Tensor(size)
+    tensor = hp.Tensor(size, alignment=Table.ALIGNMENT)
 
     adr_list = []
     adr = tensor.address
     ptr = buffer.address
+    align_pad = lambda x, a: (a - (x % a)) % a  # (adr, alignment) -> padding
     for table in tables:
+        pad = align_pad(adr, Table.ALIGNMENT)
+        adr += pad
+        ptr += pad
         adr_list.append(adr)
         n = table.copy(ptr)
         adr += n
         ptr += n
+
+    # sanity check
+    assert adr == tensor.address + size
+    assert ptr == buffer.address + size
 
     hp.execute(hp.updateTensor(buffer, tensor))
 
@@ -314,9 +380,10 @@ def createTableFromFunction(
             raise ValueError(f"Cannot parse dimension spec: {spec}")
 
     axes = [createAxis(x) for x in xi]
+    ranges = tuple((a[0].item(), a[-1].item()) for a in axes)
     grid = np.meshgrid(*axes, indexing="ij")
     values = f(*grid)
-    return Table(values, interpolation=interpolation)
+    return Table(values, *ranges, interpolation=interpolation)
 
 
 def sampleTable1D(
@@ -344,11 +411,12 @@ def sampleTable1D(
         Table in suitable format for GPU interpolation
     """
     x = _parseBoundary(data[:, 0], boundary, nx)
+    _range = (x[0], x[-1])
     if mode == "linear":
-        return Table(np.interp(x, data[:, 0], data[:, 1]))
+        return Table(np.interp(x, data[:, 0], data[:, 1]), _range)
     elif mode == "cubic":
         spline = CubicSpline(data[:, 0], data[:, 1])
-        return Table(spline(x))
+        return Table(spline(x), _range)
     else:
         raise RuntimeError("Unknown interpolation mode!")
 
@@ -386,7 +454,6 @@ def sampleTable2D(
         Table in suitable format for GPU interpolation
     """
     # parse boundaries
-    x = y = None
     if boundaries == None:
         x = _parseBoundary(data[:, 0], None, nx)
         y = _parseBoundary(data[:, 1], None, ny)
@@ -395,6 +462,10 @@ def sampleTable2D(
             raise RuntimeError("Cant parse given boundaries!")
         x = _parseBoundary(data[:, 0], boundaries[0], nx)
         y = _parseBoundary(data[:, 1], boundaries[1], ny)
+    else:
+        raise ValueError("Unexpected boundary format")
+    x_range = (x[0], x[-1])
+    y_range = (y[0], y[-1])
     # create mesh grid
     x, y = np.meshgrid(x, y)
 
@@ -410,7 +481,7 @@ def sampleTable2D(
     # interpolate
     interp = model(data[:, :2], data[:, 2])
     values = interp(x, y)
-    return Table(values)
+    return Table(values, x_range, y_range)
 
 
 class Interpolator(ABC):
@@ -421,27 +492,13 @@ class Interpolator(ABC):
     ---------
     table: Table
         Table containing the values to be interpolated
-    bounds: tuple[(float, float), ...] | None, default=None
-        Boundaries of each dimension specified as (min, max). If `None`,
-        assumes (0, 1) for every dimension.
     """
 
     def __init__(
         self,
         table: Table,
-        *,
-        bounds: tuple[tuple[float, float], ...] | None = None,
     ) -> None:
         self._table = table
-        self._bounds = bounds
-
-    @property
-    def bounds(self) -> tuple[tuple[float, float], ...] | None:
-        """
-        Boundaries of each dimesion used for interpolation.
-        If `None`, assumes (0,1) for every dimensions.
-        """
-        return self._bounds
 
     @property
     def table(self) -> Table:
@@ -461,9 +518,8 @@ class Interpolator(ABC):
         elif xi.ndim >= 3 or xi.shape[1] != self.table.ndim:
             raise ValueError(f"xi has wrong shape! Expected (...,{self.table.ndim})!")
         # convert xi -> (0,1)
-        if self.bounds is not None:
-            for i, (a, b) in enumerate(self.bounds):
-                xi[:, i] = (xi[:, i] - a) / (b - a)
+        for i, (a, b) in enumerate(self.table.axisRanges):
+            xi[:, i] = (xi[:, i] - a) / (b - a)
         # convert to grid coords
         np.clip(xi, 0.0, 1.0, out=xi)
         for i, n in enumerate(self.table.shape):
@@ -506,18 +562,13 @@ class LinearInterpolator(Interpolator):
     ---------
     table: Table
         Table containing the values to be interpolated
-    bounds: tuple[(float, float), ...] | None, default=None
-        Boundaries of each dimension specified as (min, max). If `None`,
-        assumes (0, 1) for every dimension.
     """
 
     def __init__(
         self,
         table: Table,
-        *,
-        bounds: tuple[tuple[float, float], ...] | None = None,
     ) -> None:
-        super().__init__(table, bounds=bounds)
+        super().__init__(table)
 
     def _interp(self, k: NDArray, u: NDArray, axis: int) -> NDArray:
         if axis >= self.table.ndim:
@@ -541,18 +592,13 @@ class CubicInterpolator(Interpolator):
     ---------
     table: Table
         Table containing the values to be interpolated
-    bounds: tuple[(float, float), ...] | None, default=None
-        Boundaries of each dimension specified as (min, max). If `None`,
-        assumes (0, 1) for every dimension.
     """
 
     def __init__(
         self,
         table: Table,
-        *,
-        bounds: tuple[tuple[float, float], ...] | None = None,
     ) -> None:
-        super().__init__(table, bounds=bounds)
+        super().__init__(table)
 
     def _interp(self, k: NDArray, u: NDArray, axis: int) -> NDArray:
         if axis >= self.table.ndim:
@@ -586,20 +632,15 @@ class SteffenInterpolator(Interpolator):
     ----------
     table: Table
         Table containing the values to be interpolated
-    bounds: tuple[(float, float), ...] | None, default=None
-        Boundaries of each dimension specified as (min, max). If `None`,
-        assumes (0, 1) for every dimension.
     """
 
     def __init__(
         self,
         table: Table,
-        *,
-        bounds: tuple[tuple[float, float], ...] | None = None,
     ) -> None:
         if table.ndim != 1:
             raise ValueError("Steffen interpolation is only defined for 1D data!")
-        super().__init__(table, bounds=bounds)
+        super().__init__(table)
         # pre calc slopes to declutter notation later on
         y = table.data
         s = np.diff(table.data)
@@ -646,16 +687,18 @@ def createInterpolator(
         table.
     bounds: tuple[(float, float), ...] | None, default=None
         Boundaries of each dimension specified as (min, max). If `None`,
-        assumes (0, 1) for every dimension.
+        assumes (0, 1) for every dimension. Ignored if `data` is already a `Table`.
     """
-    table = data if isinstance(data, Table) else Table(data)
+    if bounds is None:
+        bounds = tuple()
+    table = data if isinstance(data, Table) else Table(data, *bounds)
     if method is None:
         method = table.interpolation
     else:
         method = _toMethod(method)
 
     if method in _interpolatorDict:
-        return _interpolatorDict[method](table, bounds=bounds)
+        return _interpolatorDict[method](table)
     else:
         raise ValueError("Unknown interpolation method!")
 

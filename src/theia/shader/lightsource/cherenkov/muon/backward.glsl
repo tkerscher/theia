@@ -19,8 +19,7 @@ ForwardRay sampleLight(
     uint idx, inout uint dim
 ) {
     //fetch refractive index
-    float u_lam = normalize_lambda(track.mediumIdx, wavelength);
-    float n = lookUpMediaTable1D(REFRACTIVE_INDEX, track.mediumIdx, u_lam, 1.0);
+    float n = lookUpMediaTable1D(REFRACTIVE_INDEX, track.mediumIdx, wavelength, 1.0);
 
     //sample point on track
     float u = random(idx, dim);

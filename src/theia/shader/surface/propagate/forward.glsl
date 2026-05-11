@@ -75,10 +75,8 @@ ResultCode transmitRay(
     const SurfaceHit hit    ///< Description of surface hit
 ) {
     //fetch refractive indices
-    float lam_i = normalize_lambda(ray.mediumIdx, ray.wavelength);
-    float lam_o = normalize_lambda(hit.otherMediumIdx, ray.wavelength);
-    float n_i = lookUpMediaTable1D(REFRACTIVE_INDEX, ray.mediumIdx, lam_i, 1.0);
-    float n_o = lookUpMediaTable1D(REFRACTIVE_INDEX, hit.otherMediumIdx, lam_o, 1.0);
+    float n_i = lookUpMediaTable1D(REFRACTIVE_INDEX, ray.mediumIdx, ray.wavelength, 1.0);
+    float n_o = lookUpMediaTable1D(REFRACTIVE_INDEX, hit.otherMediumIdx, ray.wavelength, 1.0);
 
     //transmit
     return transmitRay(ray, hit, n_i, n_o);

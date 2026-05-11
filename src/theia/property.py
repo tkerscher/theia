@@ -166,11 +166,19 @@ class TableProperty(Property, ext="table"):
     @table.setter
     def table(self, value: Table | None) -> None:
         self._table = value
-        self.nbytes = 0 if value is None else value.nbytes
+        if value is None or value.constant:
+            self.nbytes = 0
+        else:
+            self.nbytes = value.nbytes
 
     def write(self, ptr: int, address: int) -> int:
         if self.table is None:
             self.data = 0
+            return 0
+        elif self.table.constant:
+            # we can store the constant directly in the property table
+            self.data = unpack("<Q", pack("<If", 0xF, self.table.samples.item()))[0]
+            self.data = Table.createConstantValuePtr(self.table.samples.item())
             return 0
         else:
             self.data = address
