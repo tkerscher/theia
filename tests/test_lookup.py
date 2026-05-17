@@ -358,6 +358,6 @@ def test_uploadTables(rng):
     expected = np.empty(tensor.nbytes, dtype=np.uint8)
     for i, t in enumerate(tables):
         # copy each table separately to not check paddings
-        n = t.copy(expected.ctypes.data)
+        n = t.copy(expected.ctypes.data, unsafe=True)
         offset = ptr[i] - tensor.address
         assert np.equal(buffer.numpy()[offset : offset + n], expected[:n]).all()
