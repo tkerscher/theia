@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hephaistos as hp
+import numpy as np
 
 from ctypes import c_uint64
 from dataclasses import dataclass
@@ -158,6 +159,12 @@ class TableProperty(Property, ext="table"):
     def __init__(self, table: Table | None = None) -> None:
         super().__init__(alignment=Table.ALIGNMENT)
         self.table = table
+
+    @staticmethod
+    def createConstTable(value: float, *, ndim: int = 1) -> TableProperty:
+        """Creates a new `TableProperty` with a constant value"""
+        arr = np.array(value, ndmin=ndim)
+        return TableProperty(Table(arr))
 
     @property
     def table(self) -> Table | None:
