@@ -8,11 +8,11 @@ import theia.task
 
 from theia.light import SphericalLightSource, UniformWavelengthSource
 from theia.material import MaterialStore
+from theia.model import PureWaterModel
 from theia.random import PhiloxRNG
 from theia.response import HistogramHitResponse, UniformValueResponse
 from theia.target import SphereTarget
 from theia.trace import VolumeForwardTracer
-from theia.testing import WaterTestModel
 
 
 def test_ConvergeHistogramTask():
@@ -41,7 +41,7 @@ def test_ConvergeHistogramTask():
     rtol = 5e-4
 
     # create medium
-    medium = WaterTestModel().createMedium()
+    medium = PureWaterModel().createMedium()
     store = MaterialStore([], media=[medium])
     # create pipeline
     rng = PhiloxRNG(key=0xC0FFEE)
