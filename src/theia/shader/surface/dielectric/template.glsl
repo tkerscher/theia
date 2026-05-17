@@ -1,3 +1,5 @@
+//only specular scattering
+#define SURFACE_MODEL_SPECULAR
 
 struct SurfaceProperties {
     float reflectance;

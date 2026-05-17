@@ -1,6 +1,9 @@
 #ifndef _INCLUDE_SURFACE_MODEL_ABSORBER_BACKWARD
 #define _INCLUDE_SURFACE_MODEL_ABSORBER_BACKWARD
 
+//no scattering
+#define SURFACE_MODEL_SPECULAR
+
 ResultCode sampleSurfaceInteraction(
     inout BackwardRay ray,
     const SurfaceHit hit,

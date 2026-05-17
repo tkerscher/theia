@@ -60,6 +60,8 @@ readonly buffer MaterialTable {
 #define loadMaterialSlot_vec2(slot, idx) uintBitsToFloat(materialTable.data[materialTable.stride * MATERIAL_SLOT_##slot + idx])
 #define loadMaterialSlot_uvec2(slot, idx) materialTable.data[materialTable.stride * MATERIAL_SLOT_##slot + idx]
 
+#define lookUpMaterialTable1D(slot, idx, u, def) lookUp(loadMaterialSlot_Table1D(slot, idx), u, def)
+
 //Material flag bits encoding ray intersection behavior
 const uint MATERIAL_BLACK_BODY_BIT          = 0x00000001; //Rays gets completely absorbed
 const uint MATERIAL_DETECTOR_BIT            = 0x00000002; //Rays reached a target

@@ -1,6 +1,9 @@
 #ifndef _INCLUDE_SURFACE_MODEL_ABSORBER_FORWARD
 #define _INCLUDE_SURFACE_MODEL_ABSORBER_FORWARD
 
+//no scattering
+#define SURFACE_MODEL_SPECULAR
+
 ResultCode sampleSurfaceInteraction(
     inout ForwardRay ray,
     const SurfaceHit hit,

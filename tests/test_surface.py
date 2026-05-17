@@ -7,9 +7,10 @@ from theia.camera import ConeCamera
 from theia.light import ConeLightSource, ConstWavelengthSource
 from theia.material import Material, MaterialStore, VACUUM_IDX
 from theia.model import BK7Model, PureWaterModel
+from theia.property import TableProperty
 from theia.random import PhiloxRNG
 from theia.ray import UnpolarizedRay
-from theia.testing import SurfaceInteractionSampler
+from theia.testing import SurfaceInteractionSampler, SurfaceScatteringSampler
 from theia.trace import EventResultCode
 import theia.units as u
 import theia.surface
@@ -320,3 +321,219 @@ def test_BorderSurface(particle: bool, camera: bool):
     normal = np.array(normal)
     cosPos = np.multiply(result["positionOut"], normal[None, :]).sum(-1)
     assert np.all(cosPos < 0.0)
+
+
+@pytest.mark.parametrize(
+    "particle,camera,flags",
+    [
+        (True, False, "TR"),
+        (True, False, "T"),
+        (True, False, "R"),
+        (True, False, "DR"),
+        (False, True, "TR"),
+        (False, True, "T"),
+        (False, True, "R"),
+        (False, False, "TR"),
+        (False, False, "T"),
+        (False, False, "R"),
+        (False, False, "DR"),
+    ],
+)
+def test_LambertianReflectingSurface(particle: bool, camera: bool, flags: str):
+    N = 32 * 1024
+    lam = 600.0 * u.nm
+    direction = (0.8, 0.36, 0.48)
+    normal = (-0.8, -0.36, -0.48)
+    objectId = 10
+    reflectivity = 0.8
+
+    # create materials
+    waterModel = PureWaterModel()
+    water = waterModel.createMedium()
+    surface = theia.surface.LambertianReflectingSurface()
+    probs = {"reflectivity": TableProperty.createConstTable(reflectivity)}
+    mat = Material("mat", None, water, surface, flags=flags, properties=probs)
+    matStore = MaterialStore([mat])
+    waterIdx = matStore.media["water"]
+
+    # create pipeline
+    ray = UnpolarizedRay(particle=particle)
+    rng = PhiloxRNG(key=0xABBA)
+    photons = ConstWavelengthSource(lam)
+    if camera:
+        source = ConeCamera(
+            direction=direction,
+            cosOpeningAngle=0.0,
+            mediumIdx=waterIdx,
+            objectId=objectId,
+        )
+    else:
+        source = ConeLightSource(
+            photons,
+            direction=direction,
+            cosOpeningAngle=0.0,
+            mediumIdx=waterIdx,
+            timeRange=(0.0, 0.0),
+            emitParticles=particle,
+        )
+        photons = None
+    sampler = SurfaceInteractionSampler(
+        N,
+        ray,
+        surface,
+        matStore,
+        rng,
+        source,
+        photons,
+        material="mat",
+        surfaceNormal=normal,
+        objectId=objectId,
+        sampleTargetHit=not camera,
+    )
+    # run pipeline
+    pl.runPipeline(sampler.collectStages())
+
+    # check results
+    result = sampler.queue.view(0)
+    assert np.all(result["positionIn"] == 0.0)
+    assert np.all(result["wavelengthIn"] == lam)
+    assert np.all(result["wavelengthOut"] == lam)
+    assert np.all(result["mediumIdxIn"] == waterIdx)
+    if not camera:
+        # only consider valid hits
+        valid = result["hitSuccess"] == 1
+        assert np.all(result["wavelengthHit"][valid] == lam)
+        assert np.all(result["objectIdHit"][valid] == objectId)
+    canReflect = flags != "D" and flags != "T"
+    if not canReflect:
+        # no reflection -> absorb everything
+        assert np.all(result["hitResult"] == EventResultCode.RAY_ABSORBED)
+        return
+    absorbed = result["hitResult"] == EventResultCode.RAY_ABSORBED
+    assert np.all(result["hitResult"][~absorbed] == EventResultCode.RAY_HIT)
+
+    # check contribution
+    if particle:
+        assert np.all(result["hitSuccess"][absorbed] == 1)
+        assert np.all(result["hitSuccess"][~absorbed] == 0)
+        assert abs(1.0 - absorbed.sum() / N - reflectivity) < 0.01  # noisy MC estimate
+    else:
+        if not camera:
+            assert np.all(result["hitSuccess"] == 1)
+            assert np.allclose(
+                result["contribHit"], result["contribIn"] * (1.0 - reflectivity)
+            )
+        assert absorbed.sum() == 0
+        assert np.allclose(
+            result["contribIn"][~absorbed] * reflectivity,
+            result["contribOut"][~absorbed],
+        )
+
+    # check we prevent self intersection
+    normal = np.array(normal)
+    cosPos = np.multiply(result["positionOut"], normal[None, :]).sum(-1)
+    assert np.all(cosPos[~absorbed] > 0.0)  # all reflected
+    assert np.all(result["mediumIdxOut"] == waterIdx)
+
+    # check angular distribution of reflection
+    # TODO: Be a bit more sophisticated here
+    cosNrm = np.multiply(result["directionOut"][~absorbed], normal[None, :]).sum(1)
+    assert cosNrm.min() > 0.0 and cosNrm.min() < 0.05
+    assert cosNrm.max() > 0.95 and cosNrm.max() <= 1.0
+
+
+@pytest.mark.parametrize(
+    "camera,flags",
+    [
+        (True, "T"),
+        (True, "R"),
+        (True, "D"),
+        (True, "TR"),
+        (False, "T"),
+        (False, "R"),
+        (False, "D"),
+        (False, "TR"),
+    ],
+)
+def test_LambertianReflectingSurface_MIS(camera: bool, flags: str):
+    N = 32 * 1024
+    lam = 600.0 * u.nm
+    direction = (0.8, 0.36, 0.48)
+    normal = (-0.8, -0.36, -0.48)
+    objectId = 10
+    reflectivity = 0.8
+
+    # create materials
+    waterModel = PureWaterModel()
+    water = waterModel.createMedium()
+    surface = theia.surface.LambertianReflectingSurface()
+    probs = {"reflectivity": TableProperty.createConstTable(reflectivity)}
+    mat = Material("mat", None, water, surface, flags=flags, properties=probs)
+    matStore = MaterialStore([mat])
+    waterIdx = matStore.media["water"]
+
+    # create pipeline
+    ray = UnpolarizedRay()
+    rng = PhiloxRNG(key=0xABBA)
+    photons = ConstWavelengthSource(lam)
+    if camera:
+        source = ConeCamera(
+            direction=direction,
+            cosOpeningAngle=0.0,
+            mediumIdx=waterIdx,
+            objectId=objectId,
+        )
+    else:
+        source = ConeLightSource(
+            photons,
+            direction=direction,
+            cosOpeningAngle=0.0,
+            mediumIdx=waterIdx,
+            timeRange=(0.0, 0.0),
+        )
+        photons = None
+    sampler = SurfaceScatteringSampler(
+        N,
+        ray,
+        surface,
+        matStore,
+        rng,
+        source,
+        photons,
+        material="mat",
+        surfaceNormal=normal,
+    )
+    # run pipeline
+    pl.runPipeline(sampler.collectStages())
+
+    # check results
+    result = sampler.queue.view(0)
+    assert np.all(result["positionIn"] == 0.0)
+    assert np.all(result["wavelengthIn"] == lam)
+    assert np.all(result["wavelengthOut"] == lam)
+    assert np.all(result["mediumIdxIn"] == waterIdx)
+
+    assert np.allclose(result["probSampled"], result["probEval"])
+    normal = np.array(normal)
+    cosNrm = np.multiply(result["randomDir"], normal[None, :]).sum(-1)
+    cosNrmSampled = np.multiply(result["sampledDir"], normal[None, :]).sum(-1)
+    # TODO: more elaborate testing on the sampled distribution (also include phi...)
+    assert cosNrmSampled.min() > 0.0 and cosNrmSampled.min() < 0.05
+    assert cosNrmSampled.max() > 0.95 and cosNrmSampled.max() <= 1.0
+    absorbed = result["scatterResult"] == EventResultCode.RAY_ABSORBED
+    m = ~absorbed  # mask
+    if flags == "T" or flags == "D":
+        # cannot reflect -> no success
+        assert np.all(absorbed)
+        return  # nothing left to test
+    assert np.all(~absorbed == (cosNrm > 0.0))
+    assert np.all(absorbed == (cosNrm < 0.0))
+    assert np.allclose(result["probRandom"][m], cosNrm[m] / np.pi)
+    assert np.allclose(result["probRandom"][~m], 0.0)
+    assert np.all(result["mediumIdxOut"][m] == waterIdx)
+    expContrib = result["contribIn"][m] * reflectivity / np.pi
+    assert np.allclose(result["contribOut"][m], expContrib)
+    assert np.allclose(result["directionOut"][m], result["randomDir"][m])
+    # check we prevent self intersection
+    cosPos = np.multiply(result["positionOut"], normal[None, :]).sum(-1)
+    assert np.all(cosPos[m] > 0.0)  # all reflected

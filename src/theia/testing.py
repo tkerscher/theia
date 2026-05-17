@@ -851,3 +851,198 @@ class SurfaceInteractionSampler(PipelineStage):
             self._program.dispatch(groups),
             *self._queue.run(i),
         ]
+
+
+class SurfaceScatteringSampler(PipelineStage):
+    """
+    Samples surface scattering sampling and evaluation used for multiple
+    importance sampling in the tracer.
+
+    Parameters
+    ----------
+    batchSize: int
+        Number of samples to draw per run
+    ray: RayModel
+        Model describing the ray
+    surface: SurfaceModel
+        Model describing surface interaction
+    materials: MaterialStore
+        Store containing material data
+    rng: RNG
+        Random number generator
+    source: LightSource | Camera
+        Source producing rays.
+    wavelengthSource: WavelengthSource | None, default=None
+        Sampler for wavelengths to be used with camera
+    material: int | str
+        Name of index of the surfaces's material
+    surfaceNormal: (float, float, float), default(0.0,0.0,1.0)
+        Normal of the surface to intersect.
+    transform: Transform | None, default=None
+        Transformation from object to world space.
+    """
+
+    name = "Surface Scattering Sampler"
+
+    class SamplerParams(Structure):
+        _fields_ = [
+            ("_queueAdr", buffer_reference),
+            ("_queueSize", c_uint32),
+            ("materialIdx", c_uint32),
+            ("objectId", c_int32),
+            ("surfaceNormal", vec3),
+            ("_offset", vec3),
+            ("_worldToObj", mat3),
+        ]
+
+    def __init__(
+        self,
+        batchSize: int,
+        ray: RayModel,
+        surface: SurfaceModel,
+        materials: MaterialStore,
+        rng: RNG,
+        source: LightSource | Camera,
+        wavelengthSource: WavelengthSource | None = None,
+        *,
+        material: int | str,
+        surfaceNormal: tuple[float, float, float] = (0.0, 0.0, 1.0),
+        transform: Transform | None = None,
+    ) -> None:
+        super().__init__({"SamplerParams": SurfaceScatteringSampler.SamplerParams})
+        self._ray = ray
+        self._surface = surface
+        self._materials = materials
+        self._rng = rng
+        self._source = source
+        self._photons = wavelengthSource
+        if isinstance(material, str):
+            material = materials[material]
+        if transform is None:
+            transform = Transform()
+        self.transform = transform
+
+        forward = isinstance(source, LightSource)
+        if forward and wavelengthSource is not None:
+            raise ValueError("wavelength source can only be specified in backward mode")
+        if forward and source.forwardSourceCode is None:
+            raise ValueError("light source does not support forward mode")
+        if forward:
+            source_code = source.forwardSourceCode
+            self._photons = source.wavelengthSource
+        else:
+            source_code = source.sourceCode
+        mode = "forward" if forward else "backward"
+        rayItem = ray.forwardItem if forward else ray.backwardItem
+        if rayItem is None:
+            raise ValueError(f"Ray model does not support {mode} mode")
+        srfCode = surface.forwardSourceCode if forward else surface.backwardSourceCode
+        if srfCode is None:
+            raise ValueError(f"Surface model does not support {mode} mode")
+        if not surface.supportsMIS:
+            raise ValueError("Surface does not support MIS sampling!")
+
+        fields = [
+            *((name + "In", t) for name, t in rayItem._fields_),
+            *((name + "Out", t) for name, t in rayItem._fields_),
+            ("scatterResult", c_int32),
+            ("sampledDir", c_float * 3),
+            ("randomDir", c_float * 3),
+            ("probSampled", c_float),
+            ("probEval", c_float),
+            ("probRandom", c_float),
+        ]
+        item = createCType("Item", fields)
+        self._queue = IOQueue(item, batchSize, mode="retrieve", skipCounter=True)
+        assert self._queue.tensor is not None
+
+        self.setParams(
+            _queueAdr=self._queue.tensor.address,
+            _queueSize=batchSize,
+            materialIdx=material,
+            surfaceNormal=surfaceNormal,
+        )
+
+        preamble = createPreamble(
+            SAMPLE_FORWARD=forward,
+            RAY_FIELD_COUNT=sizeof(rayItem) // 4,
+        )
+        headers = {
+            "ray.glsl": ray.sourceCode,
+            "rng.glsl": rng.sourceCode,
+            "source.glsl": source_code,
+            "photon.glsl": "" if self._photons is None else self._photons.sourceCode,
+            "surface.glsl": srfCode,
+            **materials.header,
+        }
+        code = compileShader("surface/sample/mis.glsl", preamble, headers)
+        self._program = hp.Program(code)
+        materials.bindParams(self._program)
+
+    @property
+    def batchSize(self) -> int:
+        """Number of samples to draw per run"""
+        return self._queueSize
+
+    @property
+    def materials(self) -> MaterialStore:
+        """Store containing materials to use"""
+        return self._materials
+
+    @property
+    def queue(self) -> IOQueue:
+        """Queue containing samples"""
+        return self._queue
+
+    @property
+    def rayModel(self) -> RayModel:
+        """Model describing rays"""
+        return self._ray
+
+    @property
+    def rng(self) -> RNG:
+        """Random number generator"""
+        return self._rng
+
+    @property
+    def source(self) -> Camera | LightSource:
+        """Source producing rays"""
+        return self._source
+
+    @property
+    def transform(self) -> Transform:
+        """Transformation from object to world space. Must be orthogonal."""
+        return self._transform
+
+    @transform.setter
+    def transform(self, value: Transform) -> None:
+        self._transform = value
+        self.setParams(
+            _offset=value.offset,
+            # GLSL wants transpose (column major), which cancels with inverse
+            _worldToObj=value.innerMatrix,
+        )
+
+    @property
+    def wavelengthSource(self) -> WavelengthSource | None:
+        "Optional wavelength source for use with cameras"
+        return self._photons
+
+    def collectStages(self) -> list[PipelineStage]:
+        """
+        Returns a list of all stages involved with this sampler in the correct
+        order suitable for creating a pipeline.
+        """
+        if self._photons is None:
+            return [self.rng, self.source, self]
+        else:
+            return [self.rng, self._photons, self.source, self]
+
+    def run(self, i: int) -> list[hp.Command]:
+        for stage in self.collectStages():
+            stage.bindParams(self._program, i)
+        groups = -(self.batchSize // -512)
+        return [
+            self._program.dispatch(groups),
+            *self._queue.run(i),
+        ]

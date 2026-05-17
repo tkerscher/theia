@@ -1,6 +1,9 @@
 #ifndef _INCLUDE_SURFACE_MODEL_BORDER_FORWARD
 #define _INCLUDE_SURFACE_MODEL_BORDER_FORWARD
 
+//no scattering
+#define SURFACE_MODEL_SPECULAR
+
 #include "surface/propagate/forward.glsl"
 
 ResultCode sampleSurfaceInteraction(

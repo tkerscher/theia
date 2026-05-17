@@ -13,6 +13,7 @@ __all__ = [
     "AbsorbingSurface",
     "BorderSurface",
     "DielectricSurface",
+    "LambertianReflectingSurface",
     "SurfaceModel",
     "SurfaceRNGDraws",
 ]
@@ -29,6 +30,11 @@ class SurfaceRNGDraws:
     prepareSurface: int
     sampleSurfaceInteraction: int
     processSurfaceTargetHit: int
+
+    # MIS
+
+    surfaceScatterRay: int = 0
+    sampleSurfaceScattering: int = 0
 
 
 class SurfaceModel(ABC):
@@ -54,7 +60,7 @@ class SurfaceModel(ABC):
         *,
         rngDraws: SurfaceRNGDraws | None,
         # sbtRecord: bytes | None = None,
-        # supportsNEE: bool = False,
+        supportsMIS: bool = False,
         requiredMediumProperties: set[str] = set(),
         requiredMaterialProperties: set[str] = set(),
     ) -> None:
@@ -66,7 +72,7 @@ class SurfaceModel(ABC):
             )
         self.rngDraws = rngDraws
         # self.sbtRecord = sbtRecord
-        # self.supportsNEE = supportsNEE
+        self.supportsMIS = supportsMIS
         self.requiredMediumProperties = frozenset(requiredMediumProperties)
         self.requiredMaterialProperties = frozenset(requiredMaterialProperties)
 
@@ -195,6 +201,45 @@ class DielectricSurface(SurfaceModel, name="dielectric"):
 
     def __eq__(self, value: object) -> bool:
         return type(value) == DielectricSurface
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+
+class LambertianReflectingSurface(SurfaceModel, name="lambert"):
+    """
+    Models perfectly diffuse reflecting surfaces.
+    Reflectance defaults to 100%, but can be specified as function of wavelength
+    in the `REFLECTIVITY` property.
+    """
+
+    def __init__(self) -> None:
+        draws = SurfaceRNGDraws(
+            prepareSurface=1,
+            sampleSurfaceInteraction=2,
+            processSurfaceTargetHit=0,
+            sampleSurfaceScattering=2,
+        )
+        super().__init__(
+            rngDraws=draws,
+            requiredMaterialProperties={"reflectivity"},
+            supportsMIS=True,
+        )
+
+    @property
+    def backwardSourceCode(self) -> str | None:
+        return loadShader("surface/lambert/backward.glsl")
+
+    @property
+    def forwardSourceCode(self) -> str | None:
+        return loadShader("surface/lambert/forward.glsl")
+
+    @classmethod
+    def load(cls, file: Traversable) -> LambertianReflectingSurface:
+        return LambertianReflectingSurface()
+
+    def __eq__(self, value: object) -> bool:
+        return type(value) == LambertianReflectingSurface
 
     def __hash__(self) -> int:
         return hash(self.name)

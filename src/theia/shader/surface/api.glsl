@@ -57,3 +57,56 @@ bool processSurfaceTargetHit(
     out HitItem item,               ///< Produced hit item
     uint idx, inout uint dim        ///< RNG state
 );
+
+//If the modeled surface only produces specular scatterings (or does not scatter
+//at all), instead of implementing the following scattering functions one can
+//define the following macro. This tells the tracer to skip any NEE calculations
+#define SURFACE_MODEL_SPECULAR
+
+/**
+ * Samples a surface interaction that scatters the ray in the given direction.
+ * Is expected to update the ray accordingly, e.g. by calling either
+ * `transmitRay` or `reflectRay`
+ *
+ * OPTIONAL. Required for NEE
+*/
+ResultCode surfaceScatterRay(
+    inout RAY ray,
+    const SurfaceHit hit,
+    #ifdef SurfaceProperties
+    const SurfaceProperties props,
+    #endif
+    vec3 newDir,
+    uint idx, inout uint dim
+);
+
+/**
+ * Importance sample a scattering direction at the given surface hit.
+ *
+ * OPTIONAL. Required for MIS
+*/
+vec3 sampleSurfaceScattering(
+    const RAY ray,
+    const SurfaceHit hit,
+    #ifdef SurfaceProperties
+    const SurfaceProperties props,
+    #endif
+    out float prob,
+    uint idx, inout uint dim
+);
+
+/**
+ * Returns the sampling propability of the given scattering direction. That is,
+ * the probability the same direction would have been sampled by
+ * `sampleSurfaceScattering'
+ *
+ * OPTIONAL. Required for MIS
+*/
+float surfaceScatterProb(
+    RAY ray,
+    const SurfaceHit hit,
+    #ifdef SurfaceProperties
+    const SurfaceProperties props,
+    #endif
+    vec3 scatteredDir
+);
