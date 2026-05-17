@@ -200,13 +200,13 @@ class Table:
         mask = [slice(Table.PADDING, -Table.PADDING)] * self.ndim
         return self.data[*mask]
 
-    def copy(self, ptr) -> int:
+    def copy(self, ptr, *, unsafe: bool = False) -> int:
         """
         Copies the table to the given memory address and returns the amount of
         copied bytes.
         """
         # check alignment
-        if (ptr & (Table.ALIGNMENT - 1)) != 0:
+        if (ptr & (Table.ALIGNMENT - 1)) != 0 and not unsafe:
             raise ValueError("memory address is not properly aligned!")
 
         # write header
