@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from itertools import chain, repeat
+from itertools import repeat
 
 import hephaistos as hp
 from hephaistos.pipeline import PipelineStage, SourceCodeMixin
@@ -1756,7 +1756,7 @@ class SceneBackwardTracer(Tracer):
             compileIf=lambda m: m.supportsNEE,
         )
         if inlineVolModule:
-            volModel = scene.materials.volumeModels[1]
+            volModel = scene.materials.volumeModels[-1]
             assert volModel.backwardSourceCode is not None
             session.headers["volume.glsl"] = volModel.backwardSourceCode
         raygen_code = session.compile("tracer/scene/backward/raygen.rgen.glsl")
@@ -1940,7 +1940,7 @@ class _SceneTargetTracer(Tracer):
         else:
             nRngNee = self._nRngNee(scene.materials)
             nRngInit += nRngNee
-        nHitLoop = self._nRngHit(scene.materials, nRngNee)
+        nHitLoop = self._nRngHit(scene.materials, targetGuide, nRngNee)
         nMissLoop = self._nRngMiss(scene.materials, targetGuide)
         nRngLoop = max(nHitLoop, nMissLoop)
         nTraces = maxPathLength if targetGuide is None else maxPathLength - 1
@@ -2014,7 +2014,7 @@ class _SceneTargetTracer(Tracer):
             session,
         )
         if inlineVolModule:
-            volModel = scene.materials.volumeModels[1]
+            volModel = scene.materials.volumeModels[-1]
             if direction == "forward":
                 volCode = volModel.forwardSourceCode
             else:
@@ -2109,20 +2109,34 @@ class _SceneTargetTracer(Tracer):
         return maxProp + maxSrf
 
     @staticmethod
-    def _nRngHit(mats: MaterialStore, nNee: int | None) -> int:
+    def _nRngHit(
+        mats: MaterialStore, guide: TargetGuide | None, nNEE: int | None
+    ) -> int:
         """Calculates max amount of numbers drawn per surface hit"""
         lv = lambda m: m.rngDraws.sampleInteractionLength + m.rngDraws.applyVolumeEffect
-        nProp = max(lv(m) for m in mats.volumeModels)
-        ls = (
-            lambda m: m.rngDraws.prepareSurface
-            + m.rngDraws.processSurfaceTargetHit
-            + m.rngDraws.sampleSurfaceInteraction
-        )
-        nSrf = max(ls(m) for m in mats.surfaceModels)
-        nTotal = nProp + nSrf
-        if nNee:
-            nTotal += nNee
-        return nTotal
+        nProb = max(lv(m) for m in mats.volumeModels)
+        if guide:
+            if nNEE is None:
+                raise ValueError("nNEE must be provided if a guide is given")
+            ls = (
+                lambda m: m.rngDraws.prepareSurface
+                + m.rngDraws.processSurfaceTargetHit
+                + m.rngDraws.sampleSurfaceInteraction
+                + m.rngDraws.sampleSurfaceScattering
+                + 2 * m.rngDraws.surfaceScatterRay
+            )
+            nSrf = max(ls(m) for m in mats.surfaceModels)
+            return nProb + nSrf + 2 * nNEE + guide.nRNGSamples
+        else:
+            if nNEE is None:
+                nNEE = 0
+            ls = (
+                lambda m: m.rngDraws.prepareSurface
+                + m.rngDraws.processSurfaceTargetHit
+                + m.rngDraws.sampleSurfaceInteraction
+            )
+            nSrf = max(ls(m) for m in mats.surfaceModels)
+            return nProb + nSrf + nNEE
 
     @staticmethod
     def _nRngMiss(mats: MaterialStore, guide: TargetGuide | None) -> int:

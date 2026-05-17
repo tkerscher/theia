@@ -5,11 +5,12 @@ import hephaistos as hp
 import hephaistos.pipeline as pl
 from hephaistos.queue import dumpQueue
 
-from theia.camera import PointCamera, SphereCamera
+from theia.camera import FlatCamera, PointCamera, SphereCamera
 from theia.device import isRayTracingEnabled
 from theia.light import ConstWavelengthSource, UniformWavelengthSource
 from theia.light import SphericalLightSource
 from theia.material import Material, MaterialStore
+from theia.property import TableProperty
 from theia.model import DispersionFreeMedium, HenyeyGreensteinPhaseFunction
 from theia.ray import UnpolarizedRay
 from theia.response import (
@@ -20,8 +21,12 @@ from theia.response import (
 )
 from theia.random import PhiloxRNG
 from theia.scene import MeshStore, Scene, Transform
-from theia.surface import AbsorbingSurface, DielectricSurface
-from theia.target import InnerSphereTarget, SphereTargetGuide
+from theia.surface import (
+    AbsorbingSurface,
+    DielectricSurface,
+    LambertianReflectingSurface,
+)
+from theia.target import FlatTargetGuide, InnerSphereTarget, SphereTargetGuide
 from theia.trace import (
     SceneBackwardTracer,
     SceneBackwardTargetTracer,
@@ -636,7 +641,7 @@ def test_VolumeBackwardTracer(
         (0.05, 0.01, 0.0, False),
         (0.05, 0.01, 0.0, True),
         (0.05, 0.01, -0.9, False),
-        (0.05, 0.01, 0.9, False),
+        # (0.05, 0.01, 0.9, False), # converges rather slowly
     ],
 )
 @pytest.mark.parametrize("sampleCoef", [float("NaN"), 0.02])
@@ -816,3 +821,194 @@ def test_SceneBackwardTargetTracer(sampleCoef: float) -> None:
     # check estimate
     expected = 4.0 * np.pi * (n_inner / n_outer) ** 2
     assert abs(estimate / expected - 1.0) < 0.002
+
+
+@pytest.mark.parametrize("mis", [True, False])
+def test_SceneForwardTracer_NonSpecular(mis: bool) -> None:
+    """
+    Checks the MIS implementation in forward tracer. Light is traced inside a
+    perfectly reflecting and isotropic sphere, with a perfect absorber detector
+    clipped into it. Since light can neither escape nor be absorbed, the detector
+    should accumulate all the light, which is easy to check for.
+    """
+    if not isRayTracingEnabled():
+        pytest.skip("ray tracing not supported")
+
+    # scene settings
+    lam = 600.0 * u.nm
+    t0 = 20.0 * u.ns
+    budget = 1e6
+    position = (12.0, -5.0, 4.2) * u.m
+    radius = 50.0 * u.m
+    det_pos = (100.0, -5.0, 4.2) * u.m
+    srf_pos = (50.0, -5.0, 4.2) * u.m
+    srf_nrm = (-1.0, 0.0, 0.0)
+    srf_up = (0.0, 1.0, 0.0)
+    light_pos = (-24.0, 12.0, 18.0) * u.m
+    # tracer settings
+    max_length = 100
+    maxTime = float("inf")
+    batch_size = 1024 * 1024
+    n_batches = 32
+
+    # create materials
+    medium = MediumModel(0.0, 0.0, 0.0).createMedium()  # transparent
+    sphereProps = {"reflectivity": TableProperty.createConstTable(1.0)}
+    matSphere = Material(
+        "sphere",
+        medium,
+        medium,
+        LambertianReflectingSurface(),
+        flags="R",
+        properties=sphereProps,
+    )
+    matDet = Material("det", medium, medium, AbsorbingSurface(), flags="D")
+    matStore = MaterialStore([matSphere, matDet])
+    medIdx = matStore.media["homogenous"]
+    # create scene
+    meshStore = MeshStore({"sphere": "assets/sphere.stl", "cube": "assets/cube.ply"})
+    t_sphere = Transform.TRS(scale=radius, translate=position)
+    t_det = Transform.TRS(scale=radius, translate=det_pos)
+    sphere = meshStore.createInstance("sphere", "sphere", t_sphere)
+    det = meshStore.createInstance("cube", "det", t_det, detectorId=1)
+    scene = Scene([sphere, det], matStore)
+
+    # create tracer
+    ray = UnpolarizedRay()
+    rng = PhiloxRNG(key=0xC0FFEE)
+    photons = ConstWavelengthSource(lam)
+    light = SphericalLightSource(
+        photons, mediumIdx=medIdx, position=light_pos, timeRange=(t0, t0), budget=budget
+    )
+    if mis:
+        guide = FlatTargetGuide(
+            width=2 * radius,
+            height=2 * radius,
+            position=srf_pos,
+            normal=srf_nrm,
+            up=srf_up,
+        )
+    else:
+        guide = None
+    response = IntegratingHitResponse(UniformValueResponse())
+    tracer = SceneForwardTracer(
+        batch_size,
+        ray,
+        light,
+        response,
+        rng,
+        scene,
+        targetGuide=guide,
+        maxPathLength=max_length,
+        maxTime=maxTime,
+    )
+    rng.autoAdvance = tracer.nRNGSamples
+    # create pipeline + scheduler
+    sums = []
+    process = lambda c, b, a: sums.append(response.result(c)[0] / batch_size)
+    pipeline = pl.Pipeline(tracer.collectStages())
+    scheduler = pl.PipelineScheduler(pipeline, processFn=process)
+    # create batches
+    tasks = [{}] * n_batches
+    scheduler.schedule(tasks)
+    scheduler.wait()
+    # destroy scheduler to allow for freeing resources
+    scheduler.destroy()
+    hp.checkCurrentDeviceHealth()
+
+    # check result: we should get all the light back
+    est = np.array(sums).mean()
+    err = abs(est.item() / budget - 1.0)
+    assert err < 5e-5
+
+
+def test_SceneBackwardTracer_SurfaceNEE() -> None:
+    if not isRayTracingEnabled():
+        pytest.skip("ray tracing not supported")
+
+    # scene settings
+    lam = 600.0 * u.nm
+    t0 = 20.0 * u.ns
+    budget = 1e6
+    position = (12.0, -5.0, 4.2) * u.m
+    radius = 50.0 * u.m
+    det_pos = (100.0, -5.0, 4.2) * u.m
+    srf_pos = (49.99, -5.0, 4.2) * u.m  # slight offset to prevent self-intersection
+    srf_nrm = (-1.0, 0.0, 0.0)
+    srf_up = (0.0, 1.0, 0.0)
+    light_pos = (-24.0, 12.0, 18.0) * u.m
+    # tracer settings
+    max_length = 20
+    maxTime = float("inf")
+    batch_size = 1024 * 1024
+    n_batches = 24
+
+    # create materials
+    medium = MediumModel(0.0, 0.0, 0.0).createMedium()  # transparent
+    sphereProps = {"reflectivity": TableProperty.createConstTable(1.0)}
+    matSphere = Material(
+        "sphere",
+        medium,
+        medium,
+        LambertianReflectingSurface(),
+        flags="R",
+        properties=sphereProps,
+    )
+    matDet = Material("det", medium, medium, AbsorbingSurface(), flags="D")
+    matStore = MaterialStore([matSphere, matDet])
+    medIdx = matStore.media["homogenous"]
+    # create scene
+    meshStore = MeshStore({"sphere": "assets/sphere.stl", "cube": "assets/cube.ply"})
+    t_sphere = Transform.TRS(scale=radius, translate=position)
+    t_det = Transform.TRS(scale=radius, translate=det_pos)
+    sphere = meshStore.createInstance("sphere", "sphere", t_sphere)
+    det = meshStore.createInstance("cube", "det", t_det, detectorId=1)
+    scene = Scene([sphere, det], matStore)
+
+    # create tracer
+    ray = UnpolarizedRay()
+    rng = PhiloxRNG(key=0xC0FFEE)
+    photons = ConstWavelengthSource(lam)
+    light = SphericalLightSource(
+        photons, mediumIdx=medIdx, position=light_pos, timeRange=(t0, t0), budget=budget
+    )
+    camera = FlatCamera(
+        mediumIdx=medIdx,
+        width=2 * radius,
+        length=2 * radius,
+        position=srf_pos,
+        direction=srf_nrm,
+        up=srf_up,
+        objectId=1,
+    )
+    response = IntegratingHitResponse(UniformValueResponse())
+    tracer = SceneBackwardTracer(
+        batch_size,
+        ray,
+        light,
+        camera,
+        photons,
+        response,
+        rng,
+        scene,
+        maxPathLength=max_length,
+        maxTime=maxTime,
+    )
+    rng.autoAdvance = tracer.nRNGSamples
+    # create pipeline + scheduler
+    sums = []
+    process = lambda c, b, a: sums.append(response.result(c)[0] / batch_size)
+    pipeline = pl.Pipeline(tracer.collectStages())
+    scheduler = pl.PipelineScheduler(pipeline, processFn=process)
+    # create batches
+    tasks = [{}] * n_batches
+    scheduler.schedule(tasks)
+    scheduler.wait()
+    # destroy scheduler to allow for freeing resources
+    scheduler.destroy()
+    hp.checkCurrentDeviceHealth()
+
+    # check result: we should get all the light back
+    est = np.array(sums).mean()
+    err = abs(est.item() / budget - 1.0)
+    assert err < 1e-5

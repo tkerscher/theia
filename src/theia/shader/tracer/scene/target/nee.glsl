@@ -18,6 +18,10 @@ void traceNEE(TRACE_RAY ray, float dist, float weight, uvec2 tlas, inout uint di
     neeData.weight = weight;
     neeData.dim = dim;
 
+    //give some leeway on the distance to account for numerical precission errors
+    //More leeway does not impact correctness but may hurt performance
+    dist *= 1.05;
+
     //trace ray
     traceRayEXT(
         accelerationStructureEXT(tlas),

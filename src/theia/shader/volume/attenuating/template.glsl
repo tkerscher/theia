@@ -110,7 +110,7 @@ ResultCode volumeScatterRay(
 }
 
 vec3 sampleVolumeScattering(
-    inout RAY ray,
+    const RAY ray,
     out float prob,
     uint idx, inout uint dim
 ) {
