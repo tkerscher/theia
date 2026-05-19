@@ -21,22 +21,14 @@ struct TraceData{
 };
 layout(location = 0) rayPayloadInEXT TraceData traceData;
 
-struct NeeData {
-    BackwardRay ray;
-    uint dim;
-};
-layout(location = 1) rayPayloadEXT NeeData neeData;
-
 #ifndef VOLUME_MODEL_NO_SCATTERING
+
+#include "tracer/scene/backward/nee.glsl"
 
 void neeEstimate(
     BackwardRay ray,
     inout uint dim
 ) {
-    //the miss shader will later resample the light source with the current rng
-    //state so we do not have to put the sampled forward ray in the payload
-    neeData.ray = ray;
-    neeData.dim = dim;
     //sample light source
     ForwardRay source = sampleLight(
         ray.position, vec3(0.0),
@@ -44,26 +36,16 @@ void neeEstimate(
         ray.mediumIdx,
         gl_LaunchIDEXT.x, dim
     );
-
-    //is there even a chance for successfull connection?
-    if (ray.mediumIdx != ray.mediumIdx) return;
-
-    //trace shadow ray
-    traceRayEXT(
-        accelerationStructureEXT(params.tlas),
-        gl_RayFlagsTerminateOnFirstHitEXT,
-        0xFF,                                           //cull mask
-        1, /* same as direct; both want None */         //sbt offset
-        0,                                              //sbt stride
-        MISS_STRIDE * getVolumeIdx(ray.mediumIdx) + 1,  //miss index
-        ray.position,                                   //origin
-        0.0,                                            //t_min
-        -source.direction,                              //direction
-        distance(source.position, ray.position),        //t_max
-        1                                               //payload location
+    
+    //scatter ray towards source
+    ResultCode result = volumeScatterRay(
+        ray, -source.direction,
+        gl_LaunchIDEXT.x, dim  
     );
-    //we can safely ignore rng dim. We will advance it in the main tracing loop
-    //(saves a bit of memory bandwidth)
+    if (result < 0) return;
+
+    //trace NEE ray
+    traceNee(ray, source, params.propagation, params.tlas, dim);
 }
 
 #endif

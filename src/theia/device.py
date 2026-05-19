@@ -79,8 +79,8 @@ def selectDevice() -> int | None:
             continue
         # query ray tracing support
         rt_features = hp.getRayTracingFeatures(i)
-        rt_support = rt_features.pipeline and rt_features.indirectDispatch
-        rt_full = rt_support and rt_features.query
+        rt_support = rt_features.pipeline and rt_features.query
+        rt_full = rt_support and rt_features.indirectDispatch
         # calculate score
         score = 0
         if rt_full:
@@ -93,6 +93,7 @@ def selectDevice() -> int | None:
         # choose this device if better
         if score > maxScore:
             selectedId = i
+            maxScore = score
 
     # issue warnings
     if selectedId is not None and discreteFound and not devices[selectedId].isDiscrete:
@@ -165,12 +166,12 @@ def initializeDevice(*, useSelectedDevice: bool = True, force: bool = False) -> 
 
     # query ray tracing support
     rt_features = hp.getRayTracingFeatures(deviceId)
-    rt_supported = rt_features.pipeline and rt_features.indirectDispatch
+    rt_supported = rt_features.pipeline and rt_features.query
     # select ray tracing features we may need
     rt_request = hp.RayTracingFeatures(
-        query=False,  # currently not needed
+        query=rt_supported,
         pipeline=rt_supported,
-        indirectDispatch=rt_supported,
+        indirectDispatch=rt_supported and rt_features.indirectDispatch,
         positionFetch=rt_supported and rt_features.positionFetch,
         hitObjects=False,  # currently not widely supported
     )

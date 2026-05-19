@@ -702,17 +702,15 @@ def test_SceneBackwardTracer(
     assert stats.mismatch == 0
     assert stats.absorbed > 0
     assert stats.volume > 0
+    assert stats.detected > 0
     if disableScattering:
         assert stats.scattered == 0
     else:
         assert stats.scattered > 0
     if disableDirect:
         assert stats.created == tracer.batchSize
-        # there will only be hits from shadow rays
-        assert stats.detected == 0
     else:
         assert stats.created == 2 * tracer.batchSize
-        assert stats.detected > 0
 
 
 @pytest.mark.parametrize(

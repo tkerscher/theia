@@ -15,7 +15,7 @@
 //direct sampler also needs the light source
 #include "source.glsl"
 //configure direct sampler
-#define DIRECT_SAMPLING_MISS_SHADER_OFFSET 2
+#define DIRECT_SAMPLING_MISS_SHADER_OFFSET 1
 #define DIRECT_SAMPLING_MISS_SHADER_STRIDE MISS_STRIDE
 #define DIRECT_SAMPLING_HIT_SHADER_OFFSET 1
 #include "tracer/scene/direct/sample.glsl"
@@ -76,9 +76,9 @@ void main() {
     #endif
 
     //sample camera
+    dim = CAMERA_SAMPLE_RNG_DIM;
     float lambdaContrib;
     float lambda = sampleWavelength(lambdaContrib, idx, dim);
-    dim = CAMERA_SAMPLE_RNG_DIM;
     CameraHit camHit;
     BackwardRay ray = sampleCameraRay(lambda, camHit, idx, dim);
     ray.lin_contrib *= lambdaContrib;

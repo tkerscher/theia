@@ -24,6 +24,46 @@ struct TraceData{
 layout(location = 0) rayPayloadInEXT TraceData traceData;
 hitAttributeEXT vec2 attribs; //default implementation reports barys here
 
+#ifndef SURFACE_MODEL_SPECULAR
+
+#include "tracer/scene/backward/nee.glsl"
+
+void traceNee(
+    BackwardRay ray,
+    const SurfaceHit hit,
+    #ifdef SurfaceProperties
+    const SurfaceProperties props,
+    #endif
+    inout uint dim
+) {
+    //sample light source
+    ForwardRay source = sampleLight(
+        ray.position,
+        hit.rayNrm,
+        ray.wavelength,
+        ray.mediumIdx,
+        gl_LaunchIDEXT.x, dim
+    );
+
+    //scatter ray towards source
+    ResultCode result = surfaceScatterRay(
+        ray, hit,
+        #ifdef SurfaceProperties
+        props,
+        #endif
+        -source.direction,
+        gl_LaunchIDEXT.x, dim
+    );
+    if (result < 0) return;
+    //extra cosine from geometric term (projected area in radiance defintion)
+    ray.lin_contrib *= abs(dot(-source.direction, hit.rayNrm));
+
+    //trace NEE
+    traceNee(ray, source, params.propagation, params.tlas, dim);
+}
+
+#endif
+
 void main() {
     //resolve hit
     SurfaceHit hit;
@@ -60,6 +100,17 @@ void main() {
     );
     #endif
 
+    //on non-specular surfaces, we can perform NEE
+    #ifndef SURFACE_MODEL_SPECULAR
+    traceNee(
+        traceData.ray, hit,
+        #ifdef SurfaceProperties
+        props,
+        #endif
+        traceData.dim
+    );
+    #endif
+
     //sample surface interaction
     traceData.result = sampleSurfaceInteraction(
         traceData.ray,
@@ -70,6 +121,4 @@ void main() {
         gl_LaunchIDEXT.x,
         traceData.dim
     );
-    
-    //TODO: Allow non-specular surfaces. In that case, we can sample the light for NEE
 }

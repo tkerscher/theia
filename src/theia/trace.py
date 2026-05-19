@@ -1677,8 +1677,10 @@ class SceneBackwardTracer(Tracer):
         cameraSampleRngDim = nRngInit  # save for later
         nRngInit += camera.nRNGSamples
         nRngProp = max(self._nRngProp(v) for v in volModels)
-        nRngMiss = max(self._missRngStride(source, response, v) for v in volModels)
-        nRngHit = max(self._hitRngStride(s) for s in srfModels)
+        nRngNee = max(self._nRngNeeCommon(source, response, v) for v in volModels)
+        nRngMiss = max(self._nRngMiss(v) for v in volModels)
+        nRngHit = max(self._nRngHit(s) for s in srfModels)
+        nRngLoop = nRngProp + max(nRngMiss, nRngHit) + nRngNee
         nRngLoop = max(nRngProp + nRngHit, nRngMiss)
         nRNG = nRngInit + maxPathLength * nRngLoop
         # init
@@ -1717,12 +1719,12 @@ class SceneBackwardTracer(Tracer):
         self._dispatchIndirect = getEnabledRayTracingFeatures().indirectDispatch
         preamble = createPreamble(
             CAMERA_SAMPLE_RNG_DIM=cameraSampleRngDim,
-            DIRECT_RAY_PAYLOAD_LOCATION=2,
+            DIRECT_RAY_PAYLOAD_LOCATION=1,
             DIRECT_SAMPLING_RNG_STRIDE=nRngDirect,
             DISABLE_DIRECT_LIGHTING=disableDirectLighting,
             INLINE_VOLUME_MODEL=inlineVolModule,
             INDIRECT_DISPATCH=self._dispatchIndirect,
-            MISS_STRIDE=2 if disableDirectLighting else 3,
+            MISS_STRIDE=1 if disableDirectLighting else 2,
             PATH_LENGTH=maxPathLength,
             PROXY_RAY="BackwardRay",
             RAY_TRACING_PIPELINE=True,
@@ -1748,13 +1750,6 @@ class SceneBackwardTracer(Tracer):
             "tracer/scene/backward/traverse.rmiss.glsl",
             session,
         )
-        nee_miss_code = _compileTemplateShader(
-            scene.materials.volumeModels,
-            "backward",
-            "tracer/scene/backward/nee.rmiss.glsl",
-            session,
-            compileIf=lambda m: m.supportsNEE,
-        )
         if inlineVolModule:
             volModel = scene.materials.volumeModels[-1]
             assert volModel.backwardSourceCode is not None
@@ -1767,7 +1762,7 @@ class SceneBackwardTracer(Tracer):
             session,
         )
         # direct sampling requires a special miss shader
-        miss_shaders = [traverse_miss_code, nee_miss_code]
+        miss_shaders = [traverse_miss_code]
         if not disableDirectLighting:
             direct_miss_code = _compileTemplateShader(
                 scene.materials.volumeModels,
@@ -1785,6 +1780,7 @@ class SceneBackwardTracer(Tracer):
         builder.addMissShaders(flat_zip(*miss_shaders))
         if not inlineVolModule:
             builder.addCallableShaders(volumeProxies)
+        # TODO: Not sure if ray queries count towards recursion depth?
         self._pipeline, self._sbt = builder.finish(maxRecursionDepth=2)
         scene.bindParams(self._pipeline)
 
@@ -1820,18 +1816,6 @@ class SceneBackwardTracer(Tracer):
         return self._photons
 
     @staticmethod
-    def _missRngStride(light: LightSource, resp: HitResponse, vol: VolumeModel) -> int:
-        """number rng samples per miss including propagation"""
-        n = max(1, vol.rngDraws.sampleInteractionLength)
-        n += vol.rngDraws.applyVolumeEffect
-        n += light.nRNGBackward
-        n += vol.rngDraws.volumeScatterRay
-        n += vol.rngDraws.applyVolumeEffect
-        n += resp.nRNGSamples
-        n += vol.rngDraws.sampleVolumeInteraction
-        return n
-
-    @staticmethod
     def _nRngProp(vol: VolumeModel) -> int:
         """number rng samples drawn before surface hit"""
         n = max(1, vol.rngDraws.sampleInteractionLength)
@@ -1839,10 +1823,26 @@ class SceneBackwardTracer(Tracer):
         return n
 
     @staticmethod
-    def _hitRngStride(srf: SurfaceModel) -> int:
-        """number rng samples per surface hit minus propagation"""
+    def _nRngNeeCommon(light: LightSource, resp: HitResponse, vol: VolumeModel) -> int:
+        """number rng samples drawn per next event estimate"""
+        n = vol.rngDraws.applyVolumeEffect
+        n += light.nRNGBackward
+        n += resp.nRNGSamples
+        return n
+
+    @staticmethod
+    def _nRngMiss(vol: VolumeModel) -> int:
+        """number rng samples in miss shader"""
+        n = vol.rngDraws.sampleVolumeInteraction
+        n += vol.rngDraws.volumeScatterRay  # NEE
+        return n
+
+    @staticmethod
+    def _nRngHit(srf: SurfaceModel) -> int:
+        """number rng samples in hit shader"""
         n = srf.rngDraws.prepareSurface
         n += srf.rngDraws.sampleSurfaceInteraction
+        n += srf.rngDraws.surfaceScatterRay  # NEE
         return n
 
     def _collectStages(self) -> list[tuple[str, PipelineStage]]:
