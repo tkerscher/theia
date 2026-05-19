@@ -505,6 +505,125 @@ class FlatCamera(Camera):
         self.setParam("_view", t.innerMatrix)  # column major
 
 
+class DiskCamera(Camera):
+    """
+    Camera simulating a flat circular disk as detector surface, i.e. samples
+    first a random point on the disk followed by a random direction in the upper
+    hemisphere.
+
+    In the local coordinates system of hits the disk lies in the xy plane
+    centered in the origin with its normal facing in positive z direction.
+    The orientation in global space are determined by the `direction` defining
+    the surface normal and a `up` vector defining where the local y axis points
+    to.
+
+    Parameters
+    ----------
+    mediumIdx: int
+        Index of the medium the camera is submerged in
+    radius: float, default=1.0
+        Radius of the camera disk
+    position: (float, float, float), default=(0.0,0.0,0.0)
+        Position of the camera in world space
+    direction: (float, float, float), default=(0.0,0.0,1.0)
+        Direction the camera faces. Corresponds in local space positive z
+        direction.
+    up: (float, float, float), default=(0.0,1.0,0.0)
+        Direction identifying where 'up' is for the camera. Corresponds in local
+        space to the positive y direction.
+    objectId: int, default=-1
+        Id assigned to hits produced by this camera.
+
+    Stage Parameters
+    ----------------
+    mediumIdx: int
+        Index of the medium the camera is submerged in
+    radius: float, default=1.0
+        Radius of the camera disk
+    position: (float, float, float), default=(0.0,0.0,0.0)
+        Position of the camera in world space
+    direction: (float, float, float), default=(0.0,0.0,1.0)
+        Direction the camera faces. Corresponds in local space positive z
+        direction.
+    up: (float, float, float), default=(0.0,1.0,0.0)
+        Direction identifying where 'up' is for the camera. Corresponds in local
+        space to the positive y direction.
+    objectId: int, default=-1
+        Id assigned to hits produced by this camera.
+
+    Note
+    ----
+    `direction` and `up` may not be parallel.
+    """
+
+    name = "Disk Camera"
+
+    class CameraParams(Structure):
+        _fields_ = [
+            ("position", vec3),
+            ("radius", c_float),
+            ("objectId", c_int32),
+            ("mediumIdx", c_uint32),
+            ("_view", mat3),
+        ]
+
+    def __init__(
+        self,
+        *,
+        mediumIdx: int,
+        radius: float = 1.0 * u.m,
+        position: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        direction: tuple[float, float, float] = (0.0, 0.0, 1.0),
+        up: tuple[float, float, float] = (0.0, 1.0, 0.0),
+        objectId: int = -1,
+    ) -> None:
+        super().__init__(
+            nRNGSamples=4,
+            nRNGDirect=2,
+            supportDirect=True,
+            params={"CameraParams": self.CameraParams},
+            extra={"direction", "up"},
+        )
+        # save params
+        self.direction = direction
+        self.up = up
+        self.setParams(
+            radius=radius,
+            position=position,
+            mediumIdx=mediumIdx,
+            objectId=objectId,
+        )
+
+    @property
+    def direction(self) -> tuple[float, float, float]:
+        """Direction the camera faces"""
+        return self._direction
+
+    @direction.setter
+    def direction(self, value: tuple[float, float, float]) -> None:
+        self._direction = value
+
+    @property
+    def up(self) -> tuple[float, float, float]:
+        """Direction of the local y-Axis identifying where 'up' us for the camera"""
+        return self._up
+
+    @up.setter
+    def up(self, value: tuple[float, float, float]) -> None:
+        self._up = value
+
+    @property
+    def sourceCode(self) -> str:
+        return loadShader("camera/disk.glsl")
+
+    def _finishParams(self, i: int) -> None:
+        super()._finishParams(i)
+
+        # create view matrix
+        t = Transform.View(direction=self.getParam("direction"), up=self.getParam("up"))
+        self.setParam("_view", t.innerMatrix)  # column major
+
+
 class ConeCamera(Camera):
     """
     Sampling camera rays from a cone positioned at a single point.

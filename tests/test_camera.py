@@ -218,6 +218,119 @@ def test_FlatCamera_direct():
     assert np.all(r["sampleMediumIdx"] == 10)
 
 
+def test_DiskCamera():
+    N = 32 * 1024
+
+    # params
+    lam = 450.0 * u.nm
+    radius = 60.0 * u.cm
+    dx, dy, dz = -2.0, -5.0, 10.0
+    trafo = Transform.TRS(rotate=(1.0, 1.0, 0.0, 30.0), translate=(dx, dy, dz))
+    camPos = (dx, dy, dz)
+    camDir = tuple(trafo.applyVec((0.0, 0.0, 1.0)))
+    camUp = tuple(trafo.applyVec((0.0, 1.0, 0.0)))
+
+    # create camera and sampler
+    ray = UnpolarizedRay()
+    philox = PhiloxRNG(key=0xABBA)
+    photon = ConstWavelengthSource(lam)
+    camera = theia.camera.DiskCamera(
+        radius=radius,
+        position=camPos,
+        direction=camDir,
+        up=camUp,
+        mediumIdx=10,
+        objectId=4,
+    )
+    sampler = theia.camera.CameraSampler(
+        N,
+        camera,
+        photon,
+        ray,
+        rng=philox,
+    )
+    # run
+    runPipeline(sampler.collectStages())
+
+    # check result
+    rays = sampler.queue.view(0)
+    assert np.all(rays["mediumIdx"] == 10)
+    assert np.allclose(rays["wavelength"], lam)
+    camPos = np.array(camPos)
+    r = np.sqrt(np.square(rays["position"] - camPos[None, :]).sum(-1))
+    assert r.min() < 0.005
+    assert r.max() > radius - 0.005 and r.max() <= radius
+    r = np.sqrt(np.square(rays["hitPosition"]).sum(-1))
+    assert r.min() < 0.005
+    assert r.max() > radius - 0.005 and r.max() <= radius
+    assert np.all(np.abs(rays["hitPosition"].mean(0)) <= (5e-3, 5e-3, 0.0))
+    assert np.abs(trafo.apply(rays["hitPosition"]) - rays["position"]).max() < 1e-6
+    assert np.abs(trafo.applyVec(rays["hitDirection"]) + rays["direction"]).max() < 5e-7
+    assert np.allclose(rays["contrib"], np.pi**2 * radius**2)
+    cos_normal = np.abs((rays["hitDirection"] * rays["hitNormal"]).sum(-1))
+    assert cos_normal.min() >= 0.0 and cos_normal.min() < 0.005
+    assert cos_normal.max() > 0.995
+    assert np.allclose(rays["hitNormal"], (0.0, 0.0, 1.0))
+    assert np.all(rays["objectId"] == 4)
+
+
+def test_DiskCamera_direct():
+    N = 32 * 1024
+
+    # params
+    lam = 450.0 * u.nm
+    radius = 60.0 * u.cm
+    dx, dy, dz = -2.0, -5.0, 10.0
+    trafo = Transform.TRS(rotate=(1.0, 1.0, 0.0, 30.0), translate=(dx, dy, dz))
+    normal = (0.0, 0.0, 1.0)
+    sampleNrm = trafo.applyVec(normal)  # actually inv(trafo)^T, but here is the same
+    camPos = (dx, dy, dz)
+    camDir = tuple(trafo.applyVec((0.0, 0.0, 1.0)))
+    camUp = tuple(trafo.applyVec((0.0, 1.0, 0.0)))
+
+    # create camera and sampler
+    ray = UnpolarizedRay()
+    philox = PhiloxRNG(key=0xABBA)
+    photons = ConstWavelengthSource(lam)
+    camera = theia.camera.DiskCamera(
+        radius=radius,
+        position=camPos,
+        direction=camDir,
+        up=camUp,
+        mediumIdx=10,
+        objectId=4,
+    )
+    sampler = CameraDirectSampler(N, ray, camera, photons, rng=philox)
+    # run pipeline
+    runPipeline(sampler.collectStages())
+
+    # check result
+    s = sampler.queue.view(0)
+    camPos = np.array(camPos)
+    r = np.sqrt(np.square(s["samplePos"] - camPos[None, :]).sum(-1))
+    assert r.min() < 0.05
+    assert r.max() > radius - 0.005 and r.max() <= radius
+    r = np.sqrt(np.square(s["hitPosition"]).sum(-1))
+    assert r.min() < 0.05
+    assert r.max() > radius - 0.005 and r.max() <= radius
+    assert np.all(np.abs(s["hitPosition"].mean(0)) <= (5e-3, 5e-3, 1e-7))
+    assert np.abs(trafo.apply(s["hitPosition"]) - s["position"]).max() < 1e-6
+    assert np.abs(trafo.applyVec(s["hitDirection"]) + s["direction"]).max() < 1e-6
+    assert np.all(s["position"] == s["samplePos"])
+    assert np.allclose(s["direction"], -s["lightDir"])
+    assert np.allclose(s["sampleNrm"], sampleNrm)
+    assert np.all(s["hitNormal"] == normal)
+    assert np.allclose(s["direction"], -trafo.applyVec(s["hitDirection"]), atol=1e-7)
+    assert np.allclose(s["time"], 0.0)
+    assert np.allclose(s["sampleContrib"], np.pi * radius**2)
+    cos_theta = np.multiply(s["direction"], s["sampleNrm"]).sum(-1)
+    contrib = cos_theta * np.pi * radius**2 * (cos_theta > 0.0).astype(np.float32)
+    assert np.allclose(s["contrib"], contrib, atol=1e-7)
+    assert np.all(s["objectId"] == 4)
+    assert np.all(s["mediumIdx"] == 10)
+    assert np.all(s["sampleMediumIdx"] == 10)
+
+
 def test_ConeCamera():
     N = 32 * 1024
 
