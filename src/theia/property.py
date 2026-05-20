@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hephaistos as hp
 import numpy as np
+from scipy.stats import norm
 
 from ctypes import c_uint64
 from dataclasses import dataclass
@@ -370,3 +371,24 @@ def createSlotMacros(table: PropertyTable, prefix: str) -> dict[str, int]:
     # we are rather naive here for now and assume all slot names behave nicely
     getMacroName = lambda slot: prefix + "_" + slot.replace(" ", "_").upper()
     return {getMacroName(slot): idx for slot, idx in table.slots.items()}
+
+
+def GaussianPPFTableProperty(mu: float = 0.0, sigma: float = 1.0, numSamples: int = 1024) -> TableProperty:
+    """
+    Create a TableProperty of the percent point function (ppf) of a normal distribution.
+
+    Parameters
+    ----------
+    mu: float, default = 0.0
+        Mean of the normal distribution
+    sigma: float, default = 1.0
+        Standard deviation of the normal distribution
+    numSamples: int, default=1024
+        Number of entries of the lookup table
+    """
+    
+    # sample inverted cdf of normal distribution
+    u = np.linspace(0.0, 1.0, numSamples)
+    x = norm.ppf(u, loc=mu, scale=sigma)
+        
+    return TableProperty(Table(x))

@@ -206,6 +206,50 @@ class DielectricSurface(SurfaceModel, name="dielectric"):
         return hash(self.name)
 
 
+class MicroFacetSurfaceModel(SurfaceModel, name="micro_facet"):
+    """
+    Models transmission and reflection of rough surfaces between
+    two dielectric media. The surface is modelled as consisting of 
+    micro facets. The angle of a micro-facet normal against the 
+    average surface normal is sampled from the given percent point 
+    function (ppf).
+    """
+
+    def __init__(
+        self,
+        *,
+        numSamples: int = 1024,) -> None:
+        draws = SurfaceRNGDraws(
+            prepareSurface=21,
+            sampleSurfaceInteraction=0,
+            processSurfaceTargetHit=0,
+        )
+        super().__init__(
+            rngDraws=draws,
+            requiredMediumProperties={"refractive_index"},
+            requiredMaterialProperties={"ppf"},
+        )
+        
+    @property
+    def backwardSourceCode(self) -> str:
+        #return loadShader("surface/micro_facet/backward.glsl")
+        pass
+
+    @property
+    def forwardSourceCode(self) -> str:
+        return loadShader("surface/micro_facet/forward.glsl")
+    
+    @classmethod
+    def load(cls, file: Traversable) -> DielectricSurface:
+        return MicroFacetSurfaceModel()
+
+    def __eq__(self, value: object) -> bool:
+        return type(value) == MicroFacetSurfaceModel
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+
 class LambertianReflectingSurface(SurfaceModel, name="lambert"):
     """
     Models perfectly diffuse reflecting surfaces.
