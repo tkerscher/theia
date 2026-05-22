@@ -22,6 +22,7 @@ from typing import Callable
 __all__ = [
     "Camera",
     "ConeCamera",
+    "DiskCamera",
     "FlatCamera",
     "HostCamera",
     "MeshCamera",
