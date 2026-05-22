@@ -1,6 +1,3 @@
-# Material Module
+# theia.material
 
-Contains definition and implementation of [media](../scene.md#medium) and
-[materials](../scene.md#materials).
-
-::: theia.material
+:::theia.material

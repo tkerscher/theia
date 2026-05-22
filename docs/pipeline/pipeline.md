@@ -1,3 +1,7 @@
+---
+icon: material/pipe
+---
+
 # Pipeline Components
 
 Pipelines are a concept inherited from `hephaistos` the underlying framework

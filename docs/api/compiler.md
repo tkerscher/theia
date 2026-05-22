@@ -1,0 +1,3 @@
+# theia.compiler
+
+:::theia.compiler

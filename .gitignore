@@ -5,3 +5,6 @@ build
 
 # notebook for debugging with plots and stuff
 notebooks/debug.ipynb
+
+# ignore locally created documentation pages
+site

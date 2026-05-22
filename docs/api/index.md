@@ -1,17 +1,48 @@
-# Module Overview
+# API Documentation
 
-Theia is organized in several modules as described in the following table:
+Theia is split into multiple modules. The following gives a short description
+for each of them. See the dedicated pages for the full API documentation of
+the respective modules.
 
-| Module | Description |
-|--------|-------------|
-| [`camera`](camera.md) | Contains definition and implementation of [cameras](../pipeline/components.md#camera). |
-| [`cascades`](cascades.md) | Contains parameterization of Cherenkov cascades used by `ParticleCascadeLightSource`. |
-| [`estimator`](estimator.md) | Contains definition and implementation of [hit responses](../pipeline/components.md#hit-response) as well as estimator that further process the responses. |
-| [`light`](light.md) | Contains definition and implementations of [light sources](../pipeline/components.md#light-source) and [wavelength sources](../pipeline/components.md#wavelength-source). |
-| [`lookup`](lookup.md) | Contains logic for creating look up tables as used to store optical properties of media. |
-| [`material`](material.md) | Contains definition and implementation of [media](../scene.md#medium) and [materials](../scene.md#materials). |
-| [`random`](random.md) | This modules defined and implements [random number generators](../pipeline/components.md#random-number-generator). |
-| [`scene`](scene.md) | This module contains code for handling [meshes](../scene.md#meshes-and-volume-border) and creating [scenes](../scene.md). |
-| [`target`](target.md) | This module contains the definition of [target](../pipeline/components.md#target) and [target guides](../pipeline/components.md#target-guide) as well as some implementation of them. |
-| [`trace`](trace.md) | Contains definition and implementations of [tracer](../pipeline/components.md). |
-| [`units`](units.md) | This module defines useful SI units that can be used for e.g. material and tracers. |
+- [**`theia.camera`**](camera.md)  
+Contains [camera](../pipeline/components.md#camera) components
+- [`theia.compiler`](compiler.md)  
+Manages loading and compiling of GPU code at runtime
+- [`theia.device`](device.md)  
+Handles GPU discovery and selection
+- [`theia.light`](light.md)  
+Contains [light source](../pipeline/components.md#light-source) and
+[wavelength source](../pipeline/components.md#wavelength-source) components
+- [`theia.lookup`](lookup.md)  
+Creating look up tables and uploading them to the GPU
+- [`theia.material`](material.md)  
+Contains the [medium and material](../scene/material.md)
+system
+- [`theia.model`](model.md)  
+Provides utilities for creating media and materials from analytic optical models.
+Also contains some existing optical models.
+- [`theia.property`](property.md)  
+Contains the optical property system
+- [`theia.random`](random.md)  
+Contains the [random number generators](../pipeline/components.md#random-number-generator)
+- [`theia.ray`](ray.md)
+Contains [ray models](../pipeline/components.md#ray-model)
+- [`theia.response`](response.md)  
+Contains [hit responses](../pipeline/components.md#hit-response)
+- [`theia.scene`](scene.md)  
+[Mesh](../scene/mesh.md) loading logic and [scene](../scene/scene.md) creation.
+- [`theia.surface`](surface.md)  
+Defines surface models, including some pre-existing ones
+- [`theia.target`](target.md)  
+Contains [targets](../pipeline/components.md#target) and
+[target guides](../pipeline/components.md#target-guide)
+- [`theia.task`](task.md)  
+Contains tasks
+- [`theia.testing`](testing.md)  
+Utility classes used for testing components
+- [`theia.trace`](trace.md)  
+Contains [tracer](../pipeline/components.md#tracer)
+- [`theia.units`](units.md)  
+Contains the [units system](../scene/units.md)
+- [`theia.volume`](volume.md)  
+Defines volume models, including some pre-existing ones

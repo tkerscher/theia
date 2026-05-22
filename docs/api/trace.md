@@ -1,5 +1,3 @@
-# Trace Module
+# theia.trace
 
-Contains definition and implementations of [tracer](../pipeline/components.md).
-
-::: theia.trace
+:::theia.trace

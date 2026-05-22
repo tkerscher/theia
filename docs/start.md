@@ -1,10 +1,24 @@
-# Installation Guide
+# Get Started
 
-Theia is a python package and can installed using pip via a single line:
+Theia is a framework for creating photon propagation simulations running on any
+modern GPU utilizing hardware accelerated ray tracing. It is designed to be
+modular and extendable allowing to incorporate different physical models.
+
+## Installation
+
+Theia is a Python package and can be installed via `pip`:
 
 ```bash
 pip install git+https://github.com/tkerscher/theia
 ```
+
+!!! note
+
+    Theia relies on [hephaistos](https://github.com/tkerscher/hephaistos) to
+    interact with the GPU, which contains compiled code. There are pre-built
+    binaries uploaded to [`PyPI`](https://pypi.org/project/hephaistos/). If
+    `pip` tries to compile it from source, you might want to check whether you
+    use a Python version for which pre-builts exist.
 
 ## System Requirements
 
@@ -28,7 +42,7 @@ emulating a GPU on the CPU called _llvmpipe_. This is however strongly
 discouraged as performance is expected to be much worse than even the slowest
 GPUs.
 
-## GPU Selection
+### GPU Selection
 
 If no GPU is explicitly select, theia choses the first suitable GPU while
 preferring dedicated over integrated ones. To specify on which GPU to run the
@@ -48,10 +62,20 @@ hp.selectDevice(2)
 import theia
 ```
 
-## Mac Support
+!!! warning
+
+    If you want to use `selectDevice()`, you have to call it before importing
+    `theia`.
+
+### Mac Support
 
 Apple implements their own version of the Vulkan API called _Metal_, that is not
 out of the box compatible. There exist a translation layer that allow software
 targeting Vulkan to run on MacOS, but this currently does not support ray
 tracing. Thus for now, Mac is currently not supported but may become so in a
 future version.
+
+## What's next?
+
+You can either browse the [examples](https://github.com/tkerscher/theia/tree/master/examples)
+or read the [documentation](index.md).

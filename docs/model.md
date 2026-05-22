@@ -1,3 +1,7 @@
+---
+icon: lucide/sigma
+---
+
 # Mathematical Model
 
 On this page we will introduce and discuss the underlying physical model theia
@@ -77,9 +81,9 @@ $$
 ### Reflection and Transmission
 
 At interfaces between media of different refractive index reflection and
-transmission occurs. As of now, we only consider specular surfaces as governed
+transmission occurs. To keep things simply, we only consider specular surfaces as governed
 by [**Snell's law**](https://en.wikipedia.org/wiki/Snell%27s_law) and the
-[**law of reflection**](https://en.wikipedia.org/wiki/Specular_reflection#Law_of_reflection).
+[**law of reflection**](https://en.wikipedia.org/wiki/Specular_reflection#Law_of_reflection) here.
 The ratios of the corresponding radiances $\mathcal{R}$ and $\mathcal{T}$ are
 described by the [**Fresnel equations**](https://en.wikipedia.org/wiki/Fresnel_equations).
 To unify this with the scattering model we can write down a corresponding phase

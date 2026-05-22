@@ -1,18 +1,29 @@
-# Theia Overview
+# Documentation
 
-Theia is a package for creating Monte Carlo simulation of optionally polarized
-light propagation through volumes of arbitrary shapes containing
-(non-)scattering media while keeping track of the elapsed time. This includes
-physically correct reflections and transmission at their boundaries. The
-simulation runs on the GPU utilizing dedicated ray tracing hardware found on
-modern ones for increased performance.
+!!! info
 
-This package allows through its modular design maximal flexibility in
-defining simulations. While this also includes the produced results, usually
-one wants to produce _light curves_ describing the expected signal at the
-detector as function of time:
+    We assume you already know what theia is [about](about.md). Here we explain
+    how it works and how you can use it.
 
-![light curve example](images/light_curve.png)
+Ignoring the internal machinery, the user facing part of theia is mostly split
+into two main parts:
 
-This documentation aims to give insight to the broader concepts underlying this
-package and photon tracing in general.
+- **Scene**:  
+Scenes describe the environment in which to simulate light, e.g. a detector.
+They contain multiple mesh surfaces subdividing its volume. Optical properties
+and models can be assigned to both the surfaces and volumes to define and
+control their interaction with the simulated light.
+- **Simulation**:  
+Simulations quite literary bring light into scenes as they define how and where
+light is created and detected. They use the scene to sample light paths and
+process the resulting hits to produce a final result such as a light yield
+estimate.
+
+You can select a specific topic on the left to learn more about it or press
+_Next_ on the bottom to read the documentation from front to back.
+
+!!! note
+
+    This part of the documentation gives a higher level description of the design
+    and concepts in theia. If you are looking for the API documentation, you can
+    find them [here](api/index.md).
