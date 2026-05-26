@@ -215,10 +215,7 @@ class MicroFacetSurfaceModel(SurfaceModel, name="micro_facet"):
     function (ppf).
     """
 
-    def __init__(
-        self,
-        *,
-        numSamples: int = 1024,) -> None:
+    def __init__(self) -> None:
         draws = SurfaceRNGDraws(
             prepareSurface=21,
             sampleSurfaceInteraction=0,
@@ -232,15 +229,14 @@ class MicroFacetSurfaceModel(SurfaceModel, name="micro_facet"):
         
     @property
     def backwardSourceCode(self) -> str:
-        #return loadShader("surface/micro_facet/backward.glsl")
-        pass
+        return loadShader("surface/micro_facet/backward.glsl")
 
     @property
     def forwardSourceCode(self) -> str:
         return loadShader("surface/micro_facet/forward.glsl")
     
     @classmethod
-    def load(cls, file: Traversable) -> DielectricSurface:
+    def load(cls, file: Traversable) -> MicroFacetSurfaceModel:
         return MicroFacetSurfaceModel()
 
     def __eq__(self, value: object) -> bool:

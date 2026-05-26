@@ -12,6 +12,73 @@ struct SurfaceProperties {
 //tell tracer we want to do some prep work
 #define SurfaceProperties SurfaceProperties
 
+// Inverse CDF (Percent Point Function) der Standardnormalverteilung
+// Acklam-Approximation
+// Genauigkeit typischerweise ~1e-9 in float64,
+// in GLSL float natürlich geringer, aber sehr brauchbar.
+
+float normalPPF(float p)
+{
+    // Schutz gegen log(0)
+    p = clamp(p, 1e-7, 1.0 - 1e-7);
+
+    // Koeffizienten
+    const float a1 = -3.969683028665376e+01;
+    const float a2 =  2.209460984245205e+02;
+    const float a3 = -2.759285104469687e+02;
+    const float a4 =  1.383577518672690e+02;
+    const float a5 = -3.066479806614716e+01;
+    const float a6 =  2.506628277459239e+00;
+
+    const float b1 = -5.447609879822406e+01;
+    const float b2 =  1.615858368580409e+02;
+    const float b3 = -1.556989798598866e+02;
+    const float b4 =  6.680131188771972e+01;
+    const float b5 = -1.328068155288572e+01;
+
+    const float c1 = -7.784894002430293e-03;
+    const float c2 = -3.223964580411365e-01;
+    const float c3 = -2.400758277161838e+00;
+    const float c4 = -2.549732539343734e+00;
+    const float c5 =  4.374664141464968e+00;
+    const float c6 =  2.938163982698783e+00;
+
+    const float d1 =  7.784695709041462e-03;
+    const float d2 =  3.224671290700398e-01;
+    const float d3 =  2.445134137142996e+00;
+    const float d4 =  3.754408661907416e+00;
+
+    const float plow  = 0.02425;
+    const float phigh = 1.0 - plow;
+
+    float q, r;
+
+    // Unterer Bereich
+    if (p < plow)
+    {
+        q = sqrt(-2.0 * log(p));
+
+        return (((((c1 * q + c2) * q + c3) * q + c4) * q + c5) * q + c6) /
+               ((((d1 * q + d2) * q + d3) * q + d4) * q + 1.0);
+    }
+
+    // Oberer Bereich
+    if (phigh < p)
+    {
+        q = sqrt(-2.0 * log(1.0 - p));
+
+        return -(((((c1 * q + c2) * q + c3) * q + c4) * q + c5) * q + c6) /
+                 ((((d1 * q + d2) * q + d3) * q + d4) * q + 1.0);
+    }
+
+    // Zentralbereich
+    q = p - 0.5;
+    r = q * q;
+
+    return (((((a1 * r + a2) * r + a3) * r + a4) * r + a5) * r + a6) * q /
+           (((((b1 * r + b2) * r + b3) * r + b4) * r + b5) * r + 1.0);
+}
+
 SurfaceProperties prepareSurface(
     const RAY ray,
     const SurfaceHit hit,
@@ -26,12 +93,13 @@ SurfaceProperties prepareSurface(
     vec3 dirRefelected = vec3(0,0,0);
     vec3 dirTransmitted = vec3(0,0,0);
 
-    //sample micro-facets until a valid micro-facet is found
+    //sample micro-facets until a valid micro-facet is found (in most cases, the first micro-facet will be valid)
     for(int i = 0; i < 10; i++){
 
         //sample micro-facet orientation
-        float alpha = lookUpMaterialTable1D(PPF, hit.materialIdx, random(idx,dim), 0.0);
-        float phi = TWO_PI * random(idx,dim);
+        float alpha = clamp(lookUpMaterialTable1D(PPF, hit.materialIdx, random(idx,dim), 0.0), -PI, PI);
+        //float alpha = clamp(0.05*normalPPF(random(idx,dim)),-PI,PI);
+        float phi = PI * random(idx,dim);
 
         //rotate surface normal
         vec3 planeVector1 = perpendicularTo(hit.rayNrm);
@@ -52,15 +120,14 @@ SurfaceProperties prepareSurface(
 
         //calculate reflected and transmitted direction
         dirRefelected = reflect(ray.direction, microfacetNormal);
-        if(1 - r > 1e-5){
+        if(1-r > 1.0e-5){
             dirTransmitted = refract(ray.direction, microfacetNormal, n_i / n_o);
         }
 
         //check if a valid micro-facet was sampled
-        bool surface_orientation = (dot(ray.direction, hit.rayNrm) > 0); 
-        bool cond1 = ((dot(ray.direction, microfacetNormal) > 0) == surface_orientation); //check that ray hits micro-facet surface from the front
-        bool cond2 = ((dot(dirRefelected, hit.rayNrm) > 0) != surface_orientation); //check that reflected ray returns to the original medium
-        bool cond3 = (1 - r <= 1e-5) || ((dot(dirTransmitted, hit.rayNrm) > 0) == surface_orientation); //check that transmitted ray goes towards new medium, or that total reflection occurs
+        bool cond1 = (dot(ray.direction, microfacetNormal) < 0); //check that ray hits micro-facet surface from the front
+        bool cond2 = (dot(dirRefelected, hit.rayNrm) > 0); //check that reflected ray returns to the original medium
+        bool cond3 = (1-r < 1.0e-5) || (dot(dirTransmitted, hit.rayNrm) < 0); //check that transmitted ray goes towards new medium, or that total reflection occurs
 
         if (cond1 && cond2 && cond3){
             break;
@@ -82,7 +149,7 @@ SurfaceProperties prepareSurface(
 
             //calculate reflected and transmitted direction
             dirRefelected = reflect(ray.direction, hit.rayNrm);
-            if(1 - r > 1e-5){
+            if(1-r > 1.0e-5){
                 dirTransmitted = refract(ray.direction, hit.rayNrm, n_i / n_o);
         }
         }
@@ -197,7 +264,7 @@ ResultCode sampleSurfaceInteraction(
         ray.lin_contrib *= props.reflectance;
         result = reflectRay(ray, hit, props.dirRefelected);
     }
-    else if(canTransmit && props.reflectance < 1.0) {
+    else if(canTransmit && 1 - props.reflectance > 1.0e-5) {
         //only transmission allowed -> deterministically transmit
         ray.lin_contrib *= (1.0 - props.reflectance);
         result = transmitRay(ray, hit, props.dirTransmitted);
