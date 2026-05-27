@@ -72,9 +72,9 @@ SurfaceProperties prepareSurface(
             cond2 = (dot(dirRefelected, hit.rayNrm) > 0);
         }
         else if(r < 1.0){
-                dirTransmitted = refract(ray.direction, microfacetNormal, n_i / n_o);
-                //check that transmitted ray goes towards new medium, or that total reflection occurs
-                cond2 = (dot(dirTransmitted, hit.rayNrm) < 0);
+            dirTransmitted = refract(ray.direction, microfacetNormal, n_i / n_o);
+            //check that transmitted ray goes towards new medium, or that total reflection occurs
+            cond2 = (dot(dirTransmitted, hit.rayNrm) < 0);
         }
 
         if (cond1 && cond2){
