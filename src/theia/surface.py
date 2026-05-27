@@ -217,7 +217,7 @@ class MicroFacetSurfaceModel(SurfaceModel, name="micro_facet"):
 
     def __init__(self) -> None:
         draws = SurfaceRNGDraws(
-            prepareSurface=21,
+            prepareSurface=24,
             sampleSurfaceInteraction=0,
             processSurfaceTargetHit=0,
         )

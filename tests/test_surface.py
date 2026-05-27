@@ -3,11 +3,11 @@ import pytest
 import hephaistos.pipeline as pl
 import numpy as np
 
-from theia.camera import ConeCamera
-from theia.light import ConeLightSource, ConstWavelengthSource
+from theia.camera import ConeCamera, PencilCamera
+from theia.light import ConeLightSource, ConstWavelengthSource, PencilLightSource
 from theia.material import Material, MaterialStore, VACUUM_IDX
 from theia.model import BK7Model, PureWaterModel
-from theia.property import TableProperty
+from theia.property import GaussianPPFTableProperty, TableProperty
 from theia.random import PhiloxRNG
 from theia.ray import UnpolarizedRay
 from theia.testing import SurfaceInteractionSampler, SurfaceScatteringSampler
@@ -537,3 +537,222 @@ def test_LambertianReflectingSurface_MIS(camera: bool, flags: str):
     # check we prevent self intersection
     cosPos = np.multiply(result["positionOut"], normal[None, :]).sum(-1)
     assert np.all(cosPos[m] > 0.0)  # all reflected
+
+
+def reflect_arr(i, n):
+    ct = np.sum(i * n, axis=1)
+    return i - 2.0 * ct[:, None] * n
+
+def refract_arr(i, n, ni, no):
+    eta = ni / no
+    ct = np.sum(i * n, axis=1)
+    k = 1.0 - eta * eta * (1.0 - ct * ct)
+    return eta[:, None] * i - (eta * ct + np.sqrt(k))[:, None] * n
+
+def reflectance_arr(i, n, ni, no):
+    ci = np.abs(np.sum(i * n, axis=1))
+    si = np.sqrt(np.clip(1.0 - np.square(ci), 0.0, 1.0))
+    so = si * ni / no
+    co = np.sqrt(np.clip(1.0 - np.square(so), 0.0, 1.0))
+    rs = (ni * ci - no * co) / (ni * ci + no * co)
+    rp = (no * ci - ni * co) / (no * ci + ni * co)
+    return 0.5 * (rs * rs + rp * rp)
+
+def sample_microfacet_normals(normals, tangential_vector, sigma):
+    N = len(normals)
+    alpha = np.random.normal(0, sigma, N)
+    phi = np.random.uniform(0, np.pi, N)
+    third_vectors = np.cross(normals, tangential_vector[None, :])
+    ca, sa, cp, sp = np.cos(alpha), np.sin(alpha), np.cos(phi), np.sin(phi)
+    return (normals * ca[:, None]
+            + tangential_vector[None, :] * (sa * cp)[:, None]
+            + third_vectors * (sa * sp)[:, None])
+
+
+@pytest.mark.parametrize(
+    "particle,camera,flags,angle",
+    [
+        (True, False, "TR",0),
+        (True, False, "TR",30),
+        (True, False, "TR",85),
+        (True, False, "T",45),
+        (True, False, "R",45),
+        (True, False, "DR",45),
+        (False, True, "TR",0),
+        (False, True, "TR",30),
+        (False, True, "TR",85),
+        (False, True, "T",45),
+        (False, True, "R",45),
+        (False, False, "TR",0),
+        (False, False, "TR",30),
+        (False, False, "TR",85),
+        (False, False, "T",45),
+        (False, False, "R",45),
+        (False, False, "DR",45),
+    ],
+)
+def test_MicroFacetSurfaceModel(particle: bool, camera: bool, flags: str, angle: float):
+    N = 32 * 1024
+    lam = 600.0 * u.nm
+    direction = np.array((0.8, 0.36, 0.48)) * np.cos(np.deg2rad(angle)) + np.array((-0.36, 0.8, 0)) * np.sin(np.deg2rad(angle)) / np.sqrt(481/625)
+    normal = np.array((-0.8, -0.36, -0.48))
+    tangential_vector = np.array((-0.36, 0.8, 0)) / np.sqrt(481/625)
+    objectId = 10
+    sigma = 0.0
+    ppf = GaussianPPFTableProperty(0, sigma, 1024)
+
+    # create materials
+    waterModel = PureWaterModel()
+    water = waterModel.createMedium()
+    surface = theia.surface.MicroFacetSurfaceModel()
+    mat = Material("mat", None, water, surface, flags=flags, properties={"ppf" : ppf})
+    matStore = MaterialStore([mat])
+    waterIdx = matStore.media["water"]
+
+    # create pipeline
+    ray = UnpolarizedRay(particle=particle)
+    rng = PhiloxRNG(key=0xABBA)
+    photons = ConstWavelengthSource(lam)
+    if camera:
+        source = PencilCamera(
+            rayDirection=direction,
+            mediumIdx=waterIdx,
+            objectId=objectId,
+        )
+    else:
+        source = PencilLightSource(
+            photons,
+            direction=direction,
+            mediumIdx=waterIdx,
+            timeRange=(0.0, 0.0),
+            emitParticles=particle,
+        )
+        photons = None
+    sampler = SurfaceInteractionSampler(
+        N,
+        ray,
+        surface,
+        matStore,
+        rng,
+        source,
+        photons,
+        material="mat",
+        surfaceNormal=normal,
+        objectId=objectId,
+        sampleTargetHit=not camera,
+    )
+    # run pipeline
+    pl.runPipeline(sampler.collectStages())
+
+    # check results
+    result = sampler.queue.view(0)
+    assert np.all(result["positionIn"] == 0.0)
+    assert np.all(result["wavelengthIn"] == lam)
+    assert np.all(result["wavelengthOut"] == lam)
+    assert np.all(result["mediumIdxIn"] == waterIdx)
+    if not camera:
+        assert np.allclose(result["directionIn"], direction, atol=1e-6)
+        # only consider valid hits
+        valid = result["hitSuccess"] == 1
+        assert np.all(result["wavelengthHit"][valid] == lam)
+        assert np.all(result["objectIdHit"][valid] == objectId)
+    if flags == "D":
+        # neither reflect nor transmit flag -> absorb
+        assert np.all(result["hitResult"] == EventResultCode.RAY_ABSORBED)
+        return
+    absorbed = result["hitResult"] == EventResultCode.RAY_ABSORBED
+    assert np.all(result["hitResult"][~absorbed] == EventResultCode.RAY_HIT)
+
+    normals = np.tile(normal, (N,1))
+    cosNrm = np.multiply(result["directionOut"], normal[None, :]).sum(1)
+    trans = (cosNrm < 0.0) & ~absorbed
+    refl = (cosNrm >= 0.0) & ~absorbed
+    ni = waterModel.refractive_index(lam) * np.ones(N)
+    no = np.ones(N)
+
+    # sample micro-facets
+    microfacet_normals = sample_microfacet_normals(normals, tangential_vector, sigma).astype(np.float32)
+    t = refract_arr(result["directionIn"], microfacet_normals, ni, no).astype(np.float32)
+    r = reflect_arr(result["directionIn"], microfacet_normals).astype(np.float32)
+    R = reflectance_arr(result["directionIn"], microfacet_normals, ni, no).astype(np.float32)
+    # check for valid micro-facets
+    cos_in = np.multiply(result["directionIn"], microfacet_normals).sum(1).astype(np.float32)
+    cos_t = np.multiply(t, normal[None, :]).sum(1).astype(np.float32)
+    cos_r = np.multiply(r, normal[None, :]).sum(1).astype(np.float32)
+    mask_r = (cos_in < 0) & (cos_r > 0)
+    mask_t = (cos_in < 0) & (cos_t < 0) & (R < 1)
+    if not particle:
+        c = result["contribIn"]
+    if camera:
+        # in backward mode transmittance scales with a factor eta^2
+        eta = ni / no
+        c = np.copy(result["contribIn"])
+        c[trans] = (c * eta * eta)[trans]
+
+    # check we prevent self intersection
+    cosPos = np.multiply(result["positionOut"], normal[None, :]).sum(-1)
+    assert np.all(cosPos[trans] < 0.0)
+    assert np.all(cosPos[refl] > 0.0)
+
+    err = 0.01 # allowed relative error for all probabilistic tests
+
+    #check correct sampling of micro-facets
+    if ((flags == "R" or flags == "DR") and not particle):
+        microfacet_normals_shader = result["directionOut"] - result["directionIn"]
+        microfacet_normals_shader /= np.linalg.norm(
+            microfacet_normals_shader,
+            axis=1,
+            keepdims=True
+        )
+        cos_test = np.clip(np.sum(normals[mask_r] * microfacet_normals[mask_r], axis=1),0.0,1.0)
+        cos_shader = np.clip(np.sum(normals * microfacet_normals_shader, axis=1),0.0,1.0)
+        assert np.mean(np.arccos(cos_test)) == pytest.approx(np.mean(np.arccos(cos_shader)),rel=err)
+        assert np.std(np.arccos(cos_test)) == pytest.approx(np.std(np.arccos(cos_shader)),rel=err)
+       
+    R_mean_r = np.mean(R[mask_r])
+    R_mean_t = np.mean(R[mask_t])
+    
+    # Compare mean and std_dev of transmission/reflection. In cases where the program chooses between transmission/reflection
+    # randomly, we have to weight the direction with the transmittance/reflectance (probability that ray gets transmitted/reflected)
+    if (1 - R_mean_t) > 0.03 and (flags == "TR" or (flags == "T" and particle)):
+        assert np.mean(result["directionOut"][trans],axis=0) == pytest.approx(np.average(t[mask_t],weights=(1-R[mask_t]),axis=0),rel=err)
+    if (1 - R_mean_t) > 0.03 and (flags == "T") and not particle:
+        assert np.mean(result["directionOut"][trans],axis=0) == pytest.approx(np.average(t[mask_t],axis=0),rel=err)
+        assert np.std(result["directionOut"][trans],axis=0) == pytest.approx(np.std(t[mask_t],axis=0),rel=err)
+    if R_mean_r > 0.03 and (flags == "TR" or ((flags == "R" or flags == "DR") and particle)):
+        assert np.mean(result["directionOut"][refl],axis=0) == pytest.approx(np.average(r[mask_r],weights=R[mask_r],axis=0),rel=err)
+    if R_mean_r > 0.03 and (flags == "R" or flags == "DR") and not particle:
+        assert np.mean(result["directionOut"][refl],axis=0) == pytest.approx(np.average(r[mask_r],axis=0),rel=err)
+        assert np.std(result["directionOut"][refl],axis=0) == pytest.approx(np.std(r[mask_r],axis=0),rel=err)
+
+    assert np.all(result["mediumIdxOut"][trans] == VACUUM_IDX)
+    assert np.all(result["mediumIdxOut"][refl] == waterIdx)
+
+    if flags == "R" or flags == "DR":
+        assert trans.sum() == 0
+        if particle and (1 - R_mean_r) > 0.01:
+            assert absorbed.sum() > 0
+        elif R_mean_r > 0.01:
+            cO = result["contribOut"]
+            assert np.mean(cO[~absorbed]) == pytest.approx(R_mean_r * np.mean(c[~absorbed]),rel=err)
+    if flags == "T":
+        assert refl.sum() == 0
+        if particle and R_mean_t > 0.01:
+             absorbed.sum() > 0
+        if not particle and (1 - R_mean_t) > 0.01:
+            cO = result["contribOut"]
+            assert np.mean(cO[~absorbed]) == pytest.approx((1-R_mean_t) * np.mean(c[~absorbed]),rel=err)
+        if not particle and not camera and (1 - R_mean_t) > 0.01:
+            cH = result["contribHit"]
+            assert np.mean(cH[~absorbed]) == pytest.approx((1-R_mean_t) * np.mean(c[~absorbed]),rel=err)
+    if flags == "TR":
+        if R_mean_r > 0.01:
+            assert refl.sum() > 0
+        if (1 - R_mean_t) > 0.01:
+            assert trans.sum() > 0
+        assert absorbed.sum() == 0
+        if particle:
+            # check particle is not both reflected and detected
+            np.all((result["hitSuccess"] == 0) == refl)
+        else:
+            assert np.allclose(result["contribOut"], c)
