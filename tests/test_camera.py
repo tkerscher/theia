@@ -90,7 +90,7 @@ def test_FlatCamera():
     width = 80.0 * u.cm
     length = 60.0 * u.cm
     dx, dy, dz = -2.0, -5.0, 10.0
-    trafo = Transform.TRS(rotate=(1.0, 1.0, 0.0, 30.0), translate=(dx, dy, dz))
+    trafo = Transform.TRS(rotate=(1.0, 1.0, 0.0, 30.0 * u.deg), translate=(dx, dy, dz))
     camPos = (dx, dy, dz)
     camDir = tuple(trafo.applyVec((0.0, 0.0, 1.0)))
     camUp = tuple(trafo.applyVec((0.0, 1.0, 0.0)))
@@ -157,7 +157,7 @@ def test_FlatCamera_direct():
     width = 80.0 * u.cm
     length = 60.0 * u.cm
     dx, dy, dz = -2.0, -5.0, 10.0
-    trafo = Transform.TRS(rotate=(1.0, 1.0, 0.0, 30.0), translate=(dx, dy, dz))
+    trafo = Transform.TRS(rotate=(1.0, 1.0, 0.0, 30.0 * u.deg), translate=(dx, dy, dz))
     invTrafo = trafo.inverse()
     normal = (0.0, 0.0, 1.0)
     sampleNrm = trafo.applyVec(normal)  # actually inv(trafo)^T, but here is the same
@@ -225,7 +225,7 @@ def test_DiskCamera():
     lam = 450.0 * u.nm
     radius = 60.0 * u.cm
     dx, dy, dz = -2.0, -5.0, 10.0
-    trafo = Transform.TRS(rotate=(1.0, 1.0, 0.0, 30.0), translate=(dx, dy, dz))
+    trafo = Transform.TRS(rotate=(1.0, 1.0, 0.0, 30.0 * u.deg), translate=(dx, dy, dz))
     camPos = (dx, dy, dz)
     camDir = tuple(trafo.applyVec((0.0, 0.0, 1.0)))
     camUp = tuple(trafo.applyVec((0.0, 1.0, 0.0)))
@@ -281,7 +281,7 @@ def test_DiskCamera_direct():
     lam = 450.0 * u.nm
     radius = 60.0 * u.cm
     dx, dy, dz = -2.0, -5.0, 10.0
-    trafo = Transform.TRS(rotate=(1.0, 1.0, 0.0, 30.0), translate=(dx, dy, dz))
+    trafo = Transform.TRS(rotate=(1.0, 1.0, 0.0, 30.0 * u.deg), translate=(dx, dy, dz))
     normal = (0.0, 0.0, 1.0)
     sampleNrm = trafo.applyVec(normal)  # actually inv(trafo)^T, but here is the same
     camPos = (dx, dy, dz)
@@ -570,12 +570,12 @@ def test_MeshCamera(inward: bool):
     store = MeshStore({"cube": "assets/cube.ply", "sphere": "assets/sphere.stl"})
     t1 = Transform.TRS(
         scale=(3.5, 2.0, 0.5),
-        rotate=(1.0, 1.0, 1.0, 115.0),
+        rotate=(1.0, 1.0, 1.0, 115.0 * u.deg),
         translate=(12.5, -5.0, 10.0),
     )
     t2 = Transform.TRS(
         scale=(0.5, 4.0, 3.0),
-        rotate=(0.0, -1.0, 0.5, 1.0),
+        rotate=(0.0, -1.0, 0.5, 1.0 * u.deg),
         translate=(0.5, 10.0, -4.0),
     )
     c1 = store.createInstance("cube", "mat", t1)

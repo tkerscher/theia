@@ -95,8 +95,8 @@ class Transform:
     @staticmethod
     def Rotation(dx: float, dy: float, dz: float, angle: float) -> Transform:
         """
-        Returns a rotation transformation around the given axis (dx,dy,dz) for
-        angle degrees.
+        Returns a rotation transformation around the axis (dx,dy,dz)
+        counter-clockwise for the given angle.
         """
         # normalize unit direction
         length = np.sqrt(dx * dx + dy * dy + dz * dz)
@@ -107,14 +107,14 @@ class Transform:
         K = np.array([[0.0, -dz, dy], [dz, 0.0, -dx], [-dy, dx, 0.0]])
         # create rotation matrix
         res = Transform()
-        angle = np.deg2rad(angle)
+        angle = u.convert(angle, u.rad)
         res._arr[:3, :3] += np.sin(angle) * K + (1.0 - np.cos(angle)) * (K @ K)
         return res
 
     def rotate(self, dx: float, dy: float, dz: float, angle: float) -> Transform:
         """
         Returns a copy of the transformation rotated around (dx,dy,dz)
-        counter-clockwise for angle degrees.
+        counter-clockwise for the given angle.
         """
         return Transform.Rotation(dx, dy, dz, angle) @ self
 
@@ -169,7 +169,7 @@ class Transform:
             each.
         rotate: (float, float, float, float) | None, default=None
             Optional rotation. First three elements define the rotation axis,
-            the last the rotation angle in radians.
+            the last the rotation angle. Rotates counter-clockwise.
         translate: (float, float, float), default=(0.0, 0.0, 0.0)
             Translation given as an offset added.
         """
