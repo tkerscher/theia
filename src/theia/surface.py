@@ -12,7 +12,12 @@ from typing import ClassVar, Type
 __all__ = [
     "AbsorbingSurface",
     "BorderSurface",
+    "DielectricBeckmannSurface",
+    "DielectricMetalSurface",
+    "DielectricRoughUnifiedSurface",
     "DielectricSurface",
+    "DielectricTrowbridgeReitzShadowedSurface",
+    "DielectricTrowbridgeReitzSurface",
     "LambertianReflectingSurface",
     "SurfaceModel",
     "SurfaceRNGDraws",
@@ -204,43 +209,205 @@ class DielectricSurface(SurfaceModel, name="dielectric"):
 
     def __hash__(self) -> int:
         return hash(self.name)
+    
 
-
-class MicroFacetSurfaceModel(SurfaceModel, name="micro_facet"):
+class DielectricMetalSurface(SurfaceModel, name="dielectric_metal"):
     """
-    Models transmission and reflection of rough surfaces between
-    two dielectric media. The surface is modelled as consisting of 
-    micro facets. The angle of a micro-facet normal against the 
-    average surface normal is sampled from the given percent point 
-    function (ppf).
+    Models transmission and reflection of perfectly specular surfaces between
+    a dielectric medium and a metal. 
     """
 
     def __init__(self) -> None:
         draws = SurfaceRNGDraws(
-            prepareSurface=24,
+            prepareSurface=1,
             sampleSurfaceInteraction=0,
             processSurfaceTargetHit=0,
         )
         super().__init__(
             rngDraws=draws,
             requiredMediumProperties={"refractive_index"},
-            requiredMaterialProperties={"ppf"},
+            requiredMaterialProperties={"reflectivity"},
         )
-        
+
     @property
     def backwardSourceCode(self) -> str:
-        return loadShader("surface/micro_facet/backward.glsl")
+        return loadShader("surface/dielectric_metal/backward.glsl")
 
     @property
     def forwardSourceCode(self) -> str:
-        return loadShader("surface/micro_facet/forward.glsl")
-    
+        return loadShader("surface/dielectric_metal/forward.glsl")
+
     @classmethod
-    def load(cls, file: Traversable) -> MicroFacetSurfaceModel:
-        return MicroFacetSurfaceModel()
+    def load(cls, file: Traversable) -> DielectricMetalSurface:
+        return DielectricMetalSurface()
 
     def __eq__(self, value: object) -> bool:
-        return type(value) == MicroFacetSurfaceModel
+        return type(value) == DielectricMetalSurface
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+
+class DielectricRoughUnifiedSurface(SurfaceModel, name="dielectric_unified"):
+    """
+    Models transmission and reflection of rough surfaces between two dielectric
+    media. This model mirrors the Geant4 UNIFIED model with ground finish. This
+    expexts the surface material to have the percent point function of the 
+    microfacet distribution as a table property, which can be created using
+    `property.RoughUnifiedSurfacePPFProperty`.
+
+    """
+
+    def __init__(self) -> None:
+        draws = SurfaceRNGDraws(
+            prepareSurface=34,
+            sampleSurfaceInteraction=2,
+            processSurfaceTargetHit=0,
+        )
+        super().__init__(
+            rngDraws=draws,
+            requiredMediumProperties={"refractive_index"},
+            requiredMaterialProperties={"ppf", "prob_backscatter", "prob_specularspike", "prob_specularlobe", "prob_diffuselobe"},
+        )
+
+    @property
+    def backwardSourceCode(self) -> str:
+        return loadShader("surface/dielectric_rough_unified/backward.glsl")
+
+    @property
+    def forwardSourceCode(self) -> str:
+        return loadShader("surface/dielectric_rough_unified/forward.glsl")
+
+    @classmethod
+    def load(cls, file: Traversable) -> DielectricRoughUnifiedSurface:
+        return DielectricRoughUnifiedSurface()
+
+    def __eq__(self, value: object) -> bool:
+        return type(value) == DielectricRoughUnifiedSurface
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+
+
+class DielectricBeckmannSurface(SurfaceModel, name="dielectric_beckmann"):
+    """
+    Models transmission and reflection of rough surfaces between two dielectric
+    media. The surface is modelled as consisting of micro-facets. Micro-facet normals 
+    are sampled according to the Beckmann model. No shadowing or masking of micro-facets 
+    is applied.
+
+    Note
+    ----
+    The Geant4 UNIFIED SpecularLobe is essentially the small-angle approximation of 
+    the Beckmann model with `sigma_alpha = roughness_parameter / sqrt(2)`. For small
+    roughnesses, these models will give approximately the same result.
+    """
+
+    def __init__(self) -> None:
+        draws = SurfaceRNGDraws(
+            prepareSurface=25,
+            sampleSurfaceInteraction=0,
+            processSurfaceTargetHit=0,
+        )
+        super().__init__(
+            rngDraws=draws,
+            requiredMediumProperties={"refractive_index"},
+            requiredMaterialProperties={"roughness_parameter"},
+        )
+
+    @property
+    def backwardSourceCode(self) -> str:
+        return loadShader("surface/dielectric_rough/beckmann/backward.glsl")
+
+    @property
+    def forwardSourceCode(self) -> str:
+        return loadShader("surface/dielectric_rough/beckmann/forward.glsl")
+
+    @classmethod
+    def load(cls, file: Traversable) -> DielectricBeckmannSurface:
+        return DielectricBeckmannSurface()
+
+    def __eq__(self, value: object) -> bool:
+        return type(value) == DielectricBeckmannSurface
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+
+class DielectricTrowbridgeReitzSurface(SurfaceModel, name="dielectric_trowbridge_reitz"):
+    """
+    Models transmission and reflection of rough surfaces between two dielectric
+    media. The surface is modelled as consisting of micro-facets. Micro-facet normals 
+    are sampled according to the Trowbridge-Reitz (GGX) model. No shadowing or masking 
+    of micro-facets is applied.
+    """
+
+    def __init__(self) -> None:
+        draws = SurfaceRNGDraws(
+            prepareSurface=25,
+            sampleSurfaceInteraction=0,
+            processSurfaceTargetHit=0,
+        )
+        super().__init__(
+            rngDraws=draws,
+            requiredMediumProperties={"refractive_index"},
+            requiredMaterialProperties={"roughness_parameter"},
+        )
+
+    @property
+    def backwardSourceCode(self) -> str:
+        return loadShader("surface/dielectric_rough/trowbridge_reitz/backward.glsl")
+
+    @property
+    def forwardSourceCode(self) -> str:
+        return loadShader("surface/dielectric_rough/trowbridge_reitz/forward.glsl")
+
+    @classmethod
+    def load(cls, file: Traversable) -> DielectricTrowbridgeReitzSurface:
+        return DielectricTrowbridgeReitzSurface()
+
+    def __eq__(self, value: object) -> bool:
+        return type(value) == DielectricTrowbridgeReitzSurface
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+
+class DielectricTrowbridgeReitzShadowedSurface(SurfaceModel, name="dielectric_trowbridge_reitz_shadowed"):
+    """
+    Models transmission and reflection of rough surfaces between two dielectric
+    media. The surface is modelled as consisting of micro-facets. Micro-facet normals 
+    are sampled from the visible distribution of the Trowbridge-Reitz (GGX) model, with 
+    Smith masking applied to the outgoing ray.
+    """
+
+    def __init__(self) -> None:
+        draws = SurfaceRNGDraws(
+            prepareSurface=33,
+            sampleSurfaceInteraction=0,
+            processSurfaceTargetHit=0,
+        )
+        super().__init__(
+            rngDraws=draws,
+            requiredMediumProperties={"refractive_index"},
+            requiredMaterialProperties={"roughness_parameter"},
+        )
+
+    @property
+    def backwardSourceCode(self) -> str:
+        return loadShader("surface/dielectric_rough/trowbridge_reitz_shadowed/backward.glsl")
+
+    @property
+    def forwardSourceCode(self) -> str:
+        return loadShader("surface/dielectric_rough/trowbridge_reitz_shadowed/forward.glsl")
+
+    @classmethod
+    def load(cls, file: Traversable) -> DielectricTrowbridgeReitzShadowedSurface:
+        return DielectricTrowbridgeReitzShadowedSurface()
+
+    def __eq__(self, value: object) -> bool:
+        return type(value) == DielectricTrowbridgeReitzShadowedSurface
 
     def __hash__(self) -> int:
         return hash(self.name)

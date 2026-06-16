@@ -1,6 +1,4 @@
-#define SURFACE_MODEL_MICRO_FACET
-
-#include "math.glsl"
+#define SURFACE_MODEL_DIELECTRIC_ROUGH
 
 struct SurfaceProperties {
     float reflectance;
@@ -17,7 +15,7 @@ SurfaceProperties prepareSurface(
     const SurfaceHit hit,
     uint idx, inout uint dim
 ) {
-    //fetch refractive indices and sigma_alpha
+    //fetch refractive indices and alpha
     float n_i = lookUpMediaTable1D(REFRACTIVE_INDEX, ray.mediumIdx, ray.wavelength, 1.0);
     float n_o = lookUpMediaTable1D(REFRACTIVE_INDEX, hit.otherMediumIdx, ray.wavelength, 1.0);
 
@@ -38,14 +36,8 @@ SurfaceProperties prepareSurface(
     //sample micro-facets until a valid micro-facet is found (in most cases, the first micro-facet will be valid)
     for(int i = 0; i < 8; i++){
 
-        //sample micro-facet orientation
-        float alpha = clamp(lookUpMaterialTable1D(PPF, hit.materialIdx, random(idx,dim), 0.0), -PI, PI);
-        float phi = PI * random(idx,dim);
-
-        //rotate surface normal
-        vec3 planeVector1 = perpendicularTo(hit.rayNrm);
-        vec3 planeVector2 = perpendicularTo(hit.rayNrm, planeVector1);
-        vec3 microfacetNormal = cos(alpha) * hit.rayNrm + sin(alpha) * cos(phi) * planeVector1 + sin(alpha) * sin(phi) * planeVector2;
+        //sample micro-facet
+        vec3 microfacetNormal = sample_microfacet_normal(ray, hit, idx, dim);
 
         //calculate outgoing angle (Snell's law)
         float cos_i = abs(dot(ray.direction, microfacetNormal));
@@ -61,22 +53,24 @@ SurfaceProperties prepareSurface(
 
         doReflect = random(idx, dim) < r;
 
-        //check that ray hits micro-facet surface from the front
-        bool cond1 = (dot(ray.direction, microfacetNormal) < 0);
-
+        bool cond1 = true;
         bool cond2 = true;
 
         if((canReflect && doReflect) || (canReflect && !canTransmit)){
             dirRefelected = reflect(ray.direction, microfacetNormal);
             //check that reflected ray returns to the original medium
-            cond2 = (dot(dirRefelected, hit.rayNrm) > 0);
+            cond1 = (dot(dirRefelected, hit.rayNrm) > 0);
+            //model-dependent validity check
+            cond2 = check_microfacet(dirRefelected, microfacetNormal, hit, ray, idx, dim);
         }
         else if(r < 1.0){
             dirTransmitted = refract(ray.direction, microfacetNormal, n_i / n_o);
             //check that transmitted ray goes towards new medium, or that total reflection occurs
-            cond2 = (dot(dirTransmitted, hit.rayNrm) < 0);
+            cond1 = (dot(dirTransmitted, hit.rayNrm) < 0) || (dirTransmitted == vec3(0.0));
+            //model-dependent validity check
+            cond2 = check_microfacet(dirTransmitted, microfacetNormal, hit, ray, idx, dim);
         }
-
+        
         if (cond1 && cond2){
             break;
         }
@@ -175,11 +169,11 @@ ResultCode sampleSurfaceInteraction(
         result = reflectRay(ray, hit, props.dirRefelected);
     }
     else if (!props.doReflect && canTransmit) {
-        result = transmitRay(ray, hit, props.dirTransmitted);
         //due to finite numerical precision, we might run into total internal
         //reflection earlier than expected -> mark as absorbed
-        if (result == ERROR_CODE_TOTAL_INTERNAL_REFLECTION)
-            result = RESULT_CODE_RAY_ABSORBED;
+        if (props.dirTransmitted == vec3(0.0))
+            return RESULT_CODE_RAY_ABSORBED;
+        result = transmitRay(ray, hit, props.dirTransmitted);
     }
     else {
         //sampled decision is forbidden -> abort tracing
@@ -197,6 +191,10 @@ ResultCode sampleSurfaceInteraction(
             result = reflectRay(ray, hit, props.dirRefelected);
         }
         else {
+            //due to finite numerical precision, we might run into total internal
+            //reflection earlier than expected -> mark as absorbed
+            if (props.dirTransmitted == vec3(0.0))
+                return RESULT_CODE_RAY_ABSORBED;
             result = transmitRay(ray, hit, props.dirTransmitted);
         }
     }
@@ -206,13 +204,13 @@ ResultCode sampleSurfaceInteraction(
         result = reflectRay(ray, hit, props.dirRefelected);
     }
     else if(canTransmit && props.reflectance < 1.0) {
+        //due to finite numerical precision, we might run into total internal
+        //reflection earlier than expected -> mark as absorbed
+        if (props.dirTransmitted == vec3(0.0))
+            return RESULT_CODE_RAY_ABSORBED;
         //only transmission allowed -> deterministically transmit
         ray.lin_contrib *= (1.0 - props.reflectance);
         result = transmitRay(ray, hit, props.dirTransmitted);
-        //due to finite numerical precision, we might run into total internal
-        //reflection earlier than expected -> mark as absorbed
-        if (result == ERROR_CODE_TOTAL_INTERNAL_REFLECTION)
-            result = RESULT_CODE_RAY_ABSORBED;
     }
     else {
         return RESULT_CODE_RAY_ABSORBED;

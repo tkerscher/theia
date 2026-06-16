@@ -64,6 +64,14 @@ mat3 createLocalCOSY(vec3 vz) {
     return mat3(vx,vy,vz);
 }
 
+//small helper function to create a local coordinate system from a vector
+//as the new z axis, and another perpendicular vector as the new x axis.
+//returns the transformation matrix to transfrom local in global system
+mat3 createLocalCOSY(vec3 vz, vec3 vx) {
+    vec3 vy = crosser(vz, vx);
+    return mat3(vx,vy,vz);
+}
+
 //returns a unit vector normal to unit vector v
 vec3 perpendicularTo(vec3 v) {
     float s = signBit(v.z);

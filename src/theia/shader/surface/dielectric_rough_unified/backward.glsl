@@ -1,5 +1,5 @@
-#ifndef _INCLUDE_SURFACE_MODEL_MICRO_FACET_BACKWARD
-#define _INCLUDE_SURFACE_MODEL_MICRO_FACET_BACKWARD
+#ifndef _INCLUDE_SURFACE_MODEL_DIELECTRIC_ROUGH_UNIFIED_BACKWARD
+#define _INCLUDE_SURFACE_MODEL_DIELECTRIC_ROUGH_UNIFIED_BACKWARD
 
 #include "surface/propagate/backward.glsl"
 
@@ -7,7 +7,7 @@
 #define NO_TRANSMIT_BIT MATERIAL_NO_TRANSMIT_BWD_BIT
 
 #define RAY BackwardRay
-#include "surface/micro_facet/template.glsl"
+#include "surface/dielectric_rough_unified/template.glsl"
 #undef RAY
 
 #undef NO_REFLECT_BIT

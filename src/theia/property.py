@@ -3,6 +3,7 @@ from __future__ import annotations
 import hephaistos as hp
 import numpy as np
 from scipy.stats import norm
+from scipy.stats.sampling import NumericalInversePolynomial
 
 from ctypes import c_uint64
 from dataclasses import dataclass
@@ -373,22 +374,17 @@ def createSlotMacros(table: PropertyTable, prefix: str) -> dict[str, int]:
     return {getMacroName(slot): idx for slot, idx in table.slots.items()}
 
 
-def GaussianPPFTableProperty(mu: float = 0.0, sigma: float = 1.0, numSamples: int = 1024) -> TableProperty:
-    """
-    Create a TableProperty of the percent point function (ppf) of a normal distribution.
+def RoughUnifiedSurfacePPFProperty(sigma: float, numSamples: int = 1024):
+    """Util function to create the ppf property for the UNIFIED rough surface model."""
+    class Dist:
+        """Bundle fn into a class for use with scipy"""
 
-    Parameters
-    ----------
-    mu: float, default = 0.0
-        Mean of the normal distribution
-    sigma: float, default = 1.0
-        Standard deviation of the normal distribution
-    numSamples: int, default=1024
-        Number of entries of the lookup table
-    """
-    
-    # sample inverted cdf of normal distribution
+        def pdf(self, x):
+            return np.sin(x) * np.exp(-x**2 / (2 * sigma**2))
+
+    # invert cdf
+    inv_cdf = NumericalInversePolynomial(Dist(), domain=(0,np.pi/2))
+    # sample inverted cdf
     u = np.linspace(0.0, 1.0, numSamples)
-    x = norm.ppf(u, loc=mu, scale=sigma)
-        
+    x = inv_cdf.ppf(u)
     return TableProperty(Table(x))
