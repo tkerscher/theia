@@ -105,6 +105,19 @@ class OpticalProperties(str, Enum):
     PHASE_SAMPLING = "phase_sampling"
     REFRACTIVE_INDEX = "refractive_index"
     SCATTERING_COEF = "scattering_coef"
+    # scintillation
+    SCINTILLATION_SPECTRUM_1_SAMPLER = "scintillation_spectrum_1_sampler"
+    SCINTILLATION_SPECTRUM_2_SAMPLER = "scintillation_spectrum_2_sampler"
+    SCINTILLATION_TIME_CONSTANT_1 = "scintillation_time_constant_1"
+    SCINTILLATION_TIME_CONSTANT_2 = "scintillation_time_constant_2"
+    SCINTILLATION_BRANCHING_RATIO_ELECTRON = "scintillation_branching_ratio_electron"
+    SCINTILLATION_BRANCHING_RATIO_PROTON = "scintillation_branching_ratio_proton"
+    SCINTILLATION_BRANCHING_RATIO_ALPHA = "scintillation_branching_ratio_alpha"
+    SCINTILLATION_BRANCHING_RATIO_ION = "scintillation_branching_ratio_ion"
+    SCINTILLATION_YIELD_ELECTRON = "scintillation_yield_electron"
+    SCINTILLATION_YIELD_PROTON = "scintillation_yield_proton"
+    SCINTILLATION_YIELD_ALPHA = "scintillation_yield_alpha"
+    SCINTILLATION_YIELD_ION = "scintillation_yield_ion"
     # polarization
     PHASE_M12 = "phase_m12"
     PHASE_M22 = "phase_m22"
@@ -154,6 +167,19 @@ def checkMedium(
         assert data.ndim == 1, f'Expected data of property "{name}" to be 1D!'
         return data
 
+    # common logic checking for float properties and fetching samples
+    def getFloatData(name: str) -> float | None:
+        if name not in medium.properties:
+            return None
+        prop = medium.properties[name]
+        assert isinstance(
+            prop, FloatProperty
+        ), f'Expected property "{name}" to be a float!'
+        if prop.value is None:
+            return None
+        data = prop.value[1]
+        return data
+
     # bit ugly, but nicer than duplicating the same if/else over and over
     try:
         # fmt: off
@@ -200,6 +226,30 @@ def checkMedium(
             dq = np.abs(np.diff(quantiles))
             du = 1 / len(dq)
             assert np.allclose(dq, du, rtol=rtol, atol=atol), "Phase sampling function does not reproduce phase function!"
+        if (beta := getTableData("scintillation_spectrum_1_sampler")) is not None:
+            assert np.all(beta > 0.0), "Domain of scintillation spectrum sampler must be positive!"
+        if (beta := getTableData("scintillation_spectrum_2_sampler")) is not None:
+            assert np.all(beta > 0.0), "Domain of scintillation spectrum sampler must be positive!"
+        if (tau:= getFloatData("scintillation_time_constant_1")) is not None:
+            assert (tau >= 0.0), "Scintillation time constant must be non-negative!"
+        if (tau:= getFloatData("scintillation_time_constant_2")) is not None:
+            assert (tau >= 0.0), "Scintillation time constant must be non-negative!"
+        if (eta := getFloatData("scintillation_branching_ratio_electron")) is not None:
+            assert ((eta >= 0.0) & (eta <= 1.0)), "Scintillation branching ratio for electrons must be in [0,1]!"
+        if (eta := getFloatData("scintillation_branching_ratio_proton")) is not None:
+            assert ((eta >= 0.0) & (eta <= 1.0)), "Scintillation branching ratio for protons must be in [0,1]!"
+        if (eta := getFloatData("scintillation_branching_ratio_alpha")) is not None:
+            assert ((eta >= 0.0) & (eta <= 1.0)), "Scintillation branching ratio for alpha particles must be in [0,1]!"
+        if (eta := getFloatData("scintillation_branching_ratio_ion")) is not None:
+            assert ((eta >= 0.0) & (eta <= 1.0)), "Scintillation branching ratio for ions must be in [0,1]!"
+        if (y := getFloatData("scintillation_yield_electron")) is not None:
+            assert (y >= 0.0), "Scintillation yield for electrons must be non-negative!"
+        if (y := getFloatData("scintillation_yield_proton")) is not None:
+            assert (y >= 0.0), "Scintillation yield for protons must be non-negative!"
+        if (y := getFloatData("scintillation_yield_alpha")) is not None:
+            assert (y >= 0.0), "Scintillation yield for alpha particles must be non-negative!"
+        if (y := getFloatData("scintillation_yield_ion")) is not None:
+            assert (y >= 0.0), "Scintillation yield for ions must be non-negative!"
         if( m12 := getTableData("phase_m12")) is not None:
             assert np.all((m12 >= -1.0) & (m12 <= 1.0)), "Mueller matrix must be normalized!"
         if (m22 := getTableData("phase_m22")) is not None:

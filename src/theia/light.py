@@ -37,6 +37,7 @@ __all__ = [
     "MuonTrackLightSource",
     "ParticleCascadeLightSource",
     "PencilLightSource",
+    "SpectrumWavelengthSource",
     "SphericalLightSource",
     "StreamingHostLightSource",
     "StreamingHostWavelengthSource",
@@ -274,6 +275,31 @@ class ConstWavelengthSource(WavelengthSource):
     @property
     def sourceCode(self) -> str:
         return loadShader("wavelengthsource/const.glsl")
+
+
+class SpectrumWavelengthSource(WavelengthSource):
+    """
+    Samples wavelengths based on the given spectrum.
+
+    Parameters
+    ----------
+    spectrumTableAddress: int
+        GPU address of a table containing the percent point function of the
+        light spectrum.
+    """
+
+    class WavelengthParams(Structure):
+        _fields_ = [("spectrumTableAddress", c_int64)]
+
+    name = "Spectrum Wavelength Source"
+
+    def __init__(self, spectrumTableAddress: int) -> None:
+        super().__init__(params={"WavelengthParams": SpectrumWavelengthSource.WavelengthParams}, nRNGSamples=1)
+        self.setParams(spectrumTableAddress=spectrumTableAddress)
+
+    @property
+    def sourceCode(self) -> str:
+        return loadShader("wavelengthsource/spectrum.glsl")
 
 
 class UniformWavelengthSource(WavelengthSource):
