@@ -32,29 +32,7 @@ ResultCode applyVolumeSampled(
     bool hit,
     uint idx, inout uint dim
 ) {
-    //we importance sampled the attenuation
-    // -> nothing to do if we hit something (no volume interaction happened)
-    if (hit) return RESULT_CODE_SUCCESS;
-
-    //fetch absorption and scattering coefficient
-    float mu_a = lookUpMediaTable1D(ABSORPTION_COEF, ray.mediumIdx, ray.wavelength, 0.0);
-    float mu_s = lookUpMediaTable1D(SCATTERING_COEF, ray.mediumIdx, ray.wavelength, 0.0);
-    float mu_e = mu_a + mu_s;
-    //chance of scattering
-    float p_scatter = mu_s / (mu_a + mu_s);
-
-    #if defined(VOLUME_ABSORB_RAY) || defined(RAY_PARTICLE)
-    //stop ray with chance 1-p_scatter
-    float u = random(idx, dim);
-    if (u > p_scatter) {
-        return RESULT_CODE_RAY_ABSORBED;
-    }
-    #else
-    //always scatter. Adjust ray contribution accordingly
-    ray.lin_contrib *= p_scatter;
-    #endif
-
-    //ray has not been absorbed -> continue
+    //we importance sampled attenuation -> nothing to do
     return RESULT_CODE_SUCCESS;
 }
 
@@ -62,8 +40,26 @@ ResultCode sampleVolumeInteraction(
     inout RAY ray,
     uint idx, inout uint dim
 ) {
-    //we only ever scatter -> sample new direction
-    //note that the factor mu_s was either importance sampled or applied earlier
+    //fetch absorption and scattering coefficient
+    float mu_a = lookUpMediaTable1D(ABSORPTION_COEF, ray.mediumIdx, ray.wavelength, 0.0);
+    float mu_s = lookUpMediaTable1D(SCATTERING_COEF, ray.mediumIdx, ray.wavelength, 0.0);
+    float mu_e = mu_a + mu_s;
+    //are there any interactions at all?
+    if (mu_e <= 0.0) return RESULT_CODE_SUCCESS; //nothing to do -> carry on
+
+    //if applicable, randomly decide between absorption and scattering
+    float p_scatter = mu_s / mu_e;
+    #if defined(VOLUME_ABSORB_RAY) || defined(RAY_PARTICLE)
+    //stop ray with chance 1-p_scatter
+    if (random(idx, dim) > p_scatter) {
+        return RESULT_CODE_RAY_ABSORBED;
+    }
+    #else
+    //never absorb -> adjust contrib accordingly
+    ray.lin_contrib *= p_scatter;
+    #endif
+
+    //scatter ray
     float cos_theta, phi;
     sampleScatterDir(
         ray.mediumIdx,
@@ -72,9 +68,8 @@ ResultCode sampleVolumeInteraction(
         cos_theta, phi
     );
     vec3 newDir = scatterDir(ray.direction, cos_theta, phi);
-    scatterRay(ray, newDir);
-
-    return RESULT_CODE_RAY_SCATTERED;
+    ResultCode result = scatterRay(ray, newDir);
+    return result < 0 ? result : RESULT_CODE_RAY_SCATTERED;
 }
 
 #ifndef RAY_PARTICLE
@@ -91,10 +86,11 @@ ResultCode applyVolume(
     float mu_e = mu_a + mu_s;
     
     //attenuate ray
-    ray.log_contrib -= (mu_a + mu_s) * dist;
-    //if we did not hit anything, we scatter
+    ray.log_contrib -= mu_e * dist;
+    //if we did not hit anything, prepare interaction sampling
+    //this stems from normalizing interaction probabilites
     if (!hit) {
-        ray.lin_contrib *= mu_s;
+        ray.lin_contrib *= mu_e;
     }
 
     return RESULT_CODE_SUCCESS;
@@ -105,7 +101,11 @@ ResultCode volumeScatterRay(
     vec3 newDir,
     uint idx, inout uint dim
 ) {
-    ray.lin_contrib *= scatterProb(ray.mediumIdx, ray.direction, newDir);
+    float mu_a = lookUpMediaTable1D(ABSORPTION_COEF, ray.mediumIdx, ray.wavelength, 0.0);
+    float mu_s = lookUpMediaTable1D(SCATTERING_COEF, ray.mediumIdx, ray.wavelength, 0.0);
+    float mu_e = mu_a + mu_s;
+
+    ray.lin_contrib *= mu_s / mu_e * scatterProb(ray.mediumIdx, ray.direction, newDir);
     return scatterRay(ray, newDir);
 }
 
