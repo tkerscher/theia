@@ -99,8 +99,6 @@ void main() {
         #endif
         randDir
     );
-    //DEBUG
-    ResultCode foo = dot(ray.direction, hit.rayNrm) >= 0.0 ? 1 : -1;
     ResultCode result = surfaceScatterRay(
         ray, hit,
         #ifdef SurfaceProperties
@@ -118,8 +116,8 @@ void main() {
     #endif
     p += RAY_FIELD_COUNT * params.queueSize;
 
-    UIntBuffer uints = UIntBuffer(params.queueAdr);
-    uints.values[p] = result; p += params.queueSize;
+    IntBuffer ints = IntBuffer(params.queueAdr);
+    ints.values[p] = result; p += params.queueSize;
 
     FloatBuffer floats = FloatBuffer(params.queueAdr);
     floats.values[p] = newDir.x; p += params.queueSize;
