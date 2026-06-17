@@ -32,8 +32,8 @@ ResultCode sampleVolumeInteraction(
     inout ForwardRay,
     uint idx, inout uint dim
 ) {
-    //there is no volume interaction
-    return ERROR_CODE_TRACE_ABORT;
+    //there is no volume interaction -> keep on straight
+    return RESULT_CODE_SUCCESS;
 }
 
 //There is no scattering in transparent media
