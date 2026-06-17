@@ -18,6 +18,7 @@ from theia.ray import RayModel
 from theia.scene import RectBBox, Transform
 from theia.surface import SurfaceModel
 from theia.target import LightSourceTarget, Target, TargetGuide
+from theia.volume import VolumeModel
 import theia.units as u
 
 
@@ -27,6 +28,8 @@ __all__ = [
     "LightSourceTargetSampler",
     "SurfaceInteractionSampler",
     "TargetSampler",
+    "VolumeInteractionSampler",
+    "VolumeScatteringSampler",
 ]
 
 
@@ -1022,6 +1025,351 @@ class SurfaceScatteringSampler(PipelineStage):
             # GLSL wants transpose (column major), which cancels with inverse
             _worldToObj=value.innerMatrix,
         )
+
+    @property
+    def wavelengthSource(self) -> WavelengthSource | None:
+        "Optional wavelength source for use with cameras"
+        return self._photons
+
+    def collectStages(self) -> list[PipelineStage]:
+        """
+        Returns a list of all stages involved with this sampler in the correct
+        order suitable for creating a pipeline.
+        """
+        if self._photons is None:
+            return [self.rng, self.source, self]
+        else:
+            return [self.rng, self._photons, self.source, self]
+
+    def run(self, i: int) -> list[hp.Command]:
+        for stage in self.collectStages():
+            stage.bindParams(self._program, i)
+        groups = -(self.batchSize // -512)
+        return [
+            self._program.dispatch(groups),
+            *self._queue.run(i),
+        ]
+
+
+class VolumeInteractionSampler(PipelineStage):
+    """
+    Samples volume interaction of the given model. Includes propagation.
+
+    Parameters
+    ----------
+    batchSize: int
+        Number of samples to draw per run
+    ray: RayModel
+        Model describing the ray
+    volume: VolumeModel
+        Volume model to be sampled
+    materials: MaterialStore
+        Store containing material data
+    rng: RNG
+        Random number generator
+    source: LightSource | Camera
+        Source producing rays
+    wavelengthSource: WavelengthSource | None, default=None
+        Sampler for wavelengths to be used with camera
+    sampleCoef: float, default=NaN
+        If positive, used to determine step size instead of sampling the
+        volume model.
+    maxDist: float, default=1km
+        Upper limit for propagation distance
+    hitChance: float, default=0.1
+        Random chance to sample a hit. In that case the ray will only be
+        propagated, but no volume interaction is sampled.
+    propagateRay: bool, default=False
+        Whether to propagate the ray itself in addition to applying volume
+        effects.
+    """
+
+    name = "Volume Interaction Sampler"
+
+    class SamplerParams(Structure):
+        _fields_ = [
+            ("_queueAdr", buffer_reference),
+            ("_queueSize", c_uint32),
+            ("sampleCoef", c_float),
+            ("maxDist", c_float),
+            ("hitChance", c_float),
+        ]
+
+    def __init__(
+        self,
+        batchSize: int,
+        ray: RayModel,
+        volume: VolumeModel,
+        materials: MaterialStore,
+        rng: RNG,
+        source: LightSource | Camera,
+        wavelengthSource: WavelengthSource | None = None,
+        *,
+        sampleCoef: float = float("NaN"),
+        maxDist: float = 1.0 * u.km,
+        hitChance: float = 0.1,
+        propagateRay: bool = False,
+    ) -> None:
+        super().__init__({"SamplerParams": VolumeInteractionSampler.SamplerParams})
+        self._ray = ray
+        self._volume = volume
+        self._materials = materials
+        self._rng = rng
+        self._source = source
+        self._photons = wavelengthSource
+
+        forward = isinstance(source, LightSource)
+        if forward and wavelengthSource is not None:
+            raise ValueError("wavelength source can only be specified in backward mode")
+        if forward and source.forwardSourceCode is None:
+            raise ValueError("light source does not support forward mode")
+        if forward:
+            source_code = source.forwardSourceCode
+            self._photons = source.wavelengthSource
+        else:
+            source_code = source.sourceCode
+        mode = "forward" if forward else "backward"
+        rayItem = ray.forwardItem if forward else ray.backwardItem
+        if rayItem is None:
+            raise ValueError(f"Ray model does not support {mode} mode")
+        volCode = volume.forwardSourceCode if forward else volume.backwardSourceCode
+        if volCode is None:
+            raise ValueError(f"Volume model does not support {mode} mode")
+
+        fields = [
+            *((name + "In", t) for name, t in rayItem._fields_),
+            *((name + "Out", t) for name, t in rayItem._fields_),
+            ("resultCode", c_int32),
+            ("hit", c_int32),
+        ]
+        item = createCType("Item", fields)
+        self._queue = IOQueue(item, batchSize, mode="retrieve", skipCounter=True)
+        assert self._queue.tensor is not None
+
+        self.setParams(
+            _queueAdr=self._queue.tensor.address,
+            _queueSize=batchSize,
+            sampleCoef=sampleCoef,
+            maxDist=maxDist,
+            hitChance=hitChance,
+        )
+
+        preamble = createPreamble(
+            RAY_FIELD_COUNT=sizeof(rayItem) // 4,
+            SAMPLE_FORWARD=forward,
+            SAMPLER_PROPAGATE_RAY=propagateRay,
+        )
+        headers = {
+            "ray.glsl": ray.sourceCode,
+            "rng.glsl": rng.sourceCode,
+            "source.glsl": source_code,
+            "photon.glsl": "" if self._photons is None else self._photons.sourceCode,
+            "volume.glsl": volCode,
+            **materials.header,
+        }
+        code = compileShader("volume/sample/interaction.glsl", preamble, headers)
+        self._program = hp.Program(code)
+        materials.bindParams(self._program)
+
+    @property
+    def batchSize(self) -> int:
+        """Number of samples to draw per run"""
+        return self._queueSize
+
+    @property
+    def materials(self) -> MaterialStore:
+        """Store containing materials to use"""
+        return self._materials
+
+    @property
+    def queue(self) -> IOQueue:
+        """Queue containing samples"""
+        return self._queue
+
+    @property
+    def rayModel(self) -> RayModel:
+        """Model describing rays"""
+        return self._ray
+
+    @property
+    def rng(self) -> RNG:
+        """Random number generator"""
+        return self._rng
+
+    @property
+    def source(self) -> Camera | LightSource:
+        """Source producing rays"""
+        return self._source
+
+    @property
+    def wavelengthSource(self) -> WavelengthSource | None:
+        "Optional wavelength source for use with cameras"
+        return self._photons
+
+    def collectStages(self) -> list[PipelineStage]:
+        """
+        Returns a list of all stages involved with this sampler in the correct
+        order suitable for creating a pipeline.
+        """
+        if self._photons is None:
+            return [self.rng, self.source, self]
+        else:
+            return [self.rng, self._photons, self.source, self]
+
+    def run(self, i: int) -> list[hp.Command]:
+        for stage in self.collectStages():
+            stage.bindParams(self._program, i)
+        groups = -(self.batchSize // -512)
+        return [
+            self._program.dispatch(groups),
+            *self._queue.run(i),
+        ]
+
+
+class VolumeScatteringSampler(PipelineStage):
+    """
+    Samples volume scattering sampling and evaluation used for multiple
+    importance sampling in tracers.
+
+    Parameters
+    ----------
+    batchSize: int
+        Number of samples to draw per run
+    ray: RayModel
+        Model describing the ray
+    volume: VolumeModel
+        Volume model to be sampled
+    materials: MaterialStore
+        Store containing material data
+    rng: RNG
+        Random number generator
+    source: LightSource | Camera
+        Source producing rays
+    wavelengthSource: WavelengthSource | None, default=None
+        Sampler for wavelengths to be used with camera
+    propagateDistance: float, default=0.0
+        Distance to propagate before scattering. Negative numbers disables
+        propagation.
+
+    Note
+    ----
+    The ray will be scattered using a randomly sampled direction.
+    """
+
+    name = "Volume Scattering Sampler"
+
+    class SamplerParams(Structure):
+        _fields_ = [
+            ("_queueAdr", buffer_reference),
+            ("_queueSize", c_uint32),
+            ("propagateDistance", c_float),
+        ]
+
+    def __init__(
+        self,
+        batchSize: int,
+        ray: RayModel,
+        volume: VolumeModel,
+        materials: MaterialStore,
+        rng: RNG,
+        source: LightSource | Camera,
+        wavelengthSource: WavelengthSource | None = None,
+        *,
+        propagateDistance: float = 0.0,
+    ) -> None:
+        super().__init__({"SamplerParams": VolumeScatteringSampler.SamplerParams})
+        self._ray = ray
+        self._volume = volume
+        self._materials = materials
+        self._rng = rng
+        self._source = source
+        self._photons = wavelengthSource
+
+        forward = isinstance(source, LightSource)
+        if forward and wavelengthSource is not None:
+            raise ValueError("wavelength source can only be specified in backward mode")
+        if forward and source.forwardSourceCode is None:
+            raise ValueError("light source does not support forward mode")
+        if forward:
+            source_code = source.forwardSourceCode
+            self._photons = source.wavelengthSource
+        else:
+            source_code = source.sourceCode
+        mode = "forward" if forward else "backward"
+        rayItem = ray.forwardItem if forward else ray.backwardItem
+        if rayItem is None:
+            raise ValueError(f"Ray model does not support {mode} mode")
+        volCode = volume.forwardSourceCode if forward else volume.backwardSourceCode
+        if volCode is None:
+            raise ValueError(f"Volume model does not support {mode} mode")
+        if not volume.supportsNEE:
+            raise ValueError(f"Volume model does not support NEE sampling!")
+
+        fields = [
+            *((name + "In", t) for name, t in rayItem._fields_),
+            *((name + "Out", t) for name, t in rayItem._fields_),
+            ("scatterResult", c_int32),
+            ("sampleDir", c_float * 3),
+            ("randomDir", c_float * 3),
+            ("probSampled", c_float),
+            ("probEval", c_float),
+            ("probRandom", c_float),
+        ]
+        item = createCType("Item", fields)
+        self._queue = IOQueue(item, batchSize, mode="retrieve", skipCounter=True)
+        assert self._queue.tensor is not None
+
+        self.setParams(
+            _queueAdr=self._queue.tensor.address,
+            _queueSize=batchSize,
+            propagateDistance=propagateDistance,
+        )
+
+        preamble = createPreamble(
+            RAY_FIELD_COUNT=sizeof(rayItem) // 4,
+            SAMPLE_FORWARD=forward,
+        )
+        headers = {
+            "ray.glsl": ray.sourceCode,
+            "rng.glsl": rng.sourceCode,
+            "source.glsl": source_code,
+            "photon.glsl": "" if self._photons is None else self._photons.sourceCode,
+            "volume.glsl": volCode,
+            **materials.header,
+        }
+        code = compileShader("volume/sample/scatter.glsl", preamble, headers)
+        self._program = hp.Program(code)
+        materials.bindParams(self._program)
+
+    @property
+    def batchSize(self) -> int:
+        """Number of samples to draw per run"""
+        return self._queueSize
+
+    @property
+    def materials(self) -> MaterialStore:
+        """Store containing materials to use"""
+        return self._materials
+
+    @property
+    def queue(self) -> IOQueue:
+        """Queue containing samples"""
+        return self._queue
+
+    @property
+    def rayModel(self) -> RayModel:
+        """Model describing rays"""
+        return self._ray
+
+    @property
+    def rng(self) -> RNG:
+        """Random number generator"""
+        return self._rng
+
+    @property
+    def source(self) -> Camera | LightSource:
+        """Source producing rays"""
+        return self._source
 
     @property
     def wavelengthSource(self) -> WavelengthSource | None:
