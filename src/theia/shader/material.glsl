@@ -31,6 +31,7 @@ readonly buffer MediaTable {
 #define loadMediaSlot_Table2D(slot, idx) Table2D(mediaTable.data[mediaTable.stride * MEDIA_SLOT_##slot + idx])
 #define loadMediaSlot_vec2(slot, idx) uintBitsToFloat(mediaTable.data[mediaTable.stride * MEDIA_SLOT_##slot + idx])
 #define loadMediaSlot_uvec2(slot, idx) mediaTable.data[mediaTable.stride * MEDIA_SLOT_##slot + idx]
+#define loadMediaConstant(slot, idx) uintBitsToFloat(mediaTable.data[mediaTable.stride * MEDIA_SLOT_##slot + idx]).y
 
 float lookUpMediaTable1D_imp(uint slotIdx, uint mediumIdx, float u, float def) {
     if (isVacuum(mediumIdx)) return def;
@@ -59,6 +60,7 @@ readonly buffer MaterialTable {
 #define loadMaterialSlot_Table2D(slot, idx) Table2D(materialTable.data[materialTable.stride * MATERIAL_SLOT_##slot + idx])
 #define loadMaterialSlot_vec2(slot, idx) uintBitsToFloat(materialTable.data[materialTable.stride * MATERIAL_SLOT_##slot + idx])
 #define loadMaterialSlot_uvec2(slot, idx) materialTable.data[materialTable.stride * MATERIAL_SLOT_##slot + idx]
+#define loadMaterialConstant(slot, idx) uintBitsToFloat(materialTable.data[materialTable.stride * MATERIAL_SLOT_##slot + idx].y)
 
 #define lookUpMaterialTable1D(slot, idx, u, def) lookUp(loadMaterialSlot_Table1D(slot, idx), u, def)
 
