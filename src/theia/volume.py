@@ -13,6 +13,7 @@ from typing import ClassVar, Type
 
 __all__ = [
     "Attenuating",
+    "Fluorescent",
     "Transparent",
     "VolumeModel",
     "VolumeRNGDraws",
@@ -175,6 +176,116 @@ class Attenuating(VolumeModel, name="attenuating"):
 
     def __eq__(self, value: object) -> bool:
         return type(value) == Attenuating and value.isAbsorbing == self.isAbsorbing
+
+    def __hash__(self) -> int:
+        return hash(self.name) ^ hash(self.isAbsorbing)
+
+
+class Fluorescent(VolumeModel, name="fluorescent"):
+    """
+    Models fluorescent volumes. Supports absorption, bulk scattering and
+    fluorescent scattering, i.e. wavelength shifting. In the latter case,
+    the wavelength shifted ray is re-emitted isotropically.
+
+    The following interactions are modeled:
+
+    - Bulk absorption parameterized by `absorption_coef`
+    - Bulk scattering parameterized by `scattering_coef`, `log_phase_function`
+      and `phase_sampling`. The latter is the inverse quantile function used for
+      sampling scattered directions.
+    - Fluorescence parameterized by `fluorescence_coef`, `fluorescence_time`
+      and `fluorescence_efficiency`. The latter describes the quantum efficiency.
+      The corresponding wavelength shift is described by
+      `fluorescence_emission_sampling` and `fluorescence_emission_quantile`.
+
+    If `absorb` is `True`, rays get randomly absorbed according to the volume's
+    attenuating coefficient. Otherwise, rays will be attenuated but never
+    absorbed. The latter does not work with particle rays.
+
+    Setting `allowWavelengthUpShift` to `False` enforces that re-emission only
+    create longer wavelengths.
+
+    Note
+    ----
+    For now only forward mode is supported by this model.
+    """
+
+    def __init__(
+        self,
+        *,
+        absorb: bool = False,
+        allowWavelengthUpShift: bool = False,
+    ) -> None:
+        rngDraws = VolumeRNGDraws(
+            sampleInteractionLength=1,
+            applyVolumeEffect=0,
+            sampleVolumeInteraction=4,
+            sampleVolumeScattering=3,
+            volumeScatterRay=1,
+        )
+        super().__init__(
+            rngDraws=rngDraws,
+            supportsNEE=True,
+            supportsParticle=True,
+            requiredMediumProperties={
+                # LUTs
+                "absorption_coef",
+                "fluorescent_coef",
+                "scattering_coef",
+                "log_phase_function",
+                "phase_sampling",
+                "fluorescence_emission_quantile",
+                "fluorescence_emission_sampling",
+                # constants
+                "fluorescence_efficiency",
+                "fluorescence_time_shift",
+            },
+        )
+        self._absorb = absorb
+        self._allowUpshift = allowWavelengthUpShift
+
+    @property
+    def isAbsorbing(self) -> bool:
+        """Whether rays get absorbed or attenuated"""
+        return self._absorb
+
+    @property
+    def allowWavelengthUpShift(self) -> bool:
+        """Whether volume fluorescence may re-emit at shorter wavelengths"""
+        return self._allowUpshift
+
+    @property
+    def forwardSourceCode(self) -> str:
+        preamble = createPreamble(
+            VOLUME_ABSORB_RAY=self.isAbsorbing,
+            FLUORESCENCE_NO_WAVELENGTH_UPSHIFT=not self.allowWavelengthUpShift,
+        )
+        code = loadShader("volume/fluorescent/forward.glsl")
+        return preamble + code
+
+    @classmethod
+    def load(cls, file: Traversable) -> Fluorescent:
+        with file.open() as f:
+            config = json.load(f)
+        return Fluorescent(
+            absorb=config["absorb"],
+            allowWavelengthUpShift=config["allowWavelengthUpShift"],
+        )
+
+    def save(self, file) -> None:
+        config = {
+            "absorb": self.isAbsorbing,
+            "allowWavelengthUpShift": self.allowWavelengthUpShift,
+        }
+        with file.open("w") as f:
+            json.dump(config, f)
+
+    def __eq__(self, value: object) -> bool:
+        return (
+            type(value) == Fluorescent
+            and value.isAbsorbing == self.isAbsorbing
+            and value.allowWavelengthUpShift == self.allowWavelengthUpShift
+        )
 
     def __hash__(self) -> int:
         return hash(self.name) ^ hash(self.isAbsorbing)
