@@ -25,7 +25,9 @@ from typing_extensions import Self
 
 __all__ = [
     "angular_property",
+    "numerical_quantile_property",
     "numerical_sampler_property",
+    "optical_constant",
     "optical_property",
     "sampler_property",
     "BK7Model",
@@ -45,6 +47,40 @@ __all__ = [
 
 def __dir__():
     return __all__
+
+
+class _optical_constant:
+    """Class marking optical constants in models. See `optical_constant`"""
+
+    def __init__(
+        self,
+        fn: Callable[[Any], float],
+        *,
+        name: str | None = None,
+    ) -> None:
+        self.fn = fn
+        self.name = name
+
+    def __set_name__(self, owner, name: str) -> None:
+        if self.name is None:
+            self.name = name
+
+    @overload
+    def __get__(self, obj: None, owner=None) -> Self: ...
+    @overload
+    def __get__(self, obj: Any, owner=None) -> float: ...
+    def __get__(self, obj, owner=None):
+        if obj is None:
+            return self
+        return self.fn(obj)
+
+    def createProperty(
+        self,
+        obj,
+        defaultRange: tuple[float, float],
+        numSamples: int,
+    ) -> Property:
+        return FloatProperty(self.fn(obj))
 
 
 _R = TypeVar("_R")
@@ -94,10 +130,8 @@ class _optical_property(Generic[_R]):
 
     @overload
     def __get__(self, obj: None, owner=None) -> Self: ...
-
     @overload
     def __get__(self, obj: Any, owner=None) -> _range_checked_call[_R]: ...
-
     def __get__(self, obj, owner=None):
         if obj is None:
             # accessed from class
@@ -110,12 +144,8 @@ class _optical_property(Generic[_R]):
         obj,
         defaultRange: tuple[float, float],
         numSamples: int,
-        constant: bool,
     ) -> Property:
         """Creates a `Property` from this medium property"""
-        if constant:
-            value = self.fn(obj)
-            return FloatProperty(value)
         range = [defaultRange] if self.range is None else self.range
         if self.const:
             x = (r[0] for r in range)
@@ -126,6 +156,44 @@ class _optical_property(Generic[_R]):
             fn = lambda *xi: self.fn(obj, *xi)  # bind object as self
             table = createTableFromFunction(fn, *xi, interpolation=self.interpolation)
         return TableProperty(table)
+
+
+class _DistWrapper:
+    """Wrapper for pdf to be compatible with `NumericalInversePolynomial`"""
+
+    def __init__(self, fn) -> None:
+        self.fn = fn
+
+    def pdf(self, x: float) -> float:
+        # we cannot be sure if we get an array or a scalar back
+        return np.asarray(self.fn(x)).item()
+
+
+class _LogDistWrapper:
+    """Wrapper for log pdf to be compatible with `NumericalInversePolynomial`"""
+
+    def __init__(self, fn) -> None:
+        self.fn = fn
+
+    def logpdf(self, x: float) -> float:
+        return np.asarray(self.fn(x)).item()
+
+
+def _createSampler(
+    obj: Any, prop: _optical_property[_R], log: bool
+) -> NumericalInversePolynomial:
+    """Creates a `NumericalInversePolynomial` for the given optical property"""
+    if prop.range is None:
+        raise ValueError("A range must be specified!")
+    if len(prop.range) != 1:
+        raise ValueError("Can only numerically inverse 1D functions")
+
+    fn = lambda x: prop.fn(obj, x)
+    if log:
+        dist = _LogDistWrapper(fn)
+    else:
+        dist = _DistWrapper(fn)
+    return NumericalInversePolynomial(dist, domain=prop.range[0])
 
 
 class numerical_sampler_property(Generic[_R]):
@@ -147,21 +215,6 @@ class numerical_sampler_property(Generic[_R]):
         values. Ignored on properties.
     """
 
-    class _DistWrapper:
-        def __init__(self, fn) -> None:
-            self.fn = fn
-
-        def pdf(self, x: float) -> float:
-            # we cannot be sure if we get an array or a scalar back
-            return np.asarray(self.fn(x)).item()
-
-    class _LogDistWrapper:
-        def __init__(self, fn) -> None:
-            self.fn = fn
-
-        def logpdf(self, x: float) -> float:
-            return np.asarray(self.fn(x)).item()
-
     def __init__(
         self,
         prop: _optical_property[_R],
@@ -176,18 +229,10 @@ class numerical_sampler_property(Generic[_R]):
             raise ValueError("Can only numerically inverse 1D functions")
         self.domain = prop.range[0]
 
-        self.fn = prop.fn
+        self.prop = prop
         self.log = log
         self.name = name
         self.interpolation: Interpolation = interpolation
-
-    def _createSampler(self, obj):
-        fn = lambda x: self.fn(obj, x)
-        if self.log:
-            dist = numerical_sampler_property._LogDistWrapper(fn)
-        else:
-            dist = numerical_sampler_property._DistWrapper(fn)
-        return NumericalInversePolynomial(dist, domain=self.domain)
 
     def __set_name__(self, owner, name: str) -> None:
         if self.name is None:
@@ -206,7 +251,7 @@ class numerical_sampler_property(Generic[_R]):
             # accessed from class
             return self
         # TODO: might want to cache the sampler...
-        sampler = self._createSampler(obj)
+        sampler = _createSampler(obj, self.prop, self.log)
         return lambda x: sampler.ppf(x)
 
     def createProperty(
@@ -214,16 +259,132 @@ class numerical_sampler_property(Generic[_R]):
         obj,
         defaultRange: tuple[float, float],
         numSamples: int,
-        constant: bool,
     ) -> Property:
-        if constant:
-            raise RuntimeError("Numerical sampler properties cannot be const!")
-        sampler = self._createSampler(obj)
+        sampler = _createSampler(obj, self.prop, self.log)
         fn = lambda x: sampler.ppf(x)
         table = createTableFromFunction(
             fn, (0.0, 1.0, numSamples), interpolation=self.interpolation
         )
         return TableProperty(table)
+
+
+class numerical_quantile_property(Generic[_R]):
+    """
+    Creates a function numerically calculating the quantiles of the given
+    optical property and making it available as optical property itself.
+
+    Parameters
+    ----------
+    prop: optical_property
+        Optical property to calculate quantiles from
+    name: str | None, default=None
+        Name of the property. If `None`, uses the function's name.
+    log: bool, default=False
+        Whether the underlying distribution is in log space.
+    interpolation: Interpolation, default="linear"
+        Interpolation to use when creating the look up table from sampled
+        sampled values.
+    """
+
+    def __init__(
+        self,
+        prop: _optical_property[_R],
+        *,
+        name: str | None = None,
+        log: bool = False,
+        interpolation: Interpolation = "linear",
+    ) -> None:
+        if prop.range is None:
+            raise ValueError("A range must be specified!")
+        if len(prop.range) != 1:
+            raise ValueError("Can only numerically inverse 1D functions")
+        self.domain = prop.range[0]
+
+        self.prop = prop
+        self.name = name
+        self.log = log
+        self.interpolation = interpolation
+
+    def __set_name__(self, owner, name: str) -> None:
+        if self.name is None:
+            self.name = name
+
+    @overload
+    def __get__(self, obj: None, owner=None) -> Self: ...
+    @overload
+    def __get__(self, obj: Any, owner=None) -> Callable[[ArrayLike], ArrayLike]: ...
+
+    def __get__(self, obj, owner=None):
+        if obj is None:
+            # accessed from class
+            return self
+        sampler = _createSampler(obj, self.prop, self.log)
+        return lambda x: sampler.cdf(x)
+
+    def createProperty(
+        self,
+        obj,
+        defaultRange: tuple[float, float],
+        numSamples: int,
+    ) -> Property:
+        sampler = _createSampler(obj, self.prop, self.log)
+        fn = lambda x: sampler.cdf(x)
+        table = createTableFromFunction(
+            fn, (*self.domain, numSamples), interpolation=self.interpolation
+        )
+        return TableProperty(table)
+
+
+_optical_property_types: tuple[type, ...] = (
+    _optical_constant,
+    _optical_property,
+    numerical_quantile_property,
+    numerical_sampler_property,
+)
+
+
+@overload
+def optical_constant(fn: Callable[[Any], float]) -> _optical_constant: ...
+
+
+@overload
+def optical_constant(
+    *, name: None | str = ...
+) -> Callable[[Callable[[Any], float]], _optical_constant]: ...
+
+
+def optical_constant(
+    fn: Callable[[Any], float] | None = None,
+    *,
+    name: str | None = None,
+) -> Callable[[Callable[[Any], float]], _optical_constant] | _optical_constant:
+    """
+    Can be used in classes derived from `OpticalModel` to mark functions as
+    optical constants. These will be used during property creation to populate
+    the corresponding `FloatProperty`.
+
+    Parameters
+    ----------
+    fn:
+        Function to decorate
+    name: str | None, default=None
+        Name of the constant. If `None`, uses the function's name
+
+    Examples
+    --------
+    >>> class Model(OpticalModel):
+    ...     @optical_constant
+    ...     def temperature(self) -> float:
+    ...         return 300.0
+    ...     @optical_constant(name="thickness")
+    ...     def d(self) -> float:
+    ...         return 0.4
+    """
+    # need this trick to allow arguments
+    if fn is not None:
+        return _optical_constant(fn)
+    else:
+        return lambda func: _optical_constant(func, name=name)
 
 
 @overload
@@ -276,10 +437,6 @@ def optical_property(
     Examples
     --------
     >>> class Model(OpticalModel):
-    ...     @property
-    ...     @optical_property
-    ...     def temperature(self) -> float:
-    ...         return 21.0
     ...     @optical_property
     ...     def refractive_index(self, wavelength):
     ...         return 1.41 * np.ones_like(wavelength)
@@ -438,12 +595,9 @@ class OpticalModel:
             prop = getattr(self.__class__, atr, None)
             if prop is None:
                 continue
-            const = isinstance(prop, property)
-            if const:
-                prop = prop.fget
-            if isinstance(prop, (_optical_property, numerical_sampler_property)):
+            if isinstance(prop, _optical_property_types):
                 props[prop.name] = prop.createProperty(
-                    self, wavelengthRange, numSamples, const
+                    self, wavelengthRange, numSamples
                 )
         return props
 
