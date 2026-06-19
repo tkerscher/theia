@@ -770,7 +770,7 @@ class MaterialStore:
         mediaSlots = set() if mediaSlots is None else set(mediaSlots)
         mediaSlots.add("wavelength_range")
         materialSlots = set() if materialSlots is None else set(materialSlots)
-        materialSlots.update("inwards", "outwards")
+        materialSlots.update(["inwards", "outwards"])
         # collect all media
         mediaDict = {m.name: m for m in media}
         for med in chain.from_iterable((m.inside, m.outside) for m in material):
