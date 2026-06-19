@@ -345,14 +345,14 @@ def test_Fluorescent(
         exp_contrib = np.ones_like(contrib)
         mu_f_r = model.fluorescence_coef(result["wavelengthIn"])
         mu_e = mu_f_r + mu_a + mu_s
+        mu_f_r *= qe
         if not absorb:
             exp_contrib[~hitMask] *= ((mu_s + mu_f_r) / mu_e)[~hitMask]
         if not sampleIntLength:
 
             exp_contrib *= np.exp(-mu_e * d)
             exp_contrib[~hitMask] *= mu_e[~hitMask]
-        # TODO: check large error. Likely due to mu_f sampling + interpolation error
-        assert np.allclose(contrib[~absorbed], exp_contrib[~absorbed], atol=0.05)
+        assert np.allclose(contrib[~absorbed], exp_contrib[~absorbed], atol=5e-4)
     # TODO: maybe add a test checking the scattering angles?
 
 
@@ -410,17 +410,16 @@ def test_Fluorescent_scattering(upshift: bool):
     ct_rand = np.multiply(result["directionIn"], result["randomDir"]).sum(-1)
     assert np.allclose(result["directionOut"], result["randomDir"])
     assert np.allclose(result["probSampled"], result["probEval"])
-    mu_f_r = model.fluorescence_coef(result["wavelengthIn"])
+    mu_f_r = model.fluorescence_coef(result["wavelengthIn"]) * qe
     p_scatter = mu_s / (mu_s + mu_f_r) * np.exp(model.log_phase_function(ct_sampled))
     prob_sampled = p_scatter + mu_f_r / (mu_s + mu_f_r) / (4.0 * np.pi)
-    # TODO: check why the large error
-    assert np.allclose(result["probEval"], prob_sampled, atol=0.06)
+    assert np.allclose(result["probEval"], prob_sampled, atol=2e-3)
     p_scatter_r = mu_s / (mu_s + mu_f_r) * np.exp(model.log_phase_function(ct_rand))
     prob_rand = p_scatter_r + mu_f_r / (mu_s + mu_f_r) / (4.0 * np.pi)
-    assert np.allclose(result["probRandom"], prob_rand, atol=0.06)
+    assert np.allclose(result["probRandom"], prob_rand, atol=5e-4)
     contrib = result["contribOut"] / result["contribIn"]
     contrib_exp = np.ones_like(contrib)
     contrib_exp *= mu_s + mu_f_r
     contrib_exp[f_mask] *= 1.0 / (4.0 * np.pi)
     contrib_exp[~f_mask] *= np.exp(model.log_phase_function(ct_rand[~f_mask]))
-    assert np.allclose(contrib, contrib_exp, atol=5e-3)
+    assert np.allclose(contrib, contrib_exp, atol=5e-5)
