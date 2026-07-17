@@ -12,6 +12,7 @@ from ctypes import Structure, c_float
 import theia.light
 import theia.units as u
 from theia.compiler import compileShader
+from theia.lookup import uploadTables
 from theia.material import MaterialStore, VACUUM_IDX
 from theia.model import PureWaterModel
 from theia.random import PhiloxRNG
@@ -194,6 +195,57 @@ def test_FunctionWavelengthSource():
     hist = hist / N
     F = Fn(edges)
     exp_hist = (F[1:] - F[:-1]) / exp_contrib
+    assert np.abs(hist - exp_hist).max() < 9e-4
+
+
+def test_SpectrumWavelengthSource():
+    N = 256 * 1024  # a bit more for the histogram
+    lamRange = (300.0, 700.0) * u.nm
+    sigma = 500.0 * u.nm
+    numSamples = 1024
+
+    # spectrum ~ x * gaussian: chosen because it integrates analytically, so we can
+    # build the exact percent point function (inverse CDF) table by hand and also
+    # have a closed-form CDF to check the sampled distribution against.
+    def f(lam):
+        return lam * np.exp(-(lam**2) / (2.0 * sigma**2))
+
+    def F(lam):  # antiderivative of f
+        return -(sigma**2) * np.exp(-(lam**2) / (2.0 * sigma**2))
+
+    Z = F(lamRange[1]) - F(lamRange[0])  # normalization
+
+    def cdf(lam):
+        return (F(lam) - F(lamRange[0])) / Z
+
+    def ppf(v):  # inverse CDF, solving F(lam) = F(a) + v * Z for lam
+        return np.sqrt(-2.0 * sigma**2 * np.log(-(F(lamRange[0]) + v * Z) / sigma**2))
+
+    # build the PPF look up table (indexed by u in [0, 1]) and upload it
+    u_grid = np.linspace(0.0, 1.0, numSamples)
+    table = ppf(u_grid)
+    tableMemory, [tableAddr] = uploadTables([table])
+
+    # create pipeline
+    ray = UnpolarizedRay()
+    philox = PhiloxRNG(key=0xC0FFEE)
+    photons = theia.light.SpectrumWavelengthSource(tableAddr)
+    light = theia.light.PencilLightSource(
+        photons, timeRange=(0.0, 0.0), mediumIdx=VACUUM_IDX
+    )
+    sampler = theia.light.LightSampler(N, light, ray, rng=philox)
+    # run
+    runPipeline(sampler.collectStages())
+    result = sampler.queue.view(0)
+
+    # spectrum is treated as a normalized distribution -> contribution is 1.0
+    assert np.all(result["contrib"] == 1.0)
+    assert np.abs(np.min(result["wavelength"]) - lamRange[0]) < 1.0
+    assert np.abs(np.max(result["wavelength"]) - lamRange[1]) < 1.0
+    # check distribution via histogram against the analytic CDF
+    hist, edges = np.histogram(result["wavelength"], bins=40)
+    hist = hist / N
+    exp_hist = cdf(edges[1:]) - cdf(edges[:-1])
     assert np.abs(hist - exp_hist).max() < 9e-4
 
 
