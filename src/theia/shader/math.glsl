@@ -24,7 +24,7 @@ float signBit(float f) {
 //returns a new float with the same value as the first paramater, but using the
 //sign bit of the second parameter. Will also produce -0.0.
 float copySignBit(float f, float s) {
-    uint signBit = floatBitsToUint(f) & 0x80000000u;
+    uint signBit = floatBitsToUint(s) & 0x80000000u;
     uint absValue = floatBitsToUint(f) & 0x7FFFFFFFu;
     return uintBitsToFloat(signBit | absValue);
 }
