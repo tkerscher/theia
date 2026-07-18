@@ -3,7 +3,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from theia.compiler import loadShader
+import json
+
+from theia.compiler import createPreamble, loadShader
 
 from importlib.resources.abc import Traversable
 from typing import ClassVar, Type
@@ -14,6 +16,7 @@ __all__ = [
     "BorderSurface",
     "DielectricSurface",
     "LambertianReflectingSurface",
+    "MetallicSurface",
     "SurfaceModel",
     "SurfaceRNGDraws",
 ]
@@ -204,6 +207,63 @@ class DielectricSurface(SurfaceModel, name="dielectric"):
 
     def __hash__(self) -> int:
         return hash(self.name)
+
+
+class MetallicSurface(SurfaceModel, name="metallic"):
+    """
+    Models absorption and specular reflection on a metallic surface.
+    Reflectivity can either be provided directly or is calculated using the
+    complex refractive index of the metal.
+
+    If `absorb` is set to `True`, rays may be absorbed to stop tracing.
+    Otherwise they will always reflect attenuated by the surface's reflectance
+    if it has non-zero reflectance.
+    """
+
+    def __init__(self, *, absorb: bool = False) -> None:
+        draws = SurfaceRNGDraws(
+            prepareSurface=1,
+            sampleSurfaceInteraction=0,
+            processSurfaceTargetHit=0,
+        )
+        super().__init__(
+            rngDraws=draws,
+            requiredMaterialProperties={"reflectivity"},
+            requiredMediumProperties={"refractive_index", "imag_refractive_index"},
+        )
+        self._absorb = absorb
+
+    @property
+    def isAbsorbing(self) -> bool:
+        """Whether ray may be absorbed to stop tracing"""
+        return self._absorb
+
+    @property
+    def forwardSourceCode(self) -> str:
+        preamble = createPreamble(SURFACE_ABSORB_RAY=self.isAbsorbing)
+        return loadShader("surface/metallic/forward.glsl", preamble)
+
+    @property
+    def backwardSourceCode(self) -> str:
+        preamble = createPreamble(SURFACE_ABSORB_RAY=self.isAbsorbing)
+        return loadShader("surface/metallic/backward.glsl", preamble)
+
+    @classmethod
+    def load(cls, file: Traversable) -> MetallicSurface:
+        with file.open() as f:
+            config = json.load(f)
+        return MetallicSurface(absorb=config["absorb"])
+
+    def save(self, file) -> None:
+        config = {"absorb": self.isAbsorbing}
+        with file.open("w") as f:
+            json.dump(config, f)
+
+    def __eq__(self, value: object) -> bool:
+        return type(value) == MetallicSurface and value.isAbsorbing == self.isAbsorbing
+
+    def __hash__(self) -> int:
+        return hash(self.name) ^ hash(self.isAbsorbing)
 
 
 class LambertianReflectingSurface(SurfaceModel, name="lambert"):
