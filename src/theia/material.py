@@ -6,21 +6,16 @@ import warnings
 import hephaistos as hp
 import numpy as np
 
-import scipy.constants
 from scipy.integrate import cumulative_simpson
-from scipy.interpolate import CubicSpline
-from scipy.stats.sampling import NumericalInversePolynomial
 
 from dataclasses import dataclass, field
 from enum import Enum, IntFlag
 from itertools import chain
 from pathlib import Path
 from struct import pack, unpack
-from types import SimpleNamespace
 from zipfile import ZipFile, Path as ZipPath
 
 from theia.compiler import createPreamble
-from theia.lookup import createTableFromFunction, Interpolation
 from theia.property import (
     FloatProperty,
     Property,
@@ -33,13 +28,11 @@ from theia.property import (
 )
 from theia.surface import SurfaceModel
 from theia.volume import Transparent, VolumeModel
-from theia.util import classproperty, intersectRange, loadCSV
 import theia.units as u
 
-from collections.abc import Callable, Iterable, Iterator, Mapping
-from numpy.typing import ArrayLike, NDArray
-from typing import Any, Final, Generic, TypeVar, overload
-from typing_extensions import Self
+from collections.abc import Iterable, Iterator, Mapping
+from numpy.typing import NDArray
+from typing import Final
 
 
 __all__ = [
@@ -53,6 +46,7 @@ __all__ = [
     "MaterialFlags",
     "MaterialStore",
     "Medium",
+    "MediumReferenceProperty",
     "OpticalProperties",
     "parseMaterialFlags",
     "VACUUM_IDX",
@@ -691,6 +685,41 @@ class MaterialInterfaceProperty(Property, ext="mat"):
         self.data = unpack("<Q", pack("<II", value, self.flags))[0]
 
 
+class MediumReferenceProperty(Property, ext="medref"):
+    """
+    Property referencing a medium either directly or by its name on the
+    host side and its index in the property table on the device side.
+    The index is resolved during construction of the property table.
+    """
+
+    def __init__(self, medium: Medium | str | None = None) -> None:
+        super().__init__(VACUUM_IDX)
+        self.medium = medium
+
+    @property
+    def medium(self) -> Medium | str | None:
+        """Name of the referenced medium"""
+        return self._medium
+
+    @medium.setter
+    def medium(self, value: Medium | str | None):
+        self._medium = value
+
+    def save(self, file) -> None:
+        # do not save the index as it may change
+        # save the referenced name instead
+        if isinstance(self.medium, Medium):
+            name = self.medium.name
+        else:
+            name = self.medium or ""
+        file.write(name.encode())
+
+    @classmethod
+    def load(cls, file) -> MediumReferenceProperty:
+        name = file.read().decode() or None
+        return MediumReferenceProperty(name)
+
+
 def _createTableEntryFromMaterial(
     material: Material,
     mediaTable: PropertyTable,
@@ -710,6 +739,23 @@ def _createTableEntryFromMaterial(
         "inwards": MaterialInterfaceProperty(getIdx(inside), material.flagsInward),
         "outwards": MaterialInterfaceProperty(getIdx(outside), material.flagsOutward),
     }
+    # resolve media references
+    for prop in material.properties.values():
+        if not isinstance(prop, MediumReferenceProperty):
+            continue
+        if isinstance(prop.medium, Medium):
+            medName = prop.medium.name
+        else:
+            medName = prop.medium
+        if medName is None:
+            prop.data = VACUUM_IDX
+        elif medName in mediaTable:
+            prop.data = mediaTable[medName]
+        else:
+            raise ValueError(
+                f'Referenced medium "{medName}" '
+                f'in material "{material.name}" does not exist!'
+            )
     # add additional material properties
     props.update(material.properties)
     return props
@@ -776,6 +822,11 @@ class MaterialStore:
         for med in chain.from_iterable((m.inside, m.outside) for m in material):
             if isinstance(med, Medium) and med.name not in mediaDict:
                 mediaDict[med.name] = med
+        for prop in chain.from_iterable(m.properties.values() for m in material):
+            if not isinstance(prop, MediumReferenceProperty):
+                continue
+            if isinstance(prop.medium, Medium) and prop.medium.name not in mediaDict:
+                mediaDict[prop.medium.name] = prop.medium
         # collect all volume models
         # in order to handle vacuum more easily in the tracer,
         # ensure the transparent model is always present at index 0

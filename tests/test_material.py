@@ -287,6 +287,7 @@ def test_serializeMaterial(tmp_path, rng):
     mat2.properties = {
         "albedo": FloatProperty((1.0, 0.5)),
         "anisotropy": table(165, 1.0),
+        "ref": theia.material.MediumReferenceProperty(med2),
     }
 
     # save
@@ -328,6 +329,7 @@ def test_serializeMaterial(tmp_path, rng):
     assert mat["mat2"].physicModel == mat2.physicModel
     assert mat["mat2"].properties.keys() == mat2.properties.keys()
     assert mat["mat2"].properties["albedo"].value == mat2.properties["albedo"].value
+    assert mat["mat2"].properties["ref"].medium == "med2"
     t1 = mat["mat2"].properties["anisotropy"].table.samples
     t2 = mat2.properties["anisotropy"].table.samples
     assert np.all(t1 == t2)
