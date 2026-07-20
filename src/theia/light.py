@@ -294,7 +294,7 @@ class SpectrumWavelengthSource(WavelengthSource):
     name = "Spectrum Wavelength Source"
 
     def __init__(self, spectrumTableAddress: int) -> None:
-        super().__init__(params={"WavelengthParams": SpectrumWavelengthSource.WavelengthParams}, nRNGSamples=1)
+        super().__init__(params={"WavelengthParams": self.WavelengthParams}, nRNGSamples=1)
         self.setParams(spectrumTableAddress=spectrumTableAddress)
 
     @property
