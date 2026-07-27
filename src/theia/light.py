@@ -9,7 +9,7 @@ import hephaistos as hp
 from hephaistos.pipeline import PipelineStage, SourceCodeMixin
 from hephaistos.queue import IOQueue
 
-from ctypes import Structure, c_float, c_int64, c_uint32
+from ctypes import Structure, c_float, c_uint32, c_uint64
 from hephaistos.glsl import buffer_reference, vec2, vec3
 from theia.util import createCType
 
@@ -289,7 +289,7 @@ class SpectrumWavelengthSource(WavelengthSource):
     """
 
     class WavelengthParams(Structure):
-        _fields_ = [("spectrumTableAddress", c_int64)]
+        _fields_ = [("spectrumTableAddress", c_uint64)]
 
     name = "Spectrum Wavelength Source"
 
@@ -394,7 +394,7 @@ class FunctionWavelengthSource(WavelengthSource):
     name = "Function Wavelength Source"
 
     class WavelengthParams(Structure):
-        _fields_ = [("_table", c_int64), ("_contrib", c_float)]
+        _fields_ = [("_table", c_uint64), ("_contrib", c_float)]
 
     def __init__(
         self,
