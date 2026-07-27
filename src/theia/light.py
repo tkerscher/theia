@@ -286,15 +286,24 @@ class SpectrumWavelengthSource(WavelengthSource):
     spectrumTableAddress: int
         GPU address of a table containing the percent point function of the
         light spectrum.
+
+    Stage Parameters
+    ----------------
+    spectrumTableAddress: int
+        GPU address of a table containing the percent point function of the
+        light spectrum.
     """
+
+    name = "Spectrum Wavelength Source"
 
     class WavelengthParams(Structure):
         _fields_ = [("spectrumTableAddress", c_uint64)]
 
-    name = "Spectrum Wavelength Source"
-
     def __init__(self, spectrumTableAddress: int) -> None:
-        super().__init__(params={"WavelengthParams": self.WavelengthParams}, nRNGSamples=1)
+        super().__init__(
+            nRNGSamples=1,
+            params={"WavelengthParams": self.WavelengthParams},
+        )
         self.setParams(spectrumTableAddress=spectrumTableAddress)
 
     @property
