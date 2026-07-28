@@ -33,6 +33,7 @@ __all__ = [
     "deg",
     "eV",
     "keV",
+    "MeV",
     "GeV",
     "TeV",
     "PeV",
@@ -216,8 +217,9 @@ nm: Final[Unit] = Unit("wavelength", 1.0)
 rad: Final[Unit] = Unit("angle", 180.0 / pi)
 deg: Final[Unit] = Unit("angle", 1.0)
 # energy
-eV: Final[Unit] = Unit("energy", 1e-6)
-keV: Final[Unit] = Unit("energy", 1e-3)
+eV: Final[Unit] = Unit("energy", 1e-9)
+keV: Final[Unit] = Unit("energy", 1e-6)
+MeV: Final[Unit] = Unit("energy", 1e-3)
 GeV: Final[Unit] = Unit("energy", 1.0)
 TeV: Final[Unit] = Unit("energy", 1e3)
 PeV: Final[Unit] = Unit("energy", 1e6)

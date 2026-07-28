@@ -3,7 +3,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from theia.compiler import loadShader
+import json
+
+from theia.compiler import createPreamble, loadShader
 
 from importlib.resources.abc import Traversable
 from typing import ClassVar, Type
@@ -14,8 +16,11 @@ __all__ = [
     "BorderSurface",
     "DielectricSurface",
     "LambertianReflectingSurface",
+    "MetallicSurface",
     "SurfaceModel",
     "SurfaceRNGDraws",
+    "ThinDielectricSurface",
+    "ThinMetallicSurface",
 ]
 
 
@@ -206,6 +211,63 @@ class DielectricSurface(SurfaceModel, name="dielectric"):
         return hash(self.name)
 
 
+class MetallicSurface(SurfaceModel, name="metallic"):
+    """
+    Models absorption and specular reflection on a metallic surface.
+    Reflectivity can either be provided directly or is calculated using the
+    complex refractive index of the metal.
+
+    If `absorb` is set to `True`, rays may be absorbed to stop tracing.
+    Otherwise they will always reflect attenuated by the surface's reflectance
+    if it has non-zero reflectance.
+    """
+
+    def __init__(self, *, absorb: bool = False) -> None:
+        draws = SurfaceRNGDraws(
+            prepareSurface=1,
+            sampleSurfaceInteraction=0,
+            processSurfaceTargetHit=0,
+        )
+        super().__init__(
+            rngDraws=draws,
+            requiredMaterialProperties={"reflectivity"},
+            requiredMediumProperties={"refractive_index", "imag_refractive_index"},
+        )
+        self._absorb = absorb
+
+    @property
+    def isAbsorbing(self) -> bool:
+        """Whether ray may be absorbed to stop tracing"""
+        return self._absorb
+
+    @property
+    def forwardSourceCode(self) -> str:
+        preamble = createPreamble(SURFACE_ABSORB_RAY=self.isAbsorbing)
+        return loadShader("surface/metallic/forward.glsl", preamble)
+
+    @property
+    def backwardSourceCode(self) -> str:
+        preamble = createPreamble(SURFACE_ABSORB_RAY=self.isAbsorbing)
+        return loadShader("surface/metallic/backward.glsl", preamble)
+
+    @classmethod
+    def load(cls, file: Traversable) -> MetallicSurface:
+        with file.open() as f:
+            config = json.load(f)
+        return MetallicSurface(absorb=config["absorb"])
+
+    def save(self, file) -> None:
+        config = {"absorb": self.isAbsorbing}
+        with file.open("w") as f:
+            json.dump(config, f)
+
+    def __eq__(self, value: object) -> bool:
+        return type(value) == MetallicSurface and value.isAbsorbing == self.isAbsorbing
+
+    def __hash__(self) -> int:
+        return hash(self.name) ^ hash(self.isAbsorbing)
+
+
 class LambertianReflectingSurface(SurfaceModel, name="lambert"):
     """
     Models perfectly diffuse reflecting surfaces.
@@ -243,3 +305,125 @@ class LambertianReflectingSurface(SurfaceModel, name="lambert"):
 
     def __hash__(self) -> int:
         return hash(self.name)
+
+
+class ThinDielectricSurface(SurfaceModel, name="thin_dielectric"):
+    """
+    Models transmission and reflection through a thin dielectric layer between
+    two other dielectric media. Optionally includes interference effects by
+    setting `interference` to `True`.
+    """
+
+    def __init__(self, *, interference=False) -> None:
+        draws = SurfaceRNGDraws(
+            prepareSurface=1,
+            sampleSurfaceInteraction=0,
+            processSurfaceTargetHit=0,
+        )
+        super().__init__(
+            rngDraws=draws,
+            requiredMediumProperties={"refractive_index"},
+            requiredMaterialProperties={"layer_thickness"},
+        )
+        self._interference = interference
+
+    @property
+    def isInterfering(self) -> bool:
+        """Whether interference effects are included"""
+        return self._interference
+
+    @property
+    def forwardSourceCode(self) -> str:
+        preamble = createPreamble(
+            SURFACE_THIN_LAYER_INCLUDE_INTERFERENCE=self.isInterfering
+        )
+        shader = loadShader("surface/thin/dielectric/forward.glsl")
+        return preamble + shader
+
+    @property
+    def backwardSourceCode(self) -> str:
+        preamble = createPreamble(
+            SURFACE_THIN_LAYER_INCLUDE_INTERFERENCE=self.isInterfering
+        )
+        shader = loadShader("surface/thin/dielectric/backward.glsl")
+        return preamble + shader
+
+    @classmethod
+    def load(cls, file: Traversable) -> ThinDielectricSurface:
+        with file.open() as f:
+            config = json.load(f)
+        return ThinDielectricSurface(interference=config["interference"])
+
+    def save(self, file) -> None:
+        config = {"interference": self.isInterfering}
+        with file.open("w") as f:
+            json.dump(config, f)
+
+    def __eq__(self, value: object) -> bool:
+        return (
+            type(value) == ThinDielectricSurface
+            and value.isInterfering == self.isInterfering
+        )
+
+    def __hash__(self) -> int:
+        return hash(self.name) ^ hash(self.isInterfering)
+
+
+class ThinMetallicSurface(SurfaceModel, name="thin_metallic"):
+    """
+    Models transmission, reflection and absorption in a thin metallic layer
+    between two dielectric media including interference effects within the thin
+    layer.
+
+    When used as detector surface, will report absorbed photons as detected.
+    If `absorb` is set to `True`, rays may be absorbed to stop tracing.
+    """
+
+    def __init__(self, *, absorb=True) -> None:
+        draws = SurfaceRNGDraws(
+            prepareSurface=1,
+            sampleSurfaceInteraction=1,
+            processSurfaceTargetHit=0,
+        )
+        super().__init__(
+            rngDraws=draws,
+            requiredMediumProperties={"imag_refractive_index", "refractive_index"},
+            requiredMaterialProperties={"layer_medium_idx", "layer_thickness"},
+        )
+        self._absorb = absorb
+
+    @property
+    def isAbsorbing(self) -> bool:
+        """Whether rays may be absorbed in the thin layer"""
+        return self._absorb
+
+    @property
+    def forwardSourceCode(self) -> str:
+        preamble = createPreamble(SURFACE_ABSORB_RAY=self.isAbsorbing)
+        shader = loadShader("surface/thin/metallic/forward.glsl")
+        return preamble + shader
+
+    @property
+    def backwardSourceCode(self) -> str:
+        preamble = createPreamble(SURFACE_ABSORB_RAY=self.isAbsorbing)
+        shader = loadShader("surface/thin/metallic/backward.glsl")
+        return preamble + shader
+
+    @classmethod
+    def load(cls, file: Traversable) -> ThinMetallicSurface:
+        with file.open() as f:
+            config = json.load(f)
+        return ThinMetallicSurface(absorb=config["absorb"])
+
+    def save(self, file) -> None:
+        config = {"absorb": self.isAbsorbing}
+        with file.open("w") as f:
+            json.dump(config, f)
+
+    def __eq__(self, value: object) -> bool:
+        return (
+            type(value) == ThinMetallicSurface and value.isAbsorbing == self.isAbsorbing
+        )
+
+    def __hash__(self) -> int:
+        return hash(self.name) ^ hash(self.isAbsorbing)
