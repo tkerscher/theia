@@ -472,19 +472,15 @@ def test_Fluorescent_exponentialDecay():
     vg = model.group_velocity(500.0)  # constant
     dt = (dt - d / vg)[fluorMask]
 
-    # an exponential distribution has mean AND standard deviation equal to its
-    # time constant; the std check in particular tells the exponential decay apart
-    # from a constant ("delta") delay, which would have std ~ 0
+    # an exponential distribution has mean and standard deviation equal to its
+    # time constant
     n = len(dt)
-    assert dt.min() > -1e-4
-    assert abs(np.mean(dt) - delta_t) < 5.0 * delta_t / np.sqrt(n)
-    assert abs(np.std(dt) - delta_t) < 0.1 * delta_t
-    # histogram vs the analytic exponential CDF: each bin must agree within a few
-    # standard deviations of its per-bin counting noise. A fixed threshold on the
-    # maximum bin deviation is not seed-robust: the max over 40 bins routinely
-    # reaches ~3 sigma even for a perfect exponential, so it must scale with 1/sqrt(n).
+    assert dt.min() > -1e-5
+    assert abs(np.mean(dt) - delta_t) < 3.0 * delta_t / np.sqrt(n)
+    assert abs(np.std(dt) - delta_t) < 3.0 * delta_t / np.sqrt(n)
+    # check distribution via histogram
     hist, edges = np.histogram(dt, bins=40, range=(0.0, 6.0 * delta_t))
     hist = hist / n
     exp_hist = np.diff(1.0 - np.exp(-edges / delta_t))
     sigma = np.sqrt(exp_hist * (1.0 - exp_hist) / n)
-    assert np.all(np.abs(hist - exp_hist) < 6.0 * sigma + 1e-4)
+    assert np.all(np.abs(hist - exp_hist) < 3.0 * sigma + 1e-5)

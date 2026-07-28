@@ -266,7 +266,7 @@ class Fluorescent(VolumeModel, name="fluorescent"):
     
     @property
     def timeModel(self) -> str:
-        """Model of the time delay caused by the flourescence."""
+        """Model of the time delay caused by the fluorescence."""
         return self._timeModel
 
     @property
