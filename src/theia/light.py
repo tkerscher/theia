@@ -9,7 +9,7 @@ import hephaistos as hp
 from hephaistos.pipeline import PipelineStage, SourceCodeMixin
 from hephaistos.queue import IOQueue
 
-from ctypes import Structure, c_float, c_int64, c_uint32
+from ctypes import Structure, c_float, c_uint32, c_uint64
 from hephaistos.glsl import buffer_reference, vec2, vec3
 from theia.util import createCType
 
@@ -37,6 +37,7 @@ __all__ = [
     "MuonTrackLightSource",
     "ParticleCascadeLightSource",
     "PencilLightSource",
+    "SpectrumWavelengthSource",
     "SphericalLightSource",
     "StreamingHostLightSource",
     "StreamingHostWavelengthSource",
@@ -276,6 +277,40 @@ class ConstWavelengthSource(WavelengthSource):
         return loadShader("wavelengthsource/const.glsl")
 
 
+class SpectrumWavelengthSource(WavelengthSource):
+    """
+    Samples wavelengths based on the given spectrum.
+
+    Parameters
+    ----------
+    spectrumTableAddress: int
+        GPU address of a table containing the percent point function of the
+        light spectrum.
+
+    Stage Parameters
+    ----------------
+    spectrumTableAddress: int
+        GPU address of a table containing the percent point function of the
+        light spectrum.
+    """
+
+    name = "Spectrum Wavelength Source"
+
+    class WavelengthParams(Structure):
+        _fields_ = [("spectrumTableAddress", c_uint64)]
+
+    def __init__(self, spectrumTableAddress: int) -> None:
+        super().__init__(
+            nRNGSamples=1,
+            params={"WavelengthParams": self.WavelengthParams},
+        )
+        self.setParams(spectrumTableAddress=spectrumTableAddress)
+
+    @property
+    def sourceCode(self) -> str:
+        return loadShader("wavelengthsource/spectrum.glsl")
+
+
 class UniformWavelengthSource(WavelengthSource):
     """
     Sampler generating photons uniform in wavelength and time.
@@ -368,7 +403,7 @@ class FunctionWavelengthSource(WavelengthSource):
     name = "Function Wavelength Source"
 
     class WavelengthParams(Structure):
-        _fields_ = [("_table", c_int64), ("_contrib", c_float)]
+        _fields_ = [("_table", c_uint64), ("_contrib", c_float)]
 
     def __init__(
         self,
