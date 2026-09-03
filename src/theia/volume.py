@@ -205,6 +205,11 @@ class Fluorescent(VolumeModel, name="fluorescent"):
     Setting `allowWavelengthUpShift` to `False` enforces that re-emission only
     create longer wavelengths.
 
+    Using `timeModel` the time delay caused by the fluorescence can be controlled: 
+    If set to `delta`, the time delay is always equal to `fluorescence_time`. If
+    set to `exponential`, the time delay is sampled from an exponential decay
+    with time constant `fluorescence_time`.
+
     Note
     ----
     For now only forward mode is supported by this model.
@@ -215,12 +220,16 @@ class Fluorescent(VolumeModel, name="fluorescent"):
         *,
         absorb: bool = False,
         allowWavelengthUpShift: bool = False,
+        timeModel: str = "delta"
     ) -> None:
+        timeModels = ["delta", "exponential"]
+        if timeModel not in timeModels:
+            raise AttributeError(f"{timeModel} is not a supported time model.")
         rngDraws = VolumeRNGDraws(
             sampleInteractionLength=1,
             applyVolumeEffect=0,
-            sampleVolumeInteraction=4,
-            sampleVolumeScattering=3,
+            sampleVolumeInteraction=4 if timeModel == "delta" else 5,
+            sampleVolumeScattering=3 if timeModel == "delta" else 4,
             volumeScatterRay=1,
         )
         super().__init__(
@@ -243,6 +252,7 @@ class Fluorescent(VolumeModel, name="fluorescent"):
         )
         self._absorb = absorb
         self._allowUpshift = allowWavelengthUpShift
+        self._timeModel = timeModel
 
     @property
     def isAbsorbing(self) -> bool:
@@ -253,12 +263,18 @@ class Fluorescent(VolumeModel, name="fluorescent"):
     def allowWavelengthUpShift(self) -> bool:
         """Whether volume fluorescence may re-emit at shorter wavelengths"""
         return self._allowUpshift
+    
+    @property
+    def timeModel(self) -> str:
+        """Model of the time delay caused by the fluorescence."""
+        return self._timeModel
 
     @property
     def forwardSourceCode(self) -> str:
         preamble = createPreamble(
             VOLUME_ABSORB_RAY=self.isAbsorbing,
             FLUORESCENCE_NO_WAVELENGTH_UPSHIFT=not self.allowWavelengthUpShift,
+            FLUORESCENCE_EXPONENTIAL_DECAY=(self.timeModel == "exponential"),
         )
         code = loadShader("volume/fluorescent/forward.glsl")
         return preamble + code
@@ -270,12 +286,14 @@ class Fluorescent(VolumeModel, name="fluorescent"):
         return Fluorescent(
             absorb=config["absorb"],
             allowWavelengthUpShift=config["allowWavelengthUpShift"],
+            timeModel=config["timeModel"],
         )
 
     def save(self, file) -> None:
         config = {
             "absorb": self.isAbsorbing,
             "allowWavelengthUpShift": self.allowWavelengthUpShift,
+            "timeModel": self.timeModel
         }
         with file.open("w") as f:
             json.dump(config, f)
@@ -285,10 +303,12 @@ class Fluorescent(VolumeModel, name="fluorescent"):
             type(value) == Fluorescent
             and value.isAbsorbing == self.isAbsorbing
             and value.allowWavelengthUpShift == self.allowWavelengthUpShift
+            and value.timeModel == self.timeModel
         )
 
     def __hash__(self) -> int:
-        return hash(self.name) ^ hash(self.isAbsorbing)
+        return (hash(self.name) ^ hash(self.isAbsorbing) 
+                ^ hash(self.allowWavelengthUpShift) ^ hash(self.timeModel))
 
 
 class Transparent(VolumeModel, name="transparent"):

@@ -38,7 +38,12 @@ void sampleFluorescenceWavelengthShift(
     #endif
     //optionally, apply time delta
     #ifdef RAY_TRANSIENT
+    #ifdef FLUORESCENCE_EXPONENTIAL_DECAY
+    float v = random(idx, dim);
+    ray.time -= log(1.0 - v) * loadMediaConstant(FLUORESCENCE_TIME_SHIFT, ray.mediumIdx);
+    #else
     ray.time += loadMediaConstant(FLUORESCENCE_TIME_SHIFT, ray.mediumIdx);
+    #endif
     #endif
 
     ray.wavelength = lookUpMediaTable1D(FLUORESCENCE_EMISSION_SAMPLING, ray.mediumIdx, u, ray.wavelength);
