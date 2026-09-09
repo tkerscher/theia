@@ -236,6 +236,25 @@ def test_MaterialStore():
     assert flag_buffer.numpy()[1] == mat_water_glass.flagsOutward
 
 
+def test_MaterialStore_missingPropWarnings():
+    # check whether MaterialStore issues warnings for properties missing the
+    # referenced physic model expect
+    attenuate = theia.volume.Attenuating()
+    dielectric = theia.surface.ThinDielectricSurface()
+    med = theia.material.Medium("med1", (200.0, 700.0) * u.nm, {}, attenuate)
+    mat = theia.material.Material("mat", med, None, dielectric)
+
+    with pytest.warns(UserWarning) as records:
+        store = theia.material.MaterialStore([mat])
+
+    n = len(attenuate.requiredMediumProperties)
+    n += len(dielectric.requiredMediumProperties)
+    n += len(dielectric.requiredMaterialProperties)
+    assert len(records) == n
+
+    # we likely should check the warning messages, but this'll do for now
+
+
 def test_serializeMaterial(tmp_path, rng):
     """create some dummy media/material and try to save/load them"""
     # create dummy media

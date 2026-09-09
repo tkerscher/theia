@@ -87,6 +87,12 @@ def _createTableEntryFromMedium(medium: Medium) -> PropertyTableEntry:
     props: dict[str, Property]
     props = {"wavelength_range": FloatProperty(medium.wavelengthRange)}
     props.update(medium.properties)
+    reqProps = medium.physicModel.requiredMediumProperties
+    for missingProb in reqProps.difference(props.keys()):
+        warnings.warn(
+            f'Medium "{medium.name}" is missing a property required by its '
+            f'referenced physics model "{medium.physicModel.name}": {missingProb}'
+        )
     return props
 
 
@@ -722,6 +728,7 @@ class MediumReferenceProperty(Property, ext="medref"):
 
 def _createTableEntryFromMaterial(
     material: Material,
+    mediaDict: dict[str, Medium],
     mediaTable: PropertyTable,
 ) -> PropertyTableEntry:
     """Util function converting material to a property table entry"""
@@ -730,9 +737,19 @@ def _createTableEntryFromMaterial(
     inside: str | None = getMedium(material.inside)
     outside: str | None = getMedium(material.outside)
     # check if media is present
+    reqMedProbs = material.physicModel.requiredMediumProperties
     for m in (inside, outside):
-        if m is not None and m not in mediaTable:
+        if m is None:  # vacuum?
+            continue
+        if m not in mediaTable or m not in mediaDict:
             raise ValueError(f"Material {material.name} references unknown medium {m}")
+        med = mediaDict[m]
+        for missingProb in reqMedProbs.difference(med.properties.keys()):
+            warnings.warn(
+                f'Material "{material.name}" references medium "{med.name}" which is '
+                f"missing a property required by its physic model "
+                f'"{material.physicModel.name}": {missingProb}'
+            )
     # look up media indices
     getIdx = lambda m: m if m is None else mediaTable[m]
     props: dict[str, Property] = {
@@ -758,6 +775,13 @@ def _createTableEntryFromMaterial(
             )
     # add additional material properties
     props.update(material.properties)
+    # check all properties required by the physic model are present
+    reqMatProps = material.physicModel.requiredMaterialProperties
+    for missingProb in reqMatProps.difference(props.keys()):
+        warnings.warn(
+            f'Material "{material.name}" is missing a property required by its '
+            f'referenced physic model "{material.physicModel.name}": {missingProb}'
+        )
     return props
 
 
@@ -853,7 +877,7 @@ class MaterialStore:
         self._surfaceModelIndices = [idxMap[m.physicModel] for m in material]
         # create material table
         _map = _createTableEntryFromMaterial
-        materialDict = {m.name: _map(m, self._mediaTable) for m in material}
+        materialDict = {m.name: _map(m, mediaDict, self._mediaTable) for m in material}
         self._materialTable = PropertyTable(materialDict, requiredSlots=materialSlots)
 
     @property
