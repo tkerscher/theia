@@ -25,6 +25,12 @@ def getEnabledAtomics() -> set[hp.Atomics]:
 
 
 @cache
+def getEnabledFma() -> hp.FmaSupport:
+    """Returns a cached version of currently enabled OpFmaKHR"""
+    return hp.getFmaSupport()
+
+
+@cache
 def getEnabledRayTracingFeatures() -> hp.RayTracingFeatures:
     """Returns a cached version of currently enabled ray tracing features"""
     return hp.getEnabledRayTracingFeatures()

@@ -53,6 +53,7 @@ void main() {
         inward,
         ray.position,
         inward ? surfaceNormal : -surfaceNormal,
+        1e-7, //rayOffset
         params.worldToObj * ray.position + params.offset,
         normalize(surfaceNormal * transpose(params.worldToObj)),
         params.worldToObj * ray.direction,

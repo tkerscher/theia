@@ -22,6 +22,7 @@ struct SurfaceHit {
     precise vec3 worldPos;      ///< Hit position in world space
     // vec3 worldNrm;              ///< Geometry normal at hit position in world space
     vec3 rayNrm;                ///< surface normal opposing ray direction
+    precise float rayOffset;    ///< Offset along rayNrm to prevent self intersection
 
     //The following variables are define object space, i.e. geometry's
     //coordinates before any transformation were applied

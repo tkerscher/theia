@@ -2,6 +2,8 @@
 
 #extension GL_GOOGLE_include_directive : require
 
+#extension GL_EXT_spirv_intrinsics : require
+
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_EXT_control_flow_attributes : require

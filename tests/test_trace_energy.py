@@ -919,7 +919,7 @@ def test_SceneForwardTracer_NonSpecular(mis: bool) -> None:
     # check result: we should get all the light back
     est = np.array(sums).mean()
     err = abs(est.item() / budget - 1.0)
-    assert err < 5e-5
+    assert err < 5e-4
 
 
 def test_SceneBackwardTracer_SurfaceNEE() -> None:

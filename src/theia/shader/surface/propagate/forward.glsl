@@ -11,7 +11,7 @@ ResultCode crossBorder(
     inout ForwardRay ray,   ///< Ray to cross
     const SurfaceHit hit    ///< Description of surface hit
 ) {
-    ray.position = offsetRay(hit.worldPos, -hit.rayNrm);
+    ray.position = offsetRay(hit.worldPos, hit.rayNrm, -hit.rayOffset);
     return updateMedium(ray, hit.otherMediumIdx);
 }
 
@@ -24,7 +24,7 @@ ResultCode reflectRay(
     vec3 newDir             ///< Direction in which to reflect
 ) {
     //offset ray to prevent self-intersection in next tracing step
-    ray.position = offsetRay(hit.worldPos, hit.rayNrm);
+    ray.position = offsetRay(hit.worldPos, hit.rayNrm, hit.rayOffset);
     return reflectRay(ray, newDir, hit.otherMediumIdx);
 }
 /**
@@ -35,7 +35,7 @@ ResultCode reflectRay(
     const SurfaceHit hit    ///< Description of surface hit
 ) {
     //offset ray to prevent self-intersection in next tracing step
-    ray.position = offsetRay(hit.worldPos, hit.rayNrm);
+    ray.position = offsetRay(hit.worldPos, hit.rayNrm, hit.rayOffset);
     vec3 newDir = reflect(ray.direction, hit.rayNrm);
     return reflectRay(ray, newDir, hit.otherMediumIdx);
 }
@@ -49,7 +49,7 @@ ResultCode transmitRay(
     vec3 newDir             ///< Ray in which to transmit
 ) {
     //offset ray to prevent self-intersection in next tracing step
-    ray.position = offsetRay(hit.worldPos, -hit.rayNrm);
+    ray.position = offsetRay(hit.worldPos, hit.rayNrm, -hit.rayOffset);
     return transmitRay(ray, newDir, hit.otherMediumIdx);
 }
 /**
@@ -61,7 +61,7 @@ ResultCode transmitRay(
     float n_i, float n_o    ///< Refractive index of incident and outgoing medium
 ) {
     //offset ray to prevent self-intersection in next tracing step
-    ray.position = offsetRay(hit.worldPos, -hit.rayNrm);
+    ray.position = offsetRay(hit.worldPos, hit.rayNrm, -hit.rayOffset);
     vec3 newDir = refract(ray.direction, hit.rayNrm, n_i / n_o);
     //If we try to transmit the ray when we are in the region of total internal
     //reflection, refract() returns a zero vector -> notify

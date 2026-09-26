@@ -5,7 +5,7 @@ import hephaistos as hp
 
 from functools import cache
 
-from theia.device import getEnabledAtomics, getEnabledRayTracingFeatures
+from theia.device import getEnabledAtomics, getEnabledFma, getEnabledRayTracingFeatures
 
 from collections.abc import Iterable
 from importlib.resources.abc import Traversable
@@ -94,6 +94,12 @@ def getPreamble() -> str:
             "#extension GL_EXT_shader_explicit_arithmetic_types_float64 : require\n"
         )
         preamble += "#define SUPPORTS_DOUBLE 1\n"
+    # enable OpFmaKHR
+    fma = getEnabledFma()
+    if fma.float32:
+        preamble += "#define _FLT_FMA_32 1\n"
+    if fma.float64:
+        preamble += "#define _FLT_FMA_64 1\n"
     # enable supported atomics
     atomics = getEnabledAtomics()
     if hp.Atomics.BufferFloat64Add in atomics:

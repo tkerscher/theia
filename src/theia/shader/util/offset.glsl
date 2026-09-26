@@ -1,6 +1,8 @@
 #ifndef _INCLUDE_UTIL_OFFSET
 #define _INCLUDE_UTIL_OFFSET
 
+#include "util/float.glsl"
+
 /**
  * Offsets ray position from surface hits to prevent self-intersection, i.e.
  * this ensures that after transmission/reflection the ray is actually on the
@@ -28,6 +30,14 @@ vec3 offsetRay(vec3 p, vec3 n) {
         abs(p.y) < (1.0 / 32.0) ? p.y+ (1.0/65536.0)*n.y : p_i.y,
         abs(p.z) < (1.0 / 32.0) ? p.z+ (1.0/65536.0)*n.z : p_i.z
     );
+}
+
+/**
+ * Offsets point along normal by given offset
+*/
+vec3 offsetRay(vec3 p, vec3 n, float o) {
+    precise vec3 r = fmaKHR(vec3(o), n, p);
+    return r;
 }
 
 #endif

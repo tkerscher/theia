@@ -1,11 +1,35 @@
 #ifndef _INCLUDE_SCENE_INTERSECT
 #define _INCLUDE_SCENE_INTERSECT
 
+#include "util/float.glsl"
+
+//constants for intersection error calculation. can be overwritten to match
+//different hardware
+//
+//errors in the barycentric coordinates. Depends on the hardware implementation.
+//A likely candidate is the algorithm by Woop et al., which reports 5 epsilon
+//error. Since we get another factor 2 from the extent estimate the following
+//3 epsilon are actually 6.
+//This should match NVIDIA hardware but other vendor might be off worse.
+//Change this variable in that case.
+#ifndef RAY_INTERSECT_BARYS_EPS
+#define RAY_INTERSECT_BARYS_EPS 1.7881393432617188e-7
+#endif
+//the following define the errors occuring when transforming position from
+//object space to world space (3 and 2 epsilon respectively)
+#define RAY_OBJ2WORLD_MATMUL_EPS 1.7881393432617188e-7
+#define RAY_OBJ2WORLD_TRANS_EPS  1.1920928955078125e-7
+//this defines the error occuring when transforming the ray into object space
+//done by the ray tracing hardware to prepare tracing the ray in object space
+#ifndef RAY_WORLD2OBJ_EPS
+#define RAY_WORLD2OBJ_EPS 1.1920928955078125e-7
+#endif
+
 //list of material used by each instanced geometry
 //materials are referenced by their id in the material table
 readonly buffer MaterialMap { uint materialMap[]; };
 
-#ifndef USE_RAY_TRACING_POSITION_FETCH
+#ifndef POSITION_FETCH_ENABLED
 //unfortunately, fetching vertex position from tlas is an optional feature
 //and in this case it's not available, so we have to do it ourselves...
 
@@ -34,6 +58,8 @@ ResultCode resolveIntersection(
     #define positions gl_HitTriangleVertexPositionsEXT
     precise vec3 e1 = positions[1] - positions[0];
     precise vec3 e2 = positions[2] - positions[0];
+    vec3 x0 = positions[0];
+    #undef positions
 
     #else
 
@@ -41,20 +67,21 @@ ResultCode resolveIntersection(
     //start by fetching memory addresses of vertex and index buffer of this geometry
     uvec4 address = geometryMap[gl_InstanceID];
     Vertex vertices = Vertex(address.xy);
-    Index indices = Index(address.wz);
+    Index indices = Index(address.zw);
     //fetch indices of hit triangle
     ivec3 index = indices[gl_PrimitiveID].idx;
     Vertex v0 = vertices[index.x];
     Vertex v1 = vertices[index.y];
     Vertex v2 = vertices[index.z];
+    vec3 x0 = v0.position;
     //calculate edges
-    precise vec3 e1 = v1.position - v0.position;
-    precise vec3 e2 = v2.position - v0.position;
+    precise vec3 e1 = v1.position - x0;
+    precise vec3 e2 = v2.position - x0;
 
     #endif
 
     //reconstruct hit position
-    hit.objPos = positions[0] + fma(vec3(barys.x), e1, barys.y * e2);
+    hit.objPos = x0 + fmaKHR(vec3(barys.x), e1, barys.y * e2);
 
     //we can distinguish the sides of an triangle by the order of its vertices.
     //this is known as "winding order". By default we follow the standard used
@@ -62,12 +89,13 @@ ResultCode resolveIntersection(
     //counter-clockwise
     #ifndef OUTWARD_FACE_CLOCK_WISE
     //default
-    hit.objNrm = normalize(cross(e1, e2));
+    vec3 objNrm = cross(e1, e2);
     #else
     //however, if for any reason we want the opposite behavior, we can just flip
     //the normal by flipping the cross product
-    hit.objNrm = normalize(cross(e2, e1));
+    vec3 objNrm = cross(e2, e1);
     #endif
+    hit.objNrm = normalize(objNrm);
 
     //translate from world to object space
     hit.worldToObj = mat3(gl_WorldToObjectEXT);
@@ -91,18 +119,43 @@ ResultCode resolveIntersection(
         return ERROR_CODE_MEDIA_MISMATCH;
     
     //translate from object to world space
-    vec3 worldNrm = normalize(vec3(hit.objNrm * gl_WorldToObjectEXT));
+    //we keep the normals unnormalized for now. this makes the error calculation math easier
+    vec3 worldNrm = vec3(objNrm * gl_WorldToObjectEXT);
+    float worldScale = inversesqrt(dot(worldNrm, worldNrm));
+    worldNrm *= worldScale; //normalize
     //create normal as seen by ray
-    // float(bool) = bool ? 1.0 : 0.0
-    // -> inward ? 1.0 : -1.0
-    hit.rayNrm = worldNrm * (2.0 * float(hit.inward) - 1.0);
+    hit.rayNrm = hit.inward ? worldNrm : -worldNrm;
 
     //do matrix multiplication manually to improve error
     //See: https://developer.nvidia.com/blog/solving-self-intersection-artifacts-in-directx-raytracing/
-    mat4x3 m = gl_ObjectToWorldEXT;
-    hit.worldPos.x = m[3][0] + fma(m[0][0], hit.objPos.x, fma(m[1][0], hit.objPos.y, m[2][0] * hit.objPos.z));
-    hit.worldPos.y = m[3][1] + fma(m[0][1], hit.objPos.x, fma(m[1][1], hit.objPos.y, m[2][1] * hit.objPos.z));
-    hit.worldPos.z = m[3][2] + fma(m[0][2], hit.objPos.x, fma(m[1][2], hit.objPos.y, m[2][2] * hit.objPos.z));
+    mat4x3 o2w = gl_ObjectToWorldEXT;
+    hit.worldPos.x = o2w[3][0] + fmaKHR(o2w[0][0], hit.objPos.x, fmaKHR(o2w[1][0], hit.objPos.y, o2w[2][0] * hit.objPos.z));
+    hit.worldPos.y = o2w[3][1] + fmaKHR(o2w[0][1], hit.objPos.x, fmaKHR(o2w[1][1], hit.objPos.y, o2w[2][1] * hit.objPos.z));
+    hit.worldPos.z = o2w[3][2] + fmaKHR(o2w[0][2], hit.objPos.x, fmaKHR(o2w[1][2], hit.objPos.y, o2w[2][2] * hit.objPos.z));
+
+    //error calculation to determine minimal ray offset to prevent self-intersection
+    //adapted from https://github.com/NVIDIA/self-intersection-avoidance/
+    
+    //upper error bound on reconstructed object space intersection
+    vec3 ext3 = abs(e1) + abs(e2) + abs(e1 - e2);
+    float ext = max(max(ext3.x, ext3.y), ext3.z);
+    vec3 objErr = fmaKHR(vec3(FLT_U), abs(x0), vec3(RAY_INTERSECT_BARYS_EPS * ext));
+    //upper error bound on world intersection bound caused by trafo
+    mat4x3 abs_o2w = mat4x3(abs(o2w[0]), abs(o2w[1]), abs(o2w[2]), abs(o2w[3]));
+    vec3 worldErr = fmaKHR(
+        vec3(RAY_OBJ2WORLD_MATMUL_EPS),
+        mat3(abs_o2w) * abs(hit.objPos),
+        (RAY_OBJ2WORLD_TRANS_EPS * abs(o2w[3]))
+    );
+    //error from world to object trafo (next tracing)
+    mat4x3 w2o = gl_WorldToObjectEXT;
+    mat4x3 abs_w2o = mat4x3(abs(w2o[0]), abs(w2o[1]), abs(w2o[2]), abs(w2o[3]));
+    objErr = fmaKHR(vec3(RAY_WORLD2OBJ_EPS), (abs_w2o * vec4(abs(hit.worldPos), 1.0)), objErr);
+    //project errors to normals to get offsets
+    float worldOffset = dot(worldErr, abs(worldNrm));
+    float objOffest = dot(objErr, abs(objNrm)); //!!! unnormalized objNrm on purpose !!!
+    //combine offsets
+    hit.rayOffset = fmaKHR(worldScale, objOffest, worldOffset);
 
     //done
     return RESULT_CODE_SUCCESS;

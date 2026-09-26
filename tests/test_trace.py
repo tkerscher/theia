@@ -10,11 +10,11 @@ from theia.camera import FlatCamera, PointCamera, SphereCamera
 from theia.device import isRayTracingEnabled
 from theia.light import PencilLightSource, SphericalLightSource, UniformWavelengthSource
 from theia.material import Material, MaterialStore, getPropertySamples, VACUUM_IDX
-from theia.model import BK7Model, PureWaterModel
+from theia.model import BK7Model, DispersionFreeMedium, PureWaterModel
 from theia.random import PhiloxRNG
 from theia.ray import UnpolarizedRay
-from theia.response import HitRecorder
-from theia.scene import MeshStore, Scene, Transform
+from theia.response import EmptyResponse, HitRecorder
+from theia.scene import MeshStore, RectBBox, Scene, Transform
 from theia.surface import AbsorbingSurface, BorderSurface, DielectricSurface
 from theia.target import SphereTarget, SphereTargetGuide
 from theia.volume import Attenuating, Transparent
@@ -995,3 +995,68 @@ def test_SceneBackwardTargetTracer(
         assert np.all(hits["objectId"] == 1)
     else:
         assert np.all((hits["objectId"] == 1) | (hits["objectId"] == 2))
+
+
+@pytest.mark.parametrize("dist", [5.0 * u.cm, 50.0 * u.m, 1.0 * u.km, 10.0 * u.km])
+def test_rayOffset(dist: float):
+    """
+    Checks whether the ray offset causes the ray to skip smaller media.
+    Thanks to floating precision, the offset increases with the distance from origin.
+    """
+    N = 32 * 256
+    L = 1.0 * u.mm
+    center = np.array([-0.6, 0.48, 0.36]) * dist
+    light_dir = np.array((0.005, 0.003, 1.0))  # slightly off axis to provoke error
+    light_dir /= np.sqrt(np.square(light_dir).sum())
+    light_pos = center - 2.0 * u.cm * light_dir
+
+    # create materials
+    medWorld = DispersionFreeMedium().createMedium(name="world")
+    medCube = DispersionFreeMedium().createMedium(name="cube")
+    matCube = Material("cube", medCube, medWorld, BorderSurface())
+    matAbs = Material("abs", medWorld, None, AbsorbingSurface())
+    matStore = MaterialStore([matCube, matAbs])
+    medWorldIdx = matStore.media["world"]
+    # create scene
+    # we put a small cube inside an absorber sphere. we need another surfaces to
+    # detect whether we accidentally skipped the cube with the ray offset
+    meshStore = MeshStore({"cube": "assets/cube.ply", "sphere": "assets/sphere.stl"})
+    t_cube = Transform.TRS(scale=L, translate=tuple(center))
+    t_det = Transform.TRS(scale=10.0 * u.cm, translate=tuple(center))
+    instances = [
+        meshStore.createInstance("cube", "cube", t_cube),
+        meshStore.createInstance("sphere", "abs", t_det, detectorId=1),
+    ]
+    bbox = RectBBox(tuple(center - 1.0 * u.m), tuple(center + 1.0 * u.m))
+    scene = Scene(instances, matStore, bbox=bbox)
+    # create pipeline
+    source = PencilLightSource(
+        UniformWavelengthSource(),
+        mediumIdx=medWorldIdx,
+        position=tuple(light_pos),
+        direction=tuple(light_dir),
+    )
+    stats = theia.trace.EventStatisticCallback()
+    tracer = theia.trace.SceneForwardTracer(
+        N,
+        UnpolarizedRay(),
+        source,
+        EmptyResponse(),
+        PhiloxRNG(key=0xC01DC0FFEE),
+        scene,
+        callback=stats,
+        maxPathLength=10,
+        sampleCoefficient=0.0,  # disable volume scattering
+        disableDirectLighting=True,
+    )
+    pl.runPipeline(tracer.collectStages())
+    hp.checkCurrentDeviceHealth()
+
+    # every ray should cross the cube (entering and leaving it) and reach the
+    # detector. If the offset is too large, rays skip the cube's back side and
+    # end up in the wrong medium, which is reported as a mismatch
+    assert stats.created == N
+    assert stats.error == 0
+    assert stats.mismatch == 0
+    assert stats.volume == 2 * N
+    assert stats.absorbed == N
