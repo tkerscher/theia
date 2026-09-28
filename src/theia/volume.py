@@ -8,7 +8,7 @@ import json
 from theia.compiler import createPreamble, loadShader
 
 from importlib.resources.abc import Traversable
-from typing import ClassVar, Type
+from typing import ClassVar, Type, Literal
 
 
 __all__ = [
@@ -220,11 +220,10 @@ class Fluorescent(VolumeModel, name="fluorescent"):
         *,
         absorb: bool = False,
         allowWavelengthUpShift: bool = False,
-        timeModel: str = "delta"
+        timeModel: Literal["delta", "exponential"] = "delta"
     ) -> None:
-        timeModels = ["delta", "exponential"]
-        if timeModel not in timeModels:
-            raise AttributeError(f"{timeModel} is not a supported time model.")
+        if timeModel not in ("delta", "exponential"):
+            raise ValueError(f"{timeModel} is not a supported time model.")
         rngDraws = VolumeRNGDraws(
             sampleInteractionLength=1,
             applyVolumeEffect=0,
@@ -265,7 +264,7 @@ class Fluorescent(VolumeModel, name="fluorescent"):
         return self._allowUpshift
     
     @property
-    def timeModel(self) -> str:
+    def timeModel(self) -> Literal["delta", "exponential"]:
         """Model of the time delay caused by the fluorescence."""
         return self._timeModel
 
