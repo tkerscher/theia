@@ -428,22 +428,23 @@ class SphereBBox:
         self._glsl.radius = value
 
 
-def _createMeshFromTrimesh(mesh: trimesh.Trimesh) -> hp.Mesh:
+def _createMeshFromTrimesh(mesh: trimesh.Trimesh, unit: float = 1.0 * u.m) -> hp.Mesh:
     """util function converting a mesh from trimesh to hephaistos"""
     result = hp.Mesh()
-    vertices = np.concatenate((mesh.vertices, mesh.vertex_normals), axis=-1)
+    vertices = np.concatenate((mesh.vertices * unit, mesh.vertex_normals), axis=-1)
     result.vertices = np.ascontiguousarray(vertices, dtype=np.float32)
     result.indices = np.ascontiguousarray(mesh.faces, dtype=np.uint32)
     return result
 
 
-def loadMesh(filepath: str | Path) -> hp.Mesh:
+def loadMesh(filepath: str | Path, unit: float = 1.0 * u.m) -> hp.Mesh:
     """
     Loads the mesh stored at the given file path and returns a
     `hephaistos.Mesh` to be used in MeshStore.
+    The unit used in the mesh can be provided and defaults to meters.
     """
     mesh = trimesh.load_mesh(filepath)
-    return _createMeshFromTrimesh(mesh)
+    return _createMeshFromTrimesh(mesh, unit)
 
 
 class MeshInstance:
@@ -652,6 +653,7 @@ class Scene:
         # Note, that we will have two hit shaders per surface model (one for
         # tracing, one for NEE), so the sbtOffset is actually twice the index
         objectIdMap: list[int] = []
+        geometryMap: list[int] = []
         geomInstances: list[hp.GeometryInstance] = []
         for inst in instances:
             if inst.material not in materials:
@@ -659,6 +661,8 @@ class Scene:
             matIdx = materials[inst.material]
             srfIdx = materials.surfaceModelMap[matIdx]
             objectIdMap.append(inst.objectId)
+            geometryMap.append(inst.vertices)
+            geometryMap.append(inst.indices)
 
             geom = inst.instance
             geom.customIndex = matIdx
@@ -667,9 +671,11 @@ class Scene:
             geomInstances.append(geom)
         # create the acceleration structure
         self._tlas = hp.AccelerationStructure(geomInstances)
-        # create object id map
+        # upload maps
         objectIdMapValues = np.ascontiguousarray(objectIdMap, dtype=np.int32)
         self._objectIdMap = hp.Tensor(objectIdMapValues)
+        geometryMapValues = np.ascontiguousarray(geometryMap, dtype=np.uint64)
+        self._geometryMap = hp.Tensor(geometryMapValues)
 
     @property
     def bbox(self) -> RectBBox:
@@ -679,6 +685,11 @@ class Scene:
     @bbox.setter
     def bbox(self, value: RectBBox) -> None:
         self._bbox = value
+
+    @property
+    def geometryMapTensor(self) -> hp.Tensor:
+        """Tensor containing the addresses of the vertices and indices of each instance"""
+        return self._geometryMap
 
     @property
     def materials(self) -> MaterialStore:
@@ -697,7 +708,10 @@ class Scene:
 
     def bindParams(self, program: hp.Program | hp.RayTracingPipeline) -> None:
         self.materials.bindParams(program)
-        program.bindParams(ObjectIdMap=self.objectIdMapTensor)
+        program.bindParams(
+            ObjectIdMap=self.objectIdMapTensor,
+            GeometryMap=self.geometryMapTensor,
+        )
 
 
 class SceneTemplate:
@@ -709,9 +723,9 @@ class SceneTemplate:
     ----------
     file: str | Path
         Path to the file containing the scene to be loaded
-    materials: MaterialStore | Mapping[str, int] | None, default=None
-        Material map used when creating scenes from this template. If None, it
-        must be explicitly passed to `createScene`.
+    materials: MaterialStore | None, default=None
+        Store containing the materials used by the scene. If None, it must be
+        explicitly passed to `createScene`.
     templateTransform: Transform | None, default=None
         Optional transformation to be applied to the loaded template
     detectorIdMap: Mapping[str, int] | None, default=None
@@ -741,11 +755,11 @@ class SceneTemplate:
         self,
         file: str | Path,
         *,
-        materials: MaterialStore | Mapping[str, int] | None = None,
-        sceneMedium: int = 0,
+        materials: MaterialStore | None = None,
         templateTransform: Transform | None = None,
         detectorIdMap: Mapping[str, int] | None = None,
         detectorMaterial: set[str] | None = None,
+        unit: float = 1.0 * u.m,
     ) -> None:
         # load file
         scene: trimesh.Scene = trimesh.load(file, force="scene")
@@ -771,7 +785,8 @@ class SceneTemplate:
         # collect material mapped (defined per mesh)
         matDict = {name: getMaterialName(name, m) for name, m in scene.geometry.items()}
         # load meshes to GPU
-        meshes = {name: _createMeshFromTrimesh(m) for name, m in scene.geometry.items()}
+        createMesh = lambda m: _createMeshFromTrimesh(m, unit)
+        meshes = {name: createMesh(m) for name, m in scene.geometry.items()}
         self._store = MeshStore(meshes)
 
         # assemble instances
@@ -805,21 +820,18 @@ class SceneTemplate:
 
         self._instances = MappingProxyType(instances)
         self.materials = materials
-        self._sceneMedium = sceneMedium
         self._idStride = nextId - 1
 
     @property
-    def materials(self) -> Mapping[str, int] | None:
+    def materials(self) -> MaterialStore | None:
         """
-        Material map used when creating scenes from this template. If None, it
-        must be explicitly passed to `createScene`.
+        Store containing the materials used by the scene. If None, it must be
+        explicitly passed to `createScene`.
         """
         return self._materials
 
     @materials.setter
-    def materials(self, value: MaterialStore | Mapping[str, int] | None) -> None:
-        if isinstance(value, MaterialStore):
-            value = value.material
+    def materials(self, value: MaterialStore | None) -> None:
         self._materials = value
 
     @property
@@ -831,21 +843,11 @@ class SceneTemplate:
     def instances(self) -> MappingProxyType[str, InstanceInfo]:
         return self._instances
 
-    @property
-    def sceneMedium(self) -> int:
-        """Device address of the medium the template is embedded within"""
-        return self._sceneMedium
-
-    @sceneMedium.setter
-    def sceneMedium(self, value: int) -> None:
-        self._sceneMedium = value
-
     def createScene(
         self,
         tempInstance: Iterable[Transform | None] | None = None,
         *,
-        materials: MaterialStore | Mapping[str, int] | None = None,
-        sceneMedium: int = 0,
+        materials: MaterialStore | None = None,
         sceneTransformation: Transform | None = None,
         sceneBBox: RectBBox | None = None,
         detectorIdStride: int | None = None,
@@ -859,13 +861,9 @@ class SceneTemplate:
         tempInstance: Iterable[Transform] | None, default=None
             List of `Transform` for each template instance. If None, a single
             instance without a transformation is used.
-        materials: MaterialStore | Mapping[str, int] | None, default=None
-            Material map used when creating scenes from this template. If None,
+        materials: MaterialStore | None, default=None
+            MaterialStore used when creating scenes from this template. If None,
             uses the one passed to the template.
-        sceneMedium: int, default=0
-            Device address of the medium the scene is emerged in, e.g. the
-            address of a water medium for an underwater simulation. Defaults to
-            zero specifying vacuum.
         sceneTransformation: Transform | None, default=None
             Optional transformation applied to the loaded scene
         sceneBBox : RectBBox | None, default=None
@@ -888,8 +886,6 @@ class SceneTemplate:
             materials = self.materials
         if materials is None:
             raise ValueError("No material mapping was provided!")
-        if isinstance(materials, MaterialStore):
-            materials = materials.material
         # single instance
         if tempInstance is None:
             tempInstance = [None]
@@ -921,5 +917,5 @@ class SceneTemplate:
                 sceneInst.append(inst)
 
         # create scene
-        scene = Scene(sceneInst, materials, medium=sceneMedium, bbox=sceneBBox)
+        scene = Scene(sceneInst, materials, bbox=sceneBBox)
         return scene, detIdMap
