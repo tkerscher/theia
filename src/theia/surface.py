@@ -9,11 +9,12 @@ from theia.compiler import createPreamble, loadShader
 
 from importlib.resources.abc import Traversable
 from typing import ClassVar, Type
-
+import json
 
 __all__ = [
     "AbsorbingSurface",
     "BorderSurface",
+    "DielectricRoughSurface",
     "DielectricSurface",
     "LambertianReflectingSurface",
     "MetallicSurface",
@@ -209,6 +210,125 @@ class DielectricSurface(SurfaceModel, name="dielectric"):
 
     def __hash__(self) -> int:
         return hash(self.name)
+    
+
+class DielectricRoughSurface(SurfaceModel, name="dielectric_rough"):
+    """
+    Models transmission and reflection of rough surfaces between two dielectric
+    media. The user can chose from several micro-facet based models.
+
+    By default, the reflectance is computed from the sampled micro-facet. It is
+    also possible to specify a wavelength-dependant reflectance via the material
+    property `reflectivity`.
+
+    For all models the reflected component can be decomposed into a specular
+    spike, specular lobe, diffuse lobe and backscattering via the optional material 
+    properties `prob_backscatter`, `prob_specularspike`, `prob_specularlobe` and 
+    `prob_diffuselobe`. If these are not given the surface falls back to a pure 
+    specular lobe (specular reflection on micro-facets).
+
+    The transmitted component always gets refracted according to Snell's law at
+    the micro-facet.
+
+    Parameters
+    ----------
+    model: str, default="beckmann"
+        The micro-facet sampling model. Supported values:
+
+        ``"beckmann"``
+            Micro-facets sampled from the Beckmann-Spizzichino distribution.
+        ``"trowbridge_reitz"``
+            Micro-facets sampled from the Trowbridge-Reitz (GGX) distribution.
+        ``"trowbridge_reitz_shadowed"``
+            Micro-facets sampled from the Trowbridge-Reitz (GGX) distribution
+            with geometric shadowing/masking term.
+        ``"gaussian"``
+            Micro-facets sampled from a Gaussian (normal) distribution of the
+            facet slope angle, using `roughness_parameter` as the Gaussian width
+            sigma (in radians). This mirrors the micro-facet sampling of the 
+            Geant4 UNIFIED model.
+
+    Note
+    ----
+    The Geant4 UNIFIED SpecularLobe is essentially the small-angle approximation of
+    the Beckmann model with `sigma_alpha = roughness_parameter / sqrt(2)`. For small
+    roughnesses, these models will give approximately the same result.
+    """
+
+    def __init__(self, *, model = "beckmann") -> None:
+        supported_models = ["gaussian", "beckmann", "trowbridge_reitz", "trowbridge_reitz_shadowed"]
+        if model in supported_models:
+            self._model = model
+        else:
+            raise AttributeError(f"{model} is not a supported dielectric rough surface model.")
+
+        # Worst-case RNG draws for prepareSurface. The shared retry loop samples up
+        # to 8 micro-facets; per retry it draws the facet-normal sampler + 1 (the
+        # reflect/transmit decision) + check_microfacet. check_microfacet is free
+        # (front-face test) for all models except "trowbridge_reitz_shadowed", which
+        # rejection-samples the masking term and thus draws 1 extra per retry:
+        #   3 (lobe + diffuse presample) + 20 * (normal + 1 + check) + 1 (fallback)
+        #     beckmann / trowbridge_reitz : 20 * (2 + 1 + 0) + 4 = 64
+        #     trowbridge_reitz_shadowed   : 20 * (2 + 1 + 1) + 4 = 84
+        #     gaussian                    : 20 * (9 + 1 + 0) + 4 = 204
+        # "gaussian" additionally rejection-samples the facet angle (up to 4 attempts
+        # x 2 draws) inside its normal sampler.
+        draws = SurfaceRNGDraws(
+            prepareSurface=204 if model == "gaussian" else 84 if model == "trowbridge_reitz_shadowed" else 64,
+            sampleSurfaceInteraction=0,
+            processSurfaceTargetHit=0,
+        )
+
+        # reflectivity and the prob_* lobe weights are optional and thus not
+        # listed as required material properties. All models parametrise the
+        # roughness through `roughness_parameter`.
+        requiredMaterialProperties = {"roughness_parameter"}
+        super().__init__(
+            rngDraws=draws,
+            requiredMediumProperties={"refractive_index"},
+            requiredMaterialProperties=requiredMaterialProperties,
+        )
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def backwardSourceCode(self) -> str:
+        # the model-specific micro-facet code is prepended to the shared
+        # surface implementation and compiled together
+        return "\n".join([
+            loadShader(f"surface/microfacet_models/{self.model}.glsl"),
+            loadShader("surface/dielectric_rough/backward.glsl"),
+        ])
+
+    @property
+    def forwardSourceCode(self) -> str:
+        return "\n".join([
+            loadShader(f"surface/microfacet_models/{self.model}.glsl"),
+            loadShader("surface/dielectric_rough/forward.glsl"),
+        ])
+
+    @classmethod
+    def load(cls, file: Traversable) -> DielectricRoughSurface:
+        with file.open() as f:
+            config = json.load(f)
+        model = config["model"]
+        # backwards compatibility: "unified" was renamed to "gaussian"
+        if model == "unified":
+            model = "gaussian"
+        return DielectricRoughSurface(model=model)
+    
+    def save(self, file) -> None:
+        config = {"model": self.model}
+        with file.open("w") as f:
+            json.dump(config, f)
+
+    def __eq__(self, value: object) -> bool:
+        return type(value) == DielectricRoughSurface and value.model == self.model
+
+    def __hash__(self) -> int:
+        return hash(self.name) ^ hash(self.model)
 
 
 class MetallicSurface(SurfaceModel, name="metallic"):
