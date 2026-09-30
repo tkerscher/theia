@@ -1484,34 +1484,48 @@ def _test_rough_dielectric_surface(surface, microfacet_sampler, particle, camera
     enough_t = (mask_t.sum() >= 20000) and (trans.sum() >= 20000)
     enough_r = (mask_r.sum() >= 20000) and (refl.sum() >= 20000)
 
-    # check correct sampling of micro-facets
+    # check correct sampling of micro-facets. The reflect-and-transmit behaviour
+    # weights the accepted facet by the Fresnel reflectance, which a restricted
+    # surface carries on the contribution, so both sides have to be weighted.
     if (flags == "R" or flags == "DR") and not particle and enough_r:
         microfacet_normals_shader = result["directionOut"] - result["directionIn"]
         microfacet_normals_shader /= np.linalg.norm(microfacet_normals_shader, axis=1, keepdims=True)
         cos_test = np.clip(np.sum(normals[mask_r] * ref_normals[mask_r], axis=1), 0.0, 1.0)
         cos_shader = np.clip(np.sum(normals * microfacet_normals_shader, axis=1), 0.0, 1.0)
-        assert np.mean(np.arccos(cos_test)) == pytest.approx(np.mean(np.arccos(cos_shader)), rel=rel_err)
+        assert np.average(
+            np.arccos(cos_test), weights=R[mask_r]
+        ) == pytest.approx(
+            np.average(np.arccos(cos_shader[refl]), weights=result["contribOut"][refl]),
+            rel=rel_err,
+        )
 
-    # only meaningful (and only used) when the respective mask is non-empty;
-    # guard to avoid warnings during testing
-    R_mean_r = np.mean(R[mask_r]) if mask_r.any() else np.nan
-    R_mean_t = np.mean(R[mask_t]) if mask_t.any() else np.nan
-
-    if enough_t and (flags == "TR" or (flags == "T" and particle)):
+    # Every flag combination reproduces the reflect-and-transmit behaviour, so the
+    # outgoing distribution is always Fresnel weighted. Restricted surfaces carry
+    # that weight on the contribution instead of in the acceptance, so their
+    # directions have to be compared contribution weighted.
+    qR = R * mask_r
+    qT = (1.0 - R) * mask_t
+    # the queue has no contribution field for particle rays
+    cO = result["contribOut"] if not particle else None
+    if enough_t and (flags == "TR" or particle):
         assert np.mean(result["directionOut"][trans], axis=0) == pytest.approx(
             np.average(t[mask_t], weights=(1 - R[mask_t]), axis=0), abs=abs_err
         )
-    if enough_t and (flags == "T") and not particle:
-        assert np.mean(result["directionOut"][trans], axis=0) == pytest.approx(
-            np.average(t[mask_t], axis=0), abs=abs_err
+    if enough_t and flags == "T" and not particle:
+        assert np.average(
+            result["directionOut"][trans], weights=cO[trans], axis=0
+        ) == pytest.approx(
+            np.average(t[mask_t], weights=(1 - R[mask_t]), axis=0), abs=abs_err
         )
-    if enough_r and (flags == "TR" or ((flags == "R" or flags == "DR") and particle)):
+    if enough_r and (flags == "TR" or particle):
         assert np.mean(result["directionOut"][refl], axis=0) == pytest.approx(
             np.average(r[mask_r], weights=R[mask_r], axis=0), abs=abs_err
         )
     if enough_r and (flags == "R" or flags == "DR") and not particle:
-        assert np.mean(result["directionOut"][refl], axis=0) == pytest.approx(
-            np.average(r[mask_r], axis=0), abs=abs_err
+        assert np.average(
+            result["directionOut"][refl], weights=cO[refl], axis=0
+        ) == pytest.approx(
+            np.average(r[mask_r], weights=R[mask_r], axis=0), abs=abs_err
         )
 
     if flags == "R" or flags == "DR":
@@ -1519,18 +1533,29 @@ def _test_rough_dielectric_surface(surface, microfacet_sampler, particle, camera
         if particle and enough_r:
             assert absorbed.sum() > 0
         elif enough_r:
-            cO = result["contribOut"]
-            assert np.mean(cO[~absorbed]) == pytest.approx(R_mean_r * np.mean(c[~absorbed]), rel=rel_err)
+            # The reflected fraction of the reflect-and-transmit surface. The
+            # weight is an expectation over *all* rays, and an absorbed ray
+            # contributes zero, so compare the sum rather than the mean over the
+            # survivors.
+            expected = qR.mean() / (qR.mean() + qT.mean())
+            assert cO[~absorbed].sum() / N == pytest.approx(
+                expected * np.mean(c[~absorbed]), rel=rel_err
+            )
     if flags == "T":
         assert refl.sum() == 0
         if particle and enough_t:
             absorbed.sum() > 0
         if not particle and enough_t:
-            cO = result["contribOut"]
-            assert np.mean(cO[~absorbed]) == pytest.approx((1 - R_mean_t) * np.mean(c[~absorbed]), rel=rel_err)
+            expected = qT.mean() / (qR.mean() + qT.mean())
+            assert cO[~absorbed].sum() / N == pytest.approx(
+                expected * np.mean(c[~absorbed]), rel=rel_err
+            )
         if not particle and not camera and enough_t:
+            # nothing is reflected back, so the detector sees everything
             cH = result["contribHit"]
-            assert np.mean(cH[~absorbed]) == pytest.approx((1 - R_mean_t) * np.mean(c[~absorbed]), rel=rel_err)
+            assert np.mean(cH[~absorbed]) == pytest.approx(
+                np.mean(c[~absorbed]), rel=rel_err
+            )
     if flags == "TR":
         if enough_r:
             assert refl.sum() > 0
@@ -1590,11 +1615,14 @@ _LOBE_ZERO = {
 }
 
 
-def _run_rough_reflection_lobe(lobe_probs, angle=30.0, alpha=0.15, N=32 * 1024, model="beckmann"):
-    """Run a rough surface in reflection-only mode ("R") with a forced reflection
-    lobe and return the outgoing directions. Only the reflected directions are of
-    interest here, so the surface cannot transmit (rough dielectric surface, ray
-    in water)."""
+def _run_rough_reflection_lobe(lobe_probs, angle=30.0, alpha=0.15, N=32 * 1024):
+    """Run the Geant4 UNIFIED surface in reflection-only mode ("R") with a forced
+    reflection lobe and return the outgoing directions. Only the reflected
+    directions are of interest here, so the surface cannot transmit. The ray
+    travels in water towards vacuum.
+
+    The lobe decomposition exists only in the UNIFIED model; the other rough
+    models are a pure specular lobe."""
     lam = 600.0 * u.nm
     direction = (
         np.array((0.8, 0.36, 0.48)) * np.cos(np.deg2rad(angle))
@@ -1606,7 +1634,7 @@ def _run_rough_reflection_lobe(lobe_probs, angle=30.0, alpha=0.15, N=32 * 1024, 
     properties = {"roughness_parameter": FloatProperty(alpha)}
     properties.update({k: FloatProperty(v) for k, v in lobe_probs.items()})
     water = PureWaterModel().createMedium()
-    surface = theia.surface.DielectricRoughSurface(model=model)
+    surface = theia.surface.DielectricRoughSurface(model="unified")
     mat = Material("mat", None, water, surface, flags="R", properties=properties)
     matStore = MaterialStore([mat])
     mediumIdx = matStore.media["water"]
@@ -1628,14 +1656,23 @@ def _run_rough_reflection_lobe(lobe_probs, angle=30.0, alpha=0.15, N=32 * 1024, 
     return result, np.asarray(direction), normal, absorbed
 
 
+# The UNIFIED walk decides reflection versus transmission by the Fresnel coin at
+# the facet, so a reflection-only dielectric absorbs whatever the walk transmits -
+# there is no analytic reflected fraction to weight the ray with instead. Only a
+# few percent survive here (water to vacuum at 30 deg); how many exactly is the
+# walk's business and not what these tests are about, they only need enough
+# samples left to say something about the direction.
+_LOBE_DIELECTRIC_MIN_REFLECTED = 1000
+
+
 def test_DielectricRoughSurface_specularSpikeLobe():
     # specular spike -> deterministic reflection off the macroscopic surface normal
     result, direction, normal, absorbed = _run_rough_reflection_lobe(
         {**_LOBE_ZERO, "prob_specularspike": 1.0}
     )
-    assert np.all(~absorbed)  # reflection-only surface never absorbs a wave
+    assert (~absorbed).sum() > _LOBE_DIELECTRIC_MIN_REFLECTED
     expected = reflect_arr(direction[None, :], normal[None, :])[0]
-    assert np.allclose(result["directionOut"], expected[None, :], atol=1e-6)
+    assert np.allclose(result["directionOut"][~absorbed], expected[None, :], atol=1e-6)
 
 
 def test_DielectricRoughSurface_backscatterLobe():
@@ -1643,8 +1680,8 @@ def test_DielectricRoughSurface_backscatterLobe():
     result, direction, normal, absorbed = _run_rough_reflection_lobe(
         {**_LOBE_ZERO, "prob_backscatter": 1.0}
     )
-    assert np.all(~absorbed)
-    assert np.allclose(result["directionOut"], -direction[None, :], atol=1e-6)
+    assert (~absorbed).sum() > _LOBE_DIELECTRIC_MIN_REFLECTED
+    assert np.allclose(result["directionOut"][~absorbed], -direction[None, :], atol=1e-6)
 
 
 def test_DielectricRoughSurface_diffuseLobe():
@@ -1653,8 +1690,8 @@ def test_DielectricRoughSurface_diffuseLobe():
     result, direction, normal, absorbed = _run_rough_reflection_lobe(
         {**_LOBE_ZERO, "prob_diffuselobe": 1.0}
     )
-    assert np.all(~absorbed)
-    cosNrm = np.multiply(result["directionOut"], normal[None, :]).sum(1)
+    assert (~absorbed).sum() > _LOBE_DIELECTRIC_MIN_REFLECTED
+    cosNrm = np.multiply(result["directionOut"][~absorbed], normal[None, :]).sum(1)
     assert np.all(cosNrm > 0.0)  # reflected back into the original hemisphere
     assert cosNrm.min() > 0.0 and cosNrm.min() < 0.05
     assert cosNrm.max() > 0.95 and cosNrm.max() <= 1.0

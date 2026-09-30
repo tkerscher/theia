@@ -6,7 +6,7 @@
 #define NO_REFLECT_BIT MATERIAL_NO_REFLECT_FWD_BIT
 #define NO_TRANSMIT_BIT MATERIAL_NO_TRANSMIT_FWD_BIT
 
-//the model-specific sample_microfacet_normal()/check_microfacet() are prepended
+//the model-specific micro-facet functions are prepended
 //to this file during compilation (see surface.py)
 #define RAY ForwardRay
 #include "surface/dielectric_rough/template.glsl"

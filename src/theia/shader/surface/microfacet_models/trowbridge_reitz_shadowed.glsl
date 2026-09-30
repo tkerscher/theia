@@ -16,7 +16,7 @@ is described in [1].
 Micro-facet parameters that are constant across a single surface interaction,
 i.e. do not depend on the sampled facet. They are computed once via
 prepare_microfacet() and then passed into sample_microfacet_normal() and
-check_microfacet() on every retry, so the loop-invariant roughness load, the
+microfacet_accept_prob() on every retry, so the loop-invariant roughness load, the
 local coordinate system and the hemispherical-configuration basis are not
 recomputed per iteration of the rejection loop.
 */
@@ -69,7 +69,7 @@ vec3 sample_microfacet_normal(const MicrofacetParams params, vec3 rayDir, const 
 float masking_function(float cos_n, float alpha){
     //handle very small cosines
     if(cos_n < 1e-3){
-        return 0;
+        return 0.0;
     }
 
     float tan2_n = max(1.0 - cos_n*cos_n, 0.0) / (cos_n*cos_n);
@@ -78,11 +78,10 @@ float masking_function(float cos_n, float alpha){
 }
 
 
-//rejection sample the masking
-bool check_microfacet(const MicrofacetParams params, vec3 dirOut, vec3 microfacetNormal, const SurfaceHit hit, vec3 rayDir, uint idx, inout uint dim){
-    float u = random(idx, dim);
-    float mask = masking_function(abs(dot(dirOut, hit.rayNrm)), params.alpha);
-    return (mask > u);
+//Probability that this facet is accepted for the given outgoing direction.
+//The caller turns it into a decision by comparing against a single uniform.
+float microfacet_accept_prob(const MicrofacetParams params, vec3 dirOut, vec3 microfacetNormal, const SurfaceHit hit, vec3 rayDir){
+    return masking_function(abs(dot(dirOut, hit.rayNrm)), params.alpha);
 }
 
 #endif
