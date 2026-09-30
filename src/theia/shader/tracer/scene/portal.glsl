@@ -14,7 +14,7 @@
  *
  * The TransitionTable maps (sceneId, context, gl_InstanceID) -> (nextScene,
  * nextContext, T), where T is the object->world placement of the ARRIVAL box in
- * the target scene. `portalReframe` re-expresses the (already surface-processed)
+ * the target scene. `portalChangeFrame` re-expresses the (already surface-processed)
  * ray in the new frame.
  */
 
@@ -91,7 +91,7 @@ PortalTransition lookupTransition(uint sceneId, uint context, uint instance) {
  *   - the object-space position of the hit is mapped by the arrival transform T and offset 
  *     into the transmitted side; the previous world position is discarded
  */
-void portalReframe(inout ForwardRay ray, const SurfaceHit hit) {
+void portalChangeFrame(inout ForwardRay ray, const SurfaceHit hit) {
     PortalTransition t = lookupTransition(ray.frame.x, ray.frame.y, uint(gl_InstanceID));
     mat4x3 T = t.transform;
     //world -> object transformation of the arrival box

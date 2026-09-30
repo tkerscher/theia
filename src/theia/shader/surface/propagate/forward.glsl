@@ -4,7 +4,7 @@
 #include "util/offset.glsl"
 
 #ifdef RAY_PORTAL
-//Portal tables + portalReframe(). Included BEFORE the surface model so the
+//Portal tables + portalChangeFrame(). Included BEFORE the surface model so the
 //transmit paths below can switch scene on a portal crossing.
 #include "tracer/scene/portal.glsl"
 #endif
@@ -18,11 +18,11 @@ ResultCode crossBorder(
     const SurfaceHit hit    ///< Description of surface hit
 ) {
 #ifdef RAY_PORTAL
-    //portal surface: no world-space offset (portalReframe sets position from the
+    //portal surface: no world-space offset (portalChangeFrame sets position from the
     //precise object-space hit); just swap the medium, then switch scene/frame.
     if ((hit.flags & MATERIAL_PORTAL_BIT) != 0) {
         ResultCode result = updateMedium(ray, hit.otherMediumIdx);
-        if (result >= 0) portalReframe(ray, hit);
+        if (result >= 0) portalChangeFrame(ray, hit);
         return result;
     }
 #endif
@@ -65,12 +65,12 @@ ResultCode transmitRay(
 ) {
 #ifdef RAY_PORTAL
     //portal surface: a TRANSMITTED ray switches scene/frame (reflected rays don't,
-    //reflectRay is untouched). No world-space offset - portalReframe sets position
+    //reflectRay is untouched). No world-space offset - portalChangeFrame sets position
     //from the precise object-space hit and re-expresses the (transmitted) direction
     //in the target frame.
     if ((hit.flags & MATERIAL_PORTAL_BIT) != 0) {
         ResultCode result = transmitRay(ray, newDir, hit.otherMediumIdx);
-        if (result >= 0) portalReframe(ray, hit);
+        if (result >= 0) portalChangeFrame(ray, hit);
         return result;
     }
 #endif
