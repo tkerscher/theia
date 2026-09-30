@@ -8,9 +8,6 @@ model-specific parts are `prepare_microfacet`, `sample_microfacet_normal` and
 `microfacet_accept_prob`, which are provided by one of the files in
 `microfacet_models/` (see api.glsl there).
 
-The surface is a pure specular lobe on micro-facets. The reflectance is always
-computed from the Fresnel equations at the sampled micro-facet.
-
 The Geant4 UNIFIED model, which splits the reflection into several lobes and
 walks across the micro structure instead of rejecting facets, lives in
 surface/unified/ instead.
@@ -28,35 +25,6 @@ struct SurfaceProperties {
 
 //tell tracer we want to do some prep work
 #define SurfaceProperties SurfaceProperties
-
-/**
- * Outgoing direction of a single channel at the given facet and the probability
- * that the facet loop accepts it: the direction has to end up in the correct
- * macroscopic hemisphere, and the model specific check (front facing facet resp.
- * masking) has to pass.
- */
-float roughChannel(
-    const MicrofacetParams mfParams,
-    vec3 rayDir,
-    const SurfaceHit hit,
-    float eta,
-    vec3 microfacetNormal,
-    bool reflectChannel,
-    out vec3 dir
-) {
-    if (reflectChannel) {
-        dir = reflect(rayDir, microfacetNormal);
-        return dot(dir, hit.rayNrm) > 0.0
-            ? microfacet_accept_prob(mfParams, dir, microfacetNormal, hit, rayDir)
-            : 0.0;
-    }
-
-    dir = refract(rayDir, microfacetNormal, eta);
-    //a zero direction marks total internal reflection
-    return dot(dir, hit.rayNrm) < 0.0
-        ? microfacet_accept_prob(mfParams, dir, microfacetNormal, hit, rayDir)
-        : 0.0;
-}
 
 SurfaceProperties prepareSurface(
     const RAY ray,
@@ -83,15 +51,20 @@ SurfaceProperties prepareSurface(
     props.doReflect = false;
 
     /*
-    Every flag combination reproduces the reflect-and-transmit behaviour, which
-    is the physically correct one: a violated facet condition corresponds to a
-    second scattering on the micro structure, out of which both reflection and
-    transmission can emerge. Restricting the surface must not change how it
-    reflects, it must only absorb what it is no longer allowed to emit.
+    For reflect-and-transmit ("RT") we use the following rejection sampling:
+    sample microfacet -> check if outgoing direction is valid -> either use
+    that direction or resample
 
-    Per facet the loop accepts it as a reflection with probability q_R = F*a_R
-    and as a transmission with q_T = (1-F)*a_T. If one of the two channels is
-    forbidden, its Russian roulette is replaced by its expectation:
+    The underlying assumption is that invalid directions correspond to multi-
+    scattering, and that the distribution of the twice scattered rays is identical
+    to single scattered rays (the following paper argued that this is roughly 
+    correct: https://api.semanticscholar.org/CorpusID:221737278).
+
+    We reproduce ("RT") behaviour for each flag combination. Let R be the reflectance,
+    a_R the acceptance probability for reflected rays and a_T for transmitted rays.
+    Per facet the loop accepts a micro-facet as a reflection with probability 
+    q_R = R*a_R and as a transmission with q_T = (1-R)*a_T. If one of the two channels 
+    is forbidden ("R" or "T"), we use:
 
         weight *= 1 - q_forbidden          accept with q_allowed/(1 - q_forbidden)
 
@@ -102,6 +75,7 @@ SurfaceProperties prepareSurface(
     reflect-and-transmit decision; sampleSurfaceInteraction() then absorbs the
     outcomes the flags forbid.
     */
+
 #ifdef RAY_PARTICLE
     bool weightReflect = false;
     bool weightTransmit = false;
@@ -109,7 +83,7 @@ SurfaceProperties prepareSurface(
     bool weightReflect = canReflect && !canTransmit;
     bool weightTransmit = !canReflect && canTransmit;
 #endif
-    //the unrestricted case only ever needs the channel it actually picks
+    //check if we have to compute both reflection and transmission
     bool bothChannels = weightReflect || weightTransmit;
 
     //nothing may leave the surface at all
@@ -118,8 +92,7 @@ SurfaceProperties prepareSurface(
         return props;
     }
 
-    //compute the facet-independent micro-facet parameters once (roughness,
-    //tangent basis, ...) and reuse them across all retries
+    //compute the facet-independent micro-facet parameters once
     MicrofacetParams mfParams = prepare_microfacet(ray.direction, hit);
     float eta = n_i / n_o;
 
@@ -128,7 +101,7 @@ SurfaceProperties prepareSurface(
     //facet (the surface normal), accepted as long as any channel can take it.
     bool valid = false;
     vec3 acceptedNormal = hit.rayNrm;
-    for (int i = 0; i <= 20; i++) {
+    for (uint i = 0; i <= 20; i++) {
         bool last = (i == 20);
         vec3 microfacetNormal = hit.rayNrm;
         if (!last)
@@ -140,14 +113,49 @@ SurfaceProperties prepareSurface(
         float u = random(idx, dim);
 
         bool accepted;
-        if (bothChannels) {
-            //the forbidden channel's probability is needed for the weight
-            float aR = roughChannel(
-                mfParams, ray.direction, hit, eta, microfacetNormal, true,
-                props.dirReflected);
-            float aT = roughChannel(
-                mfParams, ray.direction, hit, eta, microfacetNormal, false,
-                props.dirTransmitted);
+        if (!bothChannels) {
+            //Plain reflect-and-transmit: pick the channel by the Fresnel coin,
+            //then test only that one.
+            props.doReflect = u < props.reflectance;
+            vec3 dir;
+            bool rightSide;
+            float v;
+            if (props.doReflect) {
+                dir = reflect(ray.direction, microfacetNormal);
+                props.dirReflected = dir;
+                //can reuse same random number for acceptance decision
+                v = u / props.reflectance;
+                rightSide = dot(dir, hit.rayNrm) > 0.0;
+            }
+            else {
+                dir = refract(ray.direction, microfacetNormal, eta);
+                props.dirTransmitted = dir;
+                //can reuse same random number for acceptance decision
+                v = (u - props.reflectance) / (1 - props.reflectance);
+                rightSide = dot(dir, hit.rayNrm) < 0.0;
+            }
+            //acceptance probability
+            float a = rightSide
+                ? microfacet_accept_prob(mfParams, dir, microfacetNormal, hit, ray.direction)
+                : 0.0;
+
+            accepted = last ? (a > 0.0) : (v < a);
+        }
+
+        else {
+            //the forbidden channel's probability is also needed for the weight
+            props.dirReflected = reflect(ray.direction, microfacetNormal);
+            props.dirTransmitted = refract(ray.direction, microfacetNormal, eta);
+            //acceptance probability of reflection
+            float aR = dot(props.dirReflected, hit.rayNrm) > 0.0
+                ? microfacet_accept_prob(
+                    mfParams, props.dirReflected, microfacetNormal, hit, ray.direction)
+                : 0.0;
+            //acceptance probability of transmission
+            float aT = dot(props.dirTransmitted, hit.rayNrm) < 0.0
+                ? microfacet_accept_prob(
+                    mfParams, props.dirTransmitted, microfacetNormal, hit, ray.direction)
+                : 0.0;
             float qR = props.reflectance * aR;
             float qT = (1.0 - props.reflectance) * aT;
 
@@ -165,31 +173,6 @@ SurfaceProperties prepareSurface(
                 accepted = props.weight <= 0.0 || u * survive < qT
                     || (last && qT > 0.0);
             }
-        }
-        else {
-            /*
-            Plain reflect-and-transmit: pick the channel by the Fresnel coin,
-            then test only that one. Conditioned on the pick, the leftover of
-            the same uniform is again uniform on [0,1) and independent of it, so
-            the acceptance test needs no second random number - and only one of
-            the two outgoing directions has to be computed at all.
-            */
-            props.doReflect = u < props.reflectance;
-            float split = props.doReflect
-                ? props.reflectance : 1.0 - props.reflectance;
-            float v = split > 0.0
-                ? (props.doReflect ? u : u - props.reflectance) / split : 0.0;
-
-            vec3 dir;
-            float a = roughChannel(
-                mfParams, ray.direction, hit, eta, microfacetNormal,
-                props.doReflect, dir);
-            if (props.doReflect)
-                props.dirReflected = dir;
-            else
-                props.dirTransmitted = dir;
-
-            accepted = last ? (a > 0.0) : (v < a);
         }
 
         if (accepted) {

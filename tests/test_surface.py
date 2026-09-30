@@ -1368,7 +1368,8 @@ _ROUGH_DIELECTRIC_PARAMS = [
 ]
 
 
-def _test_rough_dielectric_surface(surface, microfacet_sampler, particle, camera, flags, angle, alpha=0.15, masking_function=None):
+def _test_rough_dielectric_surface(surface, microfacet_sampler, particle, 
+                                   camera, flags, angle, alpha=0.15, masking_function=None):
     np.random.seed(0xABCD + 10*(1+particle+2*camera)*int(angle))
     N = 64 * 1024
     lam = 600.0 * u.nm
@@ -1484,9 +1485,7 @@ def _test_rough_dielectric_surface(surface, microfacet_sampler, particle, camera
     enough_t = (mask_t.sum() >= 20000) and (trans.sum() >= 20000)
     enough_r = (mask_r.sum() >= 20000) and (refl.sum() >= 20000)
 
-    # check correct sampling of micro-facets. The reflect-and-transmit behaviour
-    # weights the accepted facet by the Fresnel reflectance, which a restricted
-    # surface carries on the contribution, so both sides have to be weighted.
+    # check correct sampling of micro-facets using weighted averages
     if (flags == "R" or flags == "DR") and not particle and enough_r:
         microfacet_normals_shader = result["directionOut"] - result["directionIn"]
         microfacet_normals_shader /= np.linalg.norm(microfacet_normals_shader, axis=1, keepdims=True)
@@ -1499,10 +1498,7 @@ def _test_rough_dielectric_surface(surface, microfacet_sampler, particle, camera
             rel=rel_err,
         )
 
-    # Every flag combination reproduces the reflect-and-transmit behaviour, so the
-    # outgoing distribution is always Fresnel weighted. Restricted surfaces carry
-    # that weight on the contribution instead of in the acceptance, so their
-    # directions have to be compared contribution weighted.
+    # compare outgoing directions using weighted averages
     qR = R * mask_r
     qT = (1.0 - R) * mask_t
     # the queue has no contribution field for particle rays
@@ -1533,10 +1529,6 @@ def _test_rough_dielectric_surface(surface, microfacet_sampler, particle, camera
         if particle and enough_r:
             assert absorbed.sum() > 0
         elif enough_r:
-            # The reflected fraction of the reflect-and-transmit surface. The
-            # weight is an expectation over *all* rays, and an absorbed ray
-            # contributes zero, so compare the sum rather than the mean over the
-            # survivors.
             expected = qR.mean() / (qR.mean() + qT.mean())
             assert cO[~absorbed].sum() / N == pytest.approx(
                 expected * np.mean(c[~absorbed]), rel=rel_err
@@ -1656,16 +1648,11 @@ def _run_rough_reflection_lobe(lobe_probs, angle=30.0, alpha=0.15, N=32 * 1024):
     return result, np.asarray(direction), normal, absorbed
 
 
-# The UNIFIED walk decides reflection versus transmission by the Fresnel coin at
-# the facet, so a reflection-only dielectric absorbs whatever the walk transmits -
-# there is no analytic reflected fraction to weight the ray with instead. Only a
-# few percent survive here (water to vacuum at 30 deg); how many exactly is the
-# walk's business and not what these tests are about, they only need enough
-# samples left to say something about the direction.
+# Make sure that enough rays get reflected for a statistical comparison
 _LOBE_DIELECTRIC_MIN_REFLECTED = 1000
 
 
-def test_DielectricRoughSurface_specularSpikeLobe():
+def test_DielectricRoughSurface_specularSpike():
     # specular spike -> deterministic reflection off the macroscopic surface normal
     result, direction, normal, absorbed = _run_rough_reflection_lobe(
         {**_LOBE_ZERO, "prob_specularspike": 1.0}
@@ -1675,7 +1662,7 @@ def test_DielectricRoughSurface_specularSpikeLobe():
     assert np.allclose(result["directionOut"][~absorbed], expected[None, :], atol=1e-6)
 
 
-def test_DielectricRoughSurface_backscatterLobe():
+def test_DielectricRoughSurface_backscatter():
     # backscatter -> deterministic retro-reflection into the incoming direction
     result, direction, normal, absorbed = _run_rough_reflection_lobe(
         {**_LOBE_ZERO, "prob_backscatter": 1.0}

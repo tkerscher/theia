@@ -1,17 +1,14 @@
-#ifndef _INCLUDE_SURFACE_LOBES
-#define _INCLUDE_SURFACE_LOBES
+#ifndef _INCLUDE_SURFACE_UNIFIED_LOBES
+#define _INCLUDE_SURFACE_UNIFIED_LOBES
 
 #include "math.glsl"
 
 /*
-Reflection-lobe logic of the Geant4 UNIFIED model (see surface/unified/). The
-reflected component is decomposed into a specular spike, specular lobe, diffuse
+Reflection-lobe logic of the Geant4 UNIFIED model (see template.glsl). The
+reflected component is decomposed into specular spike, specular lobe, diffuse
 lobe and backscattering. The split is controlled by the optional material
 properties `prob_backscatter`, `prob_specularspike`, `prob_specularlobe` and
 `prob_diffuselobe`.
-
-These helpers are independent of the RAY type and the surrounding
-`SurfaceProperties` struct, so this file can be included anywhere.
 */
 
 struct ReflectionLobes {

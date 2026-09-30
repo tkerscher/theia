@@ -8,7 +8,7 @@ import json
 from theia.compiler import createPreamble, loadShader
 
 from importlib.resources.abc import Traversable
-from typing import ClassVar, Type
+from typing import ClassVar, Type, Literal
 import json
 
 __all__ = [
@@ -217,14 +217,11 @@ class DielectricRoughSurface(SurfaceModel, name="dielectric_rough"):
     Models transmission and reflection of rough surfaces between two dielectric
     media. The user can chose from several micro-facet based models.
 
-    Except for `"unified"`, the surface is a pure specular lobe on micro-facets.
-    The reflectance is always computed from the Fresnel equations at the sampled
-    micro-facet; the transmitted component gets refracted according to Snell's
-    law at the micro-facet.
-
-    All material flag combinations show the same reflection behaviour. Forbidding
-    a channel only absorbs what the surface may no longer emit, it does not
-    change how the surface reflects.
+    The roughness of the surface is parameterized through the material property
+    `roughness_parameter`. All models except `"unified"` will sample a micro-facet,
+    compute reflectance and outgoing direction using this facet, and will reject the
+    facet if the outgoing direction is invalid (e.g. if a transmitted ray gets sent 
+    back to the original medium).
 
     Parameters
     ----------
@@ -240,37 +237,24 @@ class DielectricRoughSurface(SurfaceModel, name="dielectric_rough"):
             with geometric shadowing/masking term.
         ``"gaussian"``
             Micro-facets sampled from a Gaussian (normal) distribution of the
-            facet slope angle, using `roughness_parameter` as the Gaussian width
-            sigma (in radians). This mirrors the micro-facet sampling of the
-            Geant4 UNIFIED model.
+            facet slope angle.
         ``"unified"``
-            The Geant4 UNIFIED model itself: Gaussian micro-facets, the
-            reflection split into a specular spike, specular lobe, diffuse lobe
-            and backscattering (weighted by the optional material properties
-            `prob_backscatter`, `prob_specularspike`, `prob_specularlobe` and
-            `prob_diffuselobe`), and Geant4's walk across the micro structure in
-            place of a facet rejection - a ray that fails to leave keeps the
-            direction the facet gave it, and may cross the interface any number of
-            times before it does. Pick it only if you need the Geant4 behaviour.
-
-    Note
-    ----
-    The Geant4 UNIFIED SpecularLobe is essentially the small-angle approximation of
-    the Beckmann model with `sigma_alpha = roughness_parameter / sqrt(2)`. For small
-    roughnesses, these models will give approximately the same result.
+            The Geant4 UNIFIED model: Gaussian micro-facet distribution, the
+            reflected component can be decomposed into specular spike, specular
+            lobe, diffuse lobe and backscattering (weighted by the optional material 
+            properties `prob_backscatter`, `prob_specularspike`, `prob_specularlobe` 
+            and `prob_diffuselobe`, default is pure specular lobe), and Geant4's walk 
+            across the micro structure in place of a facet rejection.
     """
 
-    MODELS: ClassVar[tuple[str, ...]] = (
-        "beckmann",
-        "trowbridge_reitz",
-        "trowbridge_reitz_shadowed",
-        "gaussian",
-        "unified",
-    )
-    """Supported values of `model`"""
-
-    def __init__(self, *, model="beckmann") -> None:
-        if model not in self.MODELS:
+    def __init__(
+            self, 
+            *, 
+            model: Literal["beckmann", "trowbridge_reitz", "trowbridge_reitz_shadowed", 
+                           "gaussian", "unified"] = "beckmann",
+        ) -> None:
+        if model not in ("beckmann", "trowbridge_reitz", "trowbridge_reitz_shadowed", 
+                           "gaussian", "unified"):
             raise AttributeError(
                 f"{model} is not a supported dielectric rough surface model."
             )
@@ -296,9 +280,6 @@ class DielectricRoughSurface(SurfaceModel, name="dielectric_rough"):
             processSurfaceTargetHit=0,
         )
 
-        # the prob_* lobe weights are optional and thus not listed as required
-        # material properties. All models parametrise the roughness through
-        # `roughness_parameter`.
         requiredMaterialProperties = {"roughness_parameter"}
         super().__init__(
             rngDraws=draws,

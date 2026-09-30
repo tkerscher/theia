@@ -18,18 +18,9 @@ invertible proposal times a bounded acceptance weight:
 
 The Rayleigh factor is sampled analytically, truncated to [0, pi/2] so the
 proposal never leaves the domain, and accepted with probability sin(theta)/theta,
-which is <= 1 on [0, pi/2]. The overall acceptance rate is >= 0.81 for any sigma,
-so the loop almost always exits on the first iteration.
+which is <= 1 on [0, pi/2]. The overall acceptance rate is >= 0.81 for any sigma.
 */
 
-/*
-Micro-facet parameters that are constant across a single surface interaction,
-i.e. do not depend on the sampled facet. They are computed once via
-prepare_microfacet() and then passed into sample_microfacet_normal() and
-microfacet_accept_prob() on every retry, so the loop-invariant roughness load, the
-Rayleigh truncation mass and the tangent basis are not recomputed per iteration
-of the rejection loop.
-*/
 struct MicrofacetParams {
     float sigma;
     float c;        //truncation mass of the Rayleigh proposal on [0, pi/2]
@@ -46,7 +37,12 @@ MicrofacetParams prepare_microfacet(vec3 rayDir, const SurfaceHit hit){
     return params;
 }
 
-vec3 sample_microfacet_normal(const MicrofacetParams params, vec3 rayDir, const SurfaceHit hit, uint idx, inout uint dim){
+vec3 sample_microfacet_normal(
+    const MicrofacetParams params,
+    vec3 rayDir,
+    const SurfaceHit hit,
+    uint idx, inout uint dim
+) {
 
     //rejection sample theta from the truncated Rayleigh proposal; accept ~ sin(theta)/theta.
     //4 attempts give a fall-through probability < 1.3e-3 even in the worst case (sigma -> inf),
@@ -63,12 +59,19 @@ vec3 sample_microfacet_normal(const MicrofacetParams params, vec3 rayDir, const 
     float phi = TWO_PI * random(idx, dim);
 
     //rotate surface normal
-    return cos(theta) * hit.rayNrm + sin(theta) * cos(phi) * params.tangent1 + sin(theta) * sin(phi) * params.tangent2;
+    return cos(theta) * hit.rayNrm
+        + sin(theta) * cos(phi) * params.tangent1
+        + sin(theta) * sin(phi) * params.tangent2;
 }
 
-//Probability that this facet is accepted for the given outgoing direction.
-//The caller turns it into a decision by comparing against a single uniform.
-float microfacet_accept_prob(const MicrofacetParams params, vec3 dirOut, vec3 microfacetNormal, const SurfaceHit hit, vec3 rayDir){
+float microfacet_accept_prob(
+    const MicrofacetParams params,
+    vec3 dirOut,
+    vec3 microfacetNormal,
+    const SurfaceHit hit,
+    vec3 rayDir
+) {
+    //only acccept facets that are hit from the front
     return dot(rayDir, microfacetNormal) < 0.0 ? 1.0 : 0.0;
 }
 
