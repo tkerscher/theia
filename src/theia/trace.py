@@ -2214,17 +2214,8 @@ class SceneForwardTracer(_SceneTargetTracer):
 
     Accepts both a `Scene` and a `MultiScene`. The latter additionally traces
     one or more SUB-scenes in their own LOCAL coordinate frames, entered through
-    portals. This resolves fine geometry (e.g. thin fibers) placed far from the
-    world origin, where single-precision world coordinates lose resolution. The
-    scene owns the whole portal setup - placing the boxes, linking them and
-    uploading the lookup tables - so the tracer merely enables the corresponding
-    shader path.
-
-    A sub-scene reached through several portal contexts is built ONCE, so its
-    detectors cannot be told apart by a single `objectId`. Pass a sequence to
-    `detectorId` (see `MeshStore.createInstance`) to assign one id per context;
-    a scalar id is broadcast to all of them. Note that `targetId` filters on the
-    resolved id and thus selects a single context once the ids differ.
+    portals. This can be used to resolve fine geometries that are placed far away
+    from the origin.
 
     Parameters
     ----------
