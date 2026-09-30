@@ -8,7 +8,7 @@
 //
 //The models are free in how they parametrize themselves: nothing outside assumes 
 //a particular material property. Everything a model needs it loads itself in 
-//prepare_microfacet().
+//prepareMicrofacet().
 //
 //All directions are in world space. `rayDir` is the incident ray direction, i.e.
 //it points *towards* the surface, opposite to `hit.rayNrm`.
@@ -22,7 +22,7 @@ struct MicrofacetParams { };
 
 //Fills MicrofacetParams. This is where a model loads its own parameters from the
 //material table.
-MicrofacetParams prepare_microfacet(
+MicrofacetParams prepareMicrofacet(
     vec3 rayDir,                    ///< Incident ray direction
     const SurfaceHit hit            ///< Surface intersection being processed
 );
@@ -31,7 +31,7 @@ MicrofacetParams prepare_microfacet(
 //Samples a micro-facet normal in the hemisphere around `hit.rayNrm`.
 //The number of random numbers drawn here has to be reported through
 //`SurfaceRNGDraws.prepareSurface` of the surface model using this file.
-vec3 sample_microfacet_normal(
+vec3 sampleMicrofacetNormal(
     const MicrofacetParams params,
     vec3 rayDir,                    ///< Incident ray direction
     const SurfaceHit hit,           ///< Surface intersection being processed
@@ -44,7 +44,7 @@ vec3 sample_microfacet_normal(
 //include masking effects or a boolean allowed/forbidden decision. The template
 //already checks that the ray moves into the proper macroscopic hemisphere, so this
 //check is not necessary here.
-float microfacet_accept_prob(
+float microfacetAcceptProb(
     const MicrofacetParams params,
     vec3 dirOut,                    ///< Outgoing direction to test
     vec3 microfacetNormal,          ///< Facet the direction came from

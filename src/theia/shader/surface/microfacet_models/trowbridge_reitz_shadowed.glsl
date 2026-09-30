@@ -20,7 +20,7 @@ struct MicrofacetParams {
     vec3 T2;
 };
 
-MicrofacetParams prepare_microfacet(vec3 rayDir, const SurfaceHit hit){
+MicrofacetParams prepareMicrofacet(vec3 rayDir, const SurfaceHit hit){
     MicrofacetParams params;
     params.alpha = loadMaterialConstant(ROUGHNESS_PARAMETER, hit.materialIdx);
 
@@ -38,7 +38,7 @@ MicrofacetParams prepare_microfacet(vec3 rayDir, const SurfaceHit hit){
     return params;
 }
 
-vec3 sample_microfacet_normal(
+vec3 sampleMicrofacetNormal(
     const MicrofacetParams params,
     vec3 rayDir,
     const SurfaceHit hit,
@@ -63,7 +63,7 @@ vec3 sample_microfacet_normal(
 }
 
 //masking of outgoing rays
-float masking_function(float cos_n, float alpha){
+float maskingFunction(float cos_n, float alpha){
     //handle very small cosines
     if(cos_n < 1e-3){
         return 0.0;
@@ -74,7 +74,7 @@ float masking_function(float cos_n, float alpha){
     return 1.0 / (1.0 + Lambda);
 }
 
-float microfacet_accept_prob(
+float microfacetAcceptProb(
     const MicrofacetParams params,
     vec3 dirOut,
     vec3 microfacetNormal,
@@ -82,7 +82,7 @@ float microfacet_accept_prob(
     vec3 rayDir
 ) {
     //acceptance probability is given by the masking function
-    return masking_function(abs(dot(dirOut, hit.rayNrm)), params.alpha);
+    return maskingFunction(abs(dot(dirOut, hit.rayNrm)), params.alpha);
 }
 
 #endif

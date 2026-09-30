@@ -51,7 +51,7 @@ SurfaceProperties prepareSurface(
     vec3 diffuseDir = createLocalCOSY(hit.rayNrm) * sampleHemisphereCosine(random2D(idx, dim));
 
     //compute the facet-independent micro-facet parameters once
-    MicrofacetParams mfParams = prepare_microfacet(ray.direction, hit);
+    MicrofacetParams mfParams = prepareMicrofacet(ray.direction, hit);
 
     //direction the ray currently travels in and the side of the interface it is on
     vec3 dir = ray.direction;
@@ -67,16 +67,16 @@ SurfaceProperties prepareSurface(
 
         //Sample a facet, mirrored to the current side. The last iteration is the
         //fall-back and uses the macroscopic normal instead.
-        vec3 microfacet_normal = nrm;
+        vec3 microfacetNormal = nrm;
         if (i < 20) {
-            microfacet_normal = sample_microfacet_normal(mfParams, dir, hit, idx, dim);
-            if (farSide) microfacet_normal = -microfacet_normal;
+            microfacetNormal = sampleMicrofacetNormal(mfParams, dir, hit, idx, dim);
+            if (farSide) microfacetNormal = -microfacetNormal;
             //Geant4's GetFacetNormal() redraws until the facet faces the photon.
             //That leaves the direction untouched, so unlike the walk below this
             //really is a plain facet rejection.
-            if (dot(dir, microfacet_normal) >= 0.0) continue;
+            if (dot(dir, microfacetNormal) >= 0.0) continue;
         }
-        float cos_i = -dot(dir, microfacet_normal);
+        float cos_i = -dot(dir, microfacetNormal);
 
         //returns 1.0 in total internal reflection
         float F = fresnelReflectance(cos_i, nIn, nOut);
@@ -87,10 +87,10 @@ SurfaceProperties prepareSurface(
             //the diffuse lobe scatters around the macroscopic normal of the
             //current side, so the pre-sampled direction has to be mirrored too
             dir = lobeReflectedDir(
-                lobes, dir, nrm, microfacet_normal, farSide ? -diffuseDir : diffuseDir);
+                lobes, dir, nrm, microfacetNormal, farSide ? -diffuseDir : diffuseDir);
         }
         else {
-            vec3 dirRefracted = refract(dir, microfacet_normal, nIn / nOut);
+            vec3 dirRefracted = refract(dir, microfacetNormal, nIn / nOut);
             //A zero direction marks total internal reflection, which the Fresnel
             //coin above should have excluded. Due to finite numerical precision
             //that edge is a bit fuzzy -> mark as absorbed.

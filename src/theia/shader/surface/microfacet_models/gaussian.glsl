@@ -28,7 +28,7 @@ struct MicrofacetParams {
     vec3 tangent2;
 };
 
-MicrofacetParams prepare_microfacet(vec3 rayDir, const SurfaceHit hit){
+MicrofacetParams prepareMicrofacet(vec3 rayDir, const SurfaceHit hit){
     MicrofacetParams params;
     params.sigma = loadMaterialConstant(ROUGHNESS_PARAMETER, hit.materialIdx);
     params.c = 1.0 - exp(-(PI_OVER_TWO * PI_OVER_TWO) / (2.0 * params.sigma * params.sigma));
@@ -37,7 +37,7 @@ MicrofacetParams prepare_microfacet(vec3 rayDir, const SurfaceHit hit){
     return params;
 }
 
-vec3 sample_microfacet_normal(
+vec3 sampleMicrofacetNormal(
     const MicrofacetParams params,
     vec3 rayDir,
     const SurfaceHit hit,
@@ -64,7 +64,7 @@ vec3 sample_microfacet_normal(
         + sin(theta) * sin(phi) * params.tangent2;
 }
 
-float microfacet_accept_prob(
+float microfacetAcceptProb(
     const MicrofacetParams params,
     vec3 dirOut,
     vec3 microfacetNormal,

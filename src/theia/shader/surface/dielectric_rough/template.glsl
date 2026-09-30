@@ -4,8 +4,8 @@
 
 /*
 Shared implementation of all rough dielectric surface models. The only
-model-specific parts are `prepare_microfacet`, `sample_microfacet_normal` and
-`microfacet_accept_prob`, which are provided by one of the files in
+model-specific parts are `prepareMicrofacet`, `sampleMicrofacetNormal` and
+`microfacetAcceptProb`, which are provided by one of the files in
 `microfacet_models/` (see api.glsl there).
 
 The Geant4 UNIFIED model, which splits the reflection into several lobes and
@@ -93,7 +93,7 @@ SurfaceProperties prepareSurface(
     }
 
     //compute the facet-independent micro-facet parameters once
-    MicrofacetParams mfParams = prepare_microfacet(ray.direction, hit);
+    MicrofacetParams mfParams = prepareMicrofacet(ray.direction, hit);
     float eta = n_i / n_o;
 
     //Sample micro-facets until one is accepted; in most cases the first one is.
@@ -105,7 +105,7 @@ SurfaceProperties prepareSurface(
         bool last = (i == 20);
         vec3 microfacetNormal = hit.rayNrm;
         if (!last)
-            microfacetNormal = sample_microfacet_normal(mfParams, ray.direction, hit, idx, dim);
+            microfacetNormal = sampleMicrofacetNormal(mfParams, ray.direction, hit, idx, dim);
         acceptedNormal = microfacetNormal;
 
         float cos_i = abs(dot(ray.direction, microfacetNormal));
@@ -136,7 +136,7 @@ SurfaceProperties prepareSurface(
             }
             //acceptance probability
             float a = rightSide
-                ? microfacet_accept_prob(mfParams, dir, microfacetNormal, hit, ray.direction)
+                ? microfacetAcceptProb(mfParams, dir, microfacetNormal, hit, ray.direction)
                 : 0.0;
 
             accepted = last ? (a > 0.0) : (v < a);
@@ -148,12 +148,12 @@ SurfaceProperties prepareSurface(
             props.dirTransmitted = refract(ray.direction, microfacetNormal, eta);
             //acceptance probability of reflection
             float aR = dot(props.dirReflected, hit.rayNrm) > 0.0
-                ? microfacet_accept_prob(
+                ? microfacetAcceptProb(
                     mfParams, props.dirReflected, microfacetNormal, hit, ray.direction)
                 : 0.0;
             //acceptance probability of transmission
             float aT = dot(props.dirTransmitted, hit.rayNrm) < 0.0
-                ? microfacet_accept_prob(
+                ? microfacetAcceptProb(
                     mfParams, props.dirTransmitted, microfacetNormal, hit, ray.direction)
                 : 0.0;
             float qR = props.reflectance * aR;

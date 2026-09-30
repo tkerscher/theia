@@ -9,7 +9,7 @@ struct MicrofacetParams {
     vec3 tangent2;
 };
 
-MicrofacetParams prepare_microfacet(vec3 rayDir, const SurfaceHit hit){
+MicrofacetParams prepareMicrofacet(vec3 rayDir, const SurfaceHit hit){
     MicrofacetParams params;
     params.alpha = loadMaterialConstant(ROUGHNESS_PARAMETER, hit.materialIdx);
     params.tangent1 = perpendicularTo(hit.rayNrm);
@@ -18,7 +18,7 @@ MicrofacetParams prepare_microfacet(vec3 rayDir, const SurfaceHit hit){
 }
 
 //sampling of micro-facets from the Trowbridge-Reitz (GGX) distribution
-vec3 sample_microfacet_normal(
+vec3 sampleMicrofacetNormal(
     const MicrofacetParams params,
     vec3 rayDir,
     const SurfaceHit hit,
@@ -39,7 +39,7 @@ vec3 sample_microfacet_normal(
         + sin_theta * sin(phi) * params.tangent2;
 }
 
-float microfacet_accept_prob(
+float microfacetAcceptProb(
     const MicrofacetParams params,
     vec3 dirOut,
     vec3 microfacetNormal,
