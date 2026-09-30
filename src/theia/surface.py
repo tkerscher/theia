@@ -288,7 +288,8 @@ class DielectricRoughSurface(SurfaceModel, name="dielectric_rough"):
         )
 
     @property
-    def model(self) -> str:
+    def model(self) -> Literal["beckmann", "trowbridge_reitz", "trowbridge_reitz_shadowed", 
+                           "gaussian", "unified"]:
         return self._model
 
     def _sourceCode(self, mode: str) -> str:
