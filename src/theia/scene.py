@@ -830,7 +830,7 @@ class SceneBase:
 
     @property
     def tlas(self) -> hp.AccelerationStructure:
-        """Acceleration structure rays are traced against at the start of their path"""
+        """The acceleration structure describing the scene's geometry"""
         raise NotImplementedError
 
     def bindParams(self, program: hp.Program | hp.RayTracingPipeline) -> None:

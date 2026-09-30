@@ -18,8 +18,7 @@ ResultCode crossBorder(
     const SurfaceHit hit    ///< Description of surface hit
 ) {
 #ifdef RAY_PORTAL
-    //portal surface: no world-space offset (portalChangeFrame sets position from the
-    //precise object-space hit); just swap the medium, then switch scene/frame.
+    //portal surface: no offset (portalChangeFrame takes care of that)
     if ((hit.flags & MATERIAL_PORTAL_BIT) != 0) {
         ResultCode result = updateMedium(ray, hit.otherMediumIdx);
         if (result >= 0) portalChangeFrame(ray, hit);
@@ -64,10 +63,8 @@ ResultCode transmitRay(
     vec3 newDir             ///< Ray in which to transmit
 ) {
 #ifdef RAY_PORTAL
-    //portal surface: a TRANSMITTED ray switches scene/frame (reflected rays don't,
-    //reflectRay is untouched). No world-space offset - portalChangeFrame sets position
-    //from the precise object-space hit and re-expresses the (transmitted) direction
-    //in the target frame.
+    //portal surface: a TRANSMITTED ray switches scene/frame; no offset 
+    //(portalChangeFrame takes care of that)
     if ((hit.flags & MATERIAL_PORTAL_BIT) != 0) {
         ResultCode result = transmitRay(ray, newDir, hit.otherMediumIdx);
         if (result >= 0) portalChangeFrame(ray, hit);
