@@ -38,6 +38,13 @@ struct ForwardRay {
     float lin_contrib;
     float log_contrib;
     #endif
+
+    #ifdef RAY_PORTAL
+    //(sceneId, context): sceneId 0 = main scene; context specifies the
+    //instance of the sub-scene in case that multiple are placed. Only
+    //present when tracing a MultiScene (defines RAY_PORTAL).
+    uvec2 frame;
+    #endif
 };
 //tell other code this ray exist
 #define ForwardRay ForwardRay
@@ -97,6 +104,9 @@ ForwardRay createForwardRay(
         #endif
         contrib,
         0.0
+        #ifdef RAY_PORTAL
+        ,uvec2(0, 0)   //start in the main scene
+        #endif
     );
 }
 
@@ -120,6 +130,9 @@ ForwardRay createForwardRay(
         #ifndef RAY_PARTICLE
         ,1.0
         ,0.0
+        #endif
+        #ifdef RAY_PORTAL
+        ,uvec2(0, 0)   //start in the main scene
         #endif
     );
 }
@@ -422,6 +435,9 @@ ForwardRay loadForwardRay(uvec2 queueAdr, uint queueSize, uint idx) {
         #ifndef RAY_PARTICLE
         ,contrib
         ,0.0
+        #endif
+        #ifdef RAY_PORTAL
+        ,uvec2(0, 0)   //the queue does not carry the frame
         #endif
     );
 }

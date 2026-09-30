@@ -25,7 +25,7 @@ from theia.material import MaterialStore
 from theia.random import RNG
 from theia.ray import RayModel
 from theia.response import HitResponse, TraceConfig
-from theia.scene import RectBBox, Scene
+from theia.scene import MultiScene, RectBBox, Scene, SceneBase
 from theia.surface import SurfaceModel
 from theia.target import Target, TargetGuide
 from theia.volume import VolumeModel
@@ -1208,6 +1208,19 @@ class VolumeDirectTracer(Tracer):
         return [self._program.dispatch(groups)]
 
 
+def _requireSingleScene(scene, name: str) -> None:
+    """
+    Rejects a MultiScene where only a single Scene is supported. Portals are
+    forward-only and the tracer would silently ignore the sub-scenes otherwise,
+    tracing just the world scene.
+    """
+    if isinstance(scene, MultiScene):
+        raise ValueError(
+            f"{name} does not support portals; use SceneForwardTracer for a "
+            "MultiScene."
+        )
+
+
 def _checkVolumeModels(scene: Scene, mode: Literal["forward", "backward"]):
     models = scene.materials.volumeModels
     if mode == "forward":
@@ -1422,6 +1435,7 @@ class SceneDirectTracer(Tracer):
         callback: TraceEventCallback = EmptyEventCallback(),
         maxTime: float = float("inf"),
     ) -> None:
+        _requireSingleScene(scene, "SceneDirectTracer")
         # we need ray tracing for this
         if not isRayTracingEnabled():
             raise RuntimeError("The device does not support ray tracing")
@@ -1492,7 +1506,7 @@ class SceneDirectTracer(Tracer):
         builder = RayTracingPipelineBuilder()
         builder.addRayGen(rayGen_code)
         builder.addMissShaders(miss_code)
-        nSbtHitEntries = len(scene.materials.surfaceModels) * Scene.sbtHitStride
+        nSbtHitEntries = len(scene.materials.surfaceModels) * SceneBase.sbtHitStride
         builder.addHitShaders([None] * nSbtHitEntries)
         self._pipeline, self._sbt = builder.finish()
         scene.bindParams(self._pipeline)
@@ -1653,6 +1667,7 @@ class SceneBackwardTracer(Tracer):
         maxTime: float = float("inf"),
         disableDirectLighting: bool = False,
     ) -> None:
+        _requireSingleScene(scene, "SceneBackwardTracer")
         # we need ray tracing for this
         if not isRayTracingEnabled():
             raise RuntimeError("The device does not support ray tracing")
@@ -1897,7 +1912,7 @@ class _SceneTargetTracer(Tracer):
         source: LightSource | Camera,
         response: HitResponse,
         rng: RNG,
-        scene: Scene,
+        scene: SceneBase,
         *,
         lamSource: WavelengthSource | None,
         capacity: int | None,
@@ -1993,6 +2008,7 @@ class _SceneTargetTracer(Tracer):
             PROXY_RAY=f"{direction.title()}Ray",
             RAY_TRACING_PIPELINE=True,
             TRACE_RNG_STRIDE=nRngLoop,
+            **scene.macros,
         )
         headers = {
             "callback.glsl": callback.sourceCode,
@@ -2057,7 +2073,7 @@ class _SceneTargetTracer(Tracer):
         return self._directLightingDisabled
 
     @property
-    def scene(self) -> Scene:
+    def scene(self) -> SceneBase:
         """Scene the tracer propagates rays in"""
         return self._scene
 
@@ -2196,6 +2212,11 @@ class SceneForwardTracer(_SceneTargetTracer):
     Depending on the geometry's material, rays may reflect or transmit through
     them.
 
+    Accepts both a `Scene` and a `MultiScene`. The latter additionally traces
+    one or more SUB-scenes in their own LOCAL coordinate frames, entered through
+    portals. This can be used to resolve fine geometries that are placed far away
+    from the origin.
+
     Parameters
     ----------
     batchSize: int
@@ -2209,7 +2230,7 @@ class SceneForwardTracer(_SceneTargetTracer):
         Response function simulating the detector
     rng: RNG
         Generator for creating random numbers
-    scene: Scene
+    scene: Scene | MultiScene
         Scene in which the rays are traced
     capacity: int | None, default=None
         Maximum batch size. If None, same as `batchSize`.
@@ -2229,11 +2250,17 @@ class SceneForwardTracer(_SceneTargetTracer):
     targetGuide: TargetGuide | None, default=None
         Optional target guide acting as proxy for the detector in next event
         estimation. Used to sample alternative light paths connecting the light
-        source with the detector early during tracing.
+        source with the detector early during tracing. Not yet supported
+        together with a `MultiScene`.
     disableDirectLighting: bool, default=False
         Whether to ignore contributions from direct lighting, i.e. paths with
         no scattering. Usefull if a dedicated tracer or estimator for direct
         light contributions is additionally used.
+
+    See Also
+    --------
+    theia.scene.MultiScene: builds and owns the portal geometry
+    theia.scene.linkPortals: connects the portal boxes
     """
 
     name = "Scene Forward Tracer"
@@ -2245,7 +2272,7 @@ class SceneForwardTracer(_SceneTargetTracer):
         source: LightSource,
         response: HitResponse,
         rng: RNG,
-        scene: Scene,
+        scene: SceneBase,
         *,
         capacity: int | None = None,
         callback: TraceEventCallback = EmptyEventCallback(),
@@ -2256,6 +2283,11 @@ class SceneForwardTracer(_SceneTargetTracer):
         targetGuide: TargetGuide | None = None,
         disableDirectLighting: bool = False,
     ) -> None:
+        if isinstance(scene, MultiScene) and targetGuide is not None:
+            raise ValueError(
+                "Next event estimation (targetGuide) is not yet supported "
+                "together with a MultiScene."
+            )
         super().__init__(
             batchSize,
             ray,
@@ -2352,6 +2384,7 @@ class SceneBackwardTargetTracer(_SceneTargetTracer):
         targetGuide: TargetGuide | None = None,
         disableDirectLighting: bool = False,
     ) -> None:
+        _requireSingleScene(scene, "SceneBackwardTargetTracer")
         super().__init__(
             batchSize,
             ray,

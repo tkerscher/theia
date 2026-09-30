@@ -13,6 +13,10 @@
 
 #include "tracer/scene/target/io.glsl"
 
+#ifdef RAY_PORTAL
+#include "tracer/scene/portal.glsl"
+#endif
+
 #ifndef DISABLE_NEE
 #include "tracer/scene/target/nee.glsl"
 #endif
@@ -31,7 +35,12 @@ ResultCode trace(
     traceData.dim = dim;
     //trace
     traceRayEXT(
+        #ifdef RAY_PORTAL
+        //main TLAS or the photon's current sub-scene TLAS (local frame)
+        accelerationStructureEXT(portalSelectTlas(ray.frame, params.tlas)),
+        #else
         accelerationStructureEXT(params.tlas),
+        #endif
         gl_RayFlagsOpaqueEXT,
         0xFF,                                   //cull mask
         0,                                      //sbt offset
