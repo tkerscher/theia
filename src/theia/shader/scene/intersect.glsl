@@ -25,6 +25,36 @@
 #define RAY_WORLD2OBJ_EPS 1.1920928955078125e-7
 #endif
 
+//Transforms a position from object to world space. The matrix multiplication
+//is done manually to improve the error.
+//See: https://developer.nvidia.com/blog/solving-self-intersection-artifacts-in-directx-raytracing/
+vec3 transformPosition(mat4x3 o2w, vec3 objPos) {
+    precise vec3 r;
+    r.x = o2w[3][0] + fmaKHR(o2w[0][0], objPos.x, fmaKHR(o2w[1][0], objPos.y, o2w[2][0] * objPos.z));
+    r.y = o2w[3][1] + fmaKHR(o2w[0][1], objPos.x, fmaKHR(o2w[1][1], objPos.y, o2w[2][1] * objPos.z));
+    r.z = o2w[3][2] + fmaKHR(o2w[0][2], objPos.x, fmaKHR(o2w[1][2], objPos.y, o2w[2][2] * objPos.z));
+    return r;
+}
+
+//Upper error bound on the world position transformPosition(o2w, objPos)
+//caused by the transformation itself.
+vec3 obj2WorldError(mat4x3 o2w, vec3 objPos) {
+    mat4x3 abs_o2w = mat4x3(abs(o2w[0]), abs(o2w[1]), abs(o2w[2]), abs(o2w[3]));
+    return fmaKHR(
+        vec3(RAY_OBJ2WORLD_MATMUL_EPS),
+        mat3(abs_o2w) * abs(objPos),
+        (RAY_OBJ2WORLD_TRANS_EPS * abs(o2w[3]))
+    );
+}
+
+//Adds the error the hardware makes when transforming the world position back
+//into object space via w2o for the next trace to the object space error objErr.
+vec3 world2ObjError(mat4x3 w2o, vec3 worldPos, vec3 objErr) {
+    mat4x3 abs_w2o = mat4x3(abs(w2o[0]), abs(w2o[1]), abs(w2o[2]), abs(w2o[3]));
+    return fmaKHR(vec3(RAY_WORLD2OBJ_EPS), (abs_w2o * vec4(abs(worldPos), 1.0)), objErr);
+}
+
+
 //list of material used by each instanced geometry
 //materials are referenced by their id in the material table
 readonly buffer MaterialMap { uint materialMap[]; };
@@ -127,11 +157,8 @@ ResultCode resolveIntersection(
     hit.rayNrm = hit.inward ? worldNrm : -worldNrm;
 
     //do matrix multiplication manually to improve error
-    //See: https://developer.nvidia.com/blog/solving-self-intersection-artifacts-in-directx-raytracing/
     mat4x3 o2w = gl_ObjectToWorldEXT;
-    hit.worldPos.x = o2w[3][0] + fmaKHR(o2w[0][0], hit.objPos.x, fmaKHR(o2w[1][0], hit.objPos.y, o2w[2][0] * hit.objPos.z));
-    hit.worldPos.y = o2w[3][1] + fmaKHR(o2w[0][1], hit.objPos.x, fmaKHR(o2w[1][1], hit.objPos.y, o2w[2][1] * hit.objPos.z));
-    hit.worldPos.z = o2w[3][2] + fmaKHR(o2w[0][2], hit.objPos.x, fmaKHR(o2w[1][2], hit.objPos.y, o2w[2][2] * hit.objPos.z));
+    hit.worldPos = transformPosition(o2w, hit.objPos);
 
     //error calculation to determine minimal ray offset to prevent self-intersection
     //adapted from https://github.com/NVIDIA/self-intersection-avoidance/
@@ -140,17 +167,12 @@ ResultCode resolveIntersection(
     vec3 ext3 = abs(e1) + abs(e2) + abs(e1 - e2);
     float ext = max(max(ext3.x, ext3.y), ext3.z);
     vec3 objErr = fmaKHR(vec3(FLT_U), abs(x0), vec3(RAY_INTERSECT_BARYS_EPS * ext));
+    //keep it along the normal: a portal maps objPos with another transformation
+    hit.objOffset = dot(objErr, abs(hit.objNrm));
     //upper error bound on world intersection bound caused by trafo
-    mat4x3 abs_o2w = mat4x3(abs(o2w[0]), abs(o2w[1]), abs(o2w[2]), abs(o2w[3]));
-    vec3 worldErr = fmaKHR(
-        vec3(RAY_OBJ2WORLD_MATMUL_EPS),
-        mat3(abs_o2w) * abs(hit.objPos),
-        (RAY_OBJ2WORLD_TRANS_EPS * abs(o2w[3]))
-    );
+    vec3 worldErr = obj2WorldError(o2w, hit.objPos);
     //error from world to object trafo (next tracing)
-    mat4x3 w2o = gl_WorldToObjectEXT;
-    mat4x3 abs_w2o = mat4x3(abs(w2o[0]), abs(w2o[1]), abs(w2o[2]), abs(w2o[3]));
-    objErr = fmaKHR(vec3(RAY_WORLD2OBJ_EPS), (abs_w2o * vec4(abs(hit.worldPos), 1.0)), objErr);
+    objErr = world2ObjError(gl_WorldToObjectEXT, hit.worldPos, objErr);
     //project errors to normals to get offsets
     float worldOffset = dot(worldErr, abs(worldNrm));
     float objOffest = dot(objErr, abs(objNrm)); //!!! unnormalized objNrm on purpose !!!

@@ -56,6 +56,7 @@ void main() {
         1e-7, //rayOffset
         params.worldToObj * ray.position + params.offset,
         normalize(surfaceNormal * transpose(params.worldToObj)),
+        0.0, //objOffset
         params.worldToObj * ray.direction,
         params.worldToObj
     );

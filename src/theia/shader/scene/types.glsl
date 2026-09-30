@@ -29,6 +29,8 @@ struct SurfaceHit {
 
     precise vec3 objPos;        ///< Hit position in object space
     precise vec3 objNrm;        ///< Geometry normal at hit position in object space
+    precise float objOffset;    ///< Error bound of objPos along objNrm, i.e. the object
+                                ///< space part of rayOffset before any transformation
     vec3 objDir;                ///< Ray direction in object space
 
     //Lastly, we may need to transform from world to object space.

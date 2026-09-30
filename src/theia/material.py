@@ -308,6 +308,14 @@ class MaterialFlags(IntFlag):
     model.
     """
 
+    PORTAL = 0x400
+    """
+    Marks the surface as a portal: on crossing, the tracer switches the photon
+    to another acceleration structure (sub-scene) and re-expresses the ray in
+    that sub-scene's local coordinate frame. Only the forward scene tracers given 
+    a `MultiScene` act on this flag; other tracers ignore it.
+    """
+
 
 _materialFlagsMap = {
     "B": MaterialFlags.BLACK_BODY,
@@ -327,6 +335,7 @@ _materialFlagsMap = {
     "Tf": MaterialFlags.NO_TRANSMIT_FWD,
     "V": MaterialFlags.VOLUME_BORDER,
     "*": MaterialFlags.SKIP_MEDIA_MISMATCH_TEST,
+    "P": MaterialFlags.PORTAL,
 }
 
 

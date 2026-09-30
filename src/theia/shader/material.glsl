@@ -75,6 +75,7 @@ const uint MATERIAL_NO_TRANSMIT_BWD_BIT     = 0x00000040; //Backward rays never 
 // const uint MATERIAL_VOLUME_BORDER_BIT       = 0x00000080; //No geometric effect on Rays (deprecated)
 const uint MATERIAL_SKIP_MISMATCH_TEST_BIT  = 0x00000100; //Skip media mismatch test
 const uint MATERIAL_TRANSMIT_HIT_BIT        = 0x00000200; //Transmit hits before detection
+const uint MATERIAL_PORTAL_BIT              = 0x00000400; //Portal: switch to a sub-scene / local frame (see MultiScene)
 
 //util function for fetching media and flags
 //for material of the given idx, if inwards is true, fetches medium on the inside and
