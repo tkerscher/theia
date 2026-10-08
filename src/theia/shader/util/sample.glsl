@@ -7,7 +7,7 @@
  * Helper function converting spherical coords to cartessian
 */
 vec3 sphericalToCartessian(float phi, float cos_theta) {
-    float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
+    float sin_theta = sqrt(max((1.0 - cos_theta)*(1.0 + cos_theta), 0.0));
     return vec3(
         sin_theta * sin(phi),
         sin_theta * cos(phi),

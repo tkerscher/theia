@@ -14,7 +14,7 @@ vec3 scatterDir(vec3 prevDir, float cos_theta, float phi) {
     prevDir = normalize(prevDir);
 
     //construct scattered direction in prevDir system
-    float sin_theta = sqrt(max(1.0 - cos_theta*cos_theta, 0.0));
+    float sin_theta = sqrt(max((1.0 - cos_theta)*(1.0 + cos_theta), 0.0));
     vec3 localScattered = vec3(
         sin_theta * cos(phi),
         sin_theta * sin(phi),
