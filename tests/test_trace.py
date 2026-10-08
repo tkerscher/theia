@@ -295,9 +295,14 @@ def test_VolumeForwardTracer(
 @pytest.mark.parametrize("disableDirect", [True, False])
 @pytest.mark.parametrize("disableTarget", [True, False])
 @pytest.mark.parametrize("disableScattering", [True, False])
+@pytest.mark.parametrize("disableVolumeMIS", [True, False])
 @pytest.mark.parametrize("limitTime", [True, False])
 def test_VolumeBackwardTracer(
-    disableDirect: bool, disableTarget: bool, disableScattering: bool, limitTime: bool
+    disableDirect: bool,
+    disableTarget: bool,
+    disableScattering: bool,
+    disableVolumeMIS: bool,
+    limitTime: bool,
 ) -> None:
     N = 32 * 256
     N_SCATTER = 6
@@ -353,6 +358,7 @@ def test_VolumeBackwardTracer(
         target=None if disableTarget else target,
         maxTime=T_MAX if limitTime else float("inf"),
         disableDirectLighting=disableDirect,
+        disableVolumeScatterMIS=disableVolumeMIS,
     )
     # run pipeline
     pl.runPipeline(tracer.collectStages())
@@ -360,7 +366,7 @@ def test_VolumeBackwardTracer(
     # check hits
     assert recorder.queue is not None
     hits = recorder.queue.view(0)
-    if disableDirect and disableScattering:
+    if disableDirect and disableScattering and disableVolumeMIS:
         # this combination makes it impossible for the tracer to create hits
         assert hits.count == 0
         assert stats.scattered == 0

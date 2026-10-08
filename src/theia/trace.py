@@ -517,18 +517,25 @@ def _getVolumeForwardRNGStride(
 def _getVolumeBackwardRNGStride(
     volume: VolumeModel,
     response: HitResponse,
-    target: Target | None = None,
+    light: LightSource,
+    disableVolumeMIS: bool,
 ) -> int:
     result = 0
     result += max(1, volume.rngDraws.sampleInteractionLength)
     result += volume.rngDraws.applyVolumeEffect
     result += volume.rngDraws.sampleVolumeInteraction
-    result += response.nRNGSamples
-    if target is not None:
-        result += target.nRNGSamples
+    if disableVolumeMIS:
+        result += light.rngDraws.sampleLightBackward
         result += volume.rngDraws.volumeScatterRay
         result += volume.rngDraws.applyVolumeEffect
         result += response.nRNGSamples
+    else:
+        result += light.rngDraws.sampleLightNeeStepSize
+        result += volume.rngDraws.sampleVolumeNeeStepSize
+        result += 2 * light.rngDraws.sampleLightBackward
+        result += 2 * volume.rngDraws.volumeScatterRay
+        result += 4 * volume.rngDraws.applyVolumeEffect
+        result += 2 * response.nRNGSamples
     return result
 
 
@@ -657,7 +664,7 @@ class VolumeForwardTracer(Tracer):
         # NEE extends path length by one -> reduce path length by one
         pathLength = maxPathLength if disableTargetSampling else maxPathLength - 1
         # calculate amount of random numbers needed
-        rngInit = source.nRNGForward
+        rngInit = source.rngDraws.sampleLightForward
         if not disableDirectLighting:
             rngInit += volume.rngDraws.applyVolumeEffect
             rngInit += response.nRNGSamples
@@ -832,6 +839,12 @@ class VolumeBackwardTracer(Tracer):
         Whether to ignore contributions from direct lighting, i.e. paths with
         no scattering. Usefull if a dedicated tracer or estimator for direct
         light contributions is additionally used.
+    disableVolumeScatterMIS: bool, default=False
+        If `False`, estimates the inscattering along path segments by sampling
+        various alternate volume scatter points, connecting those to the light
+        source as next event estimate and combining their contribution using
+        multiple importance sampling. Otherwise, only at volume scatter events
+        a shadow ray is traced to the light source as next event estimate.
 
     Stage Parameters
     ----------------
@@ -889,6 +902,7 @@ class VolumeBackwardTracer(Tracer):
         maxTime: float = float("inf"),
         traceBBox: RectBBox | None = None,
         disableDirectLighting: bool = False,
+        disableVolumeScatterMIS: bool = False,
     ) -> None:
         # fetch volume model if not given
         if not isinstance(volume, VolumeModel):
@@ -902,16 +916,23 @@ class VolumeBackwardTracer(Tracer):
             raise ValueError("Camera does not support direct mode")
         if volume.backwardSourceCode is None:
             raise ValueError("Volume model does not support backward mode")
+        if not disableVolumeScatterMIS and not source.supportsMis:
+            raise ValueError("Light source does not support MIS")
 
         # calculate max hits
-        maxHitsPerRay = maxPathLength - 1 if disableDirectLighting else maxPathLength
+        maxHitsPerRay = 2 * (maxPathLength - 1)
+        if not disableDirectLighting:
+            maxHitsPerRay += 1
         # calculate number of rng samples
         rngInit = wavelengthSource.nRNGSamples + camera.nRNGSamples
-        rngStride = _getVolumeBackwardRNGStride(volume, response, target)
+        rngStride = _getVolumeBackwardRNGStride(
+            volume, response, source, disableVolumeScatterMIS
+        )
         nRNG = rngInit + maxPathLength * rngStride
         if not disableDirectLighting:
+            nRNG += wavelengthSource.nRNGSamples
             nRNG += camera.nRNGDirect
-            nRNG += source.nRNGBackward
+            nRNG += source.rngDraws.sampleLightBackward
             nRNG += response.nRNGSamples
         super().__init__(
             batchSize,
@@ -945,6 +966,7 @@ class VolumeBackwardTracer(Tracer):
         preamble = createPreamble(
             DISABLE_DIRECT_LIGHTING=disableDirectLighting,
             DISABLE_SELF_SHADOWING=target is None,
+            DISABLE_VOLUME_SCATTER_MIS=disableVolumeScatterMIS,
             PATH_LENGTH=maxPathLength - 1,
         )
         headers = {
@@ -1112,7 +1134,7 @@ class VolumeDirectTracer(Tracer):
 
         nRNG = (
             wavelengthSource.nRNGSamples
-            + source.nRNGBackward
+            + source.rngDraws.sampleLightBackward
             + camera.nRNGDirect
             + volume.rngDraws.applyVolumeEffect
             + response.nRNGSamples
@@ -1531,7 +1553,7 @@ class SceneDirectTracer(Tracer):
         volModels: Iterable[VolumeModel],
     ) -> int:
         n = wavelengthSource.nRNGSamples
-        n += source.nRNGBackward
+        n += source.rngDraws.sampleLightBackward
         n += camera.nRNGDirect
         n += max(v.rngDraws.applyVolumeEffect for v in volModels)
         return n
@@ -1681,7 +1703,6 @@ class SceneBackwardTracer(Tracer):
         nRngMiss = max(self._nRngMiss(v) for v in volModels)
         nRngHit = max(self._nRngHit(s) for s in srfModels)
         nRngLoop = nRngProp + max(nRngMiss, nRngHit) + nRngNee
-        nRngLoop = max(nRngProp + nRngHit, nRngMiss)
         nRNG = nRngInit + maxPathLength * nRngLoop
         # init
         super().__init__(
@@ -1826,7 +1847,7 @@ class SceneBackwardTracer(Tracer):
     def _nRngNeeCommon(light: LightSource, resp: HitResponse, vol: VolumeModel) -> int:
         """number rng samples drawn per next event estimate"""
         n = vol.rngDraws.applyVolumeEffect
-        n += light.nRNGBackward
+        n += light.rngDraws.sampleLightBackward
         n += resp.nRNGSamples
         return n
 
@@ -1918,7 +1939,7 @@ class _SceneTargetTracer(Tracer):
             _SceneTargetTracer._checkComponentsSupportForward(
                 ray, source, lamSource, targetGuide, disableDirectLighting
             )
-            nRngInit = source.nRNGForward
+            nRngInit = source.rngDraws.sampleLightForward
             lamSource = source.wavelengthSource
             source_sourceCode = source.forwardSourceCode
         elif isinstance(source, Camera):

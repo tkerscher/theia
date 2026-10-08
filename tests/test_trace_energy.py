@@ -68,10 +68,10 @@ class UndoAttenuationProcessFn:
         result = self.recorder.queue.view(config)  # type: ignore
         result = result[: result.count]
         # undo attenuation
-        d = self.vg * (result["time"] - self.t0)
-        value0 = result["contrib"] * np.exp(self.mu_a * d)
+        d = self.vg * (result["time"].astype(np.float64) - self.t0)
+        value0 = result["contrib"].astype(np.float64) * np.exp(self.mu_a * d)
         # add to total
-        self.total += value0.sum(dtype=np.float64)
+        self.total += value0.sum(dtype=np.float64, where=np.isfinite(value0))
 
 
 @pytest.mark.parametrize(
@@ -549,12 +549,14 @@ def test_VolumeForwardTracer(
         (0.01, 0.01, -0.5, False),
     ],
 )
+@pytest.mark.parametrize("disableVolumeMIS", [True, False])
 @pytest.mark.parametrize("sampleCoef", [float("NaN"), 0.01])
 def test_VolumeBackwardTracer(
     mu_a: float,
     mu_s: float,
     g: float,
     disableDirect: bool,
+    disableVolumeMIS: bool,
     sampleCoef: float,
 ):
     """Spherical light source placed within a spherical target"""
@@ -608,6 +610,7 @@ def test_VolumeBackwardTracer(
         maxTime=maxTime,
         sampleCoefficient=sampleCoef,
         disableDirectLighting=disableDirect,
+        disableVolumeScatterMIS=disableVolumeMIS,
     )
     rng.autoAdvance = tracer.nRNGSamples
 
@@ -629,7 +632,7 @@ def test_VolumeBackwardTracer(
     contrib = budget - directContrib if disableDirect else budget
     # check for energy conservation
     estimate = process.total / (batch_size * n_batches)
-    thres = 0.02 if disableDirect else 5e-3  # give more leeway
+    thres = 0.05 if disableVolumeMIS else 2e-3
     assert np.abs(estimate / contrib - 1.0) < thres
 
 
@@ -641,7 +644,7 @@ def test_VolumeBackwardTracer(
         (0.05, 0.01, 0.0, False),
         (0.05, 0.01, 0.0, True),
         (0.05, 0.01, -0.9, False),
-        # (0.05, 0.01, 0.9, False), # converges rather slowly
+        (0.05, 0.01, 0.9, False),
     ],
 )
 @pytest.mark.parametrize("sampleCoef", [float("NaN"), 0.02])
@@ -668,7 +671,7 @@ def test_SceneBackwardTracer(
     maxTime = float("inf")
     # simulation settings
     batch_size = 1024 * 1024
-    n_batches = 50
+    n_batches = 200
 
     # create materials
     model = MediumModel(mu_a, mu_s, g)
@@ -695,6 +698,7 @@ def test_SceneBackwardTracer(
         position=position,
         timeRange=(t0, t0),
         budget=budget,
+        softeningRadius=10.0 * u.cm,  # on the aggressive side to battle high variance
     )
     # create camera
     camera = SphereCamera(mediumIdx=medIdx, position=position, radius=-r_insc)

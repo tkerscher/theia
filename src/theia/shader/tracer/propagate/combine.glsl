@@ -15,6 +15,10 @@ ResultCode combineRays(
     out HitItem hit,                ///< Produced hit
     uint idx, inout uint dim        ///< RNG state
 ) {
+    //TODO: If ray and source are very close it can happen that we can no longer
+    //      calculate a meaningful direction. We likely want to skip alignment
+    //      in that case and assume they already are.
+
     //scatter ray to point towards source
     ResultCode result = volumeScatterRay(ray, -source.direction, idx, dim);
     if (result < 0) return result;
