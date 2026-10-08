@@ -1,6 +1,8 @@
 #ifndef _INCLUDE_UTIL_JACOBIAN
 #define _INCLUDE_UTIL_JACOBIAN
 
+#include "util/soft_dist.glsl"
+
 //jacobian transforming an integral over area (dA) to one over solid angles (dw)
 //normal is the surface normal at the target point or zero if a volume point:
 //       |cos|
@@ -22,6 +24,11 @@ float dw_dA(vec3 observer, vec3 target) {
     float factor = 1.0 / dot(dir, dir);
     //if the division overflows, mark as invalid (return zero)
     return isinf(factor) ? 0.0 : factor;
+}
+float dw_dA(vec3 observer, vec3 target, float eps) {
+    vec3 dir = target - observer;
+    float r2 = dot(dir, dir);
+    return softInvSquare_comp(r2, eps*eps);
 }
 
 //jacobian transforming an integral over solid angled (dw) to one over area (dA)
