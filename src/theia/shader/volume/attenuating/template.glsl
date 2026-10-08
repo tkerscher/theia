@@ -131,4 +131,33 @@ float volumeScatterProb(
     return scatterProb(ray.mediumIdx, ray.direction, scatteredDir);
 }
 
+#include "volume/attenuating/sampling.glsl"
+
+float sampleVolumeNeeStepSize(
+    const RAY ray,
+    float maxStep,
+    out float prob,
+    uint idx, inout uint dim
+) {
+    //fetch absorption and scattering coefficient
+    float mu_a = lookUpMediaTable1D(ABSORPTION_COEF, ray.mediumIdx, ray.wavelength, 0.0);
+    float mu_s = lookUpMediaTable1D(SCATTERING_COEF, ray.mediumIdx, ray.wavelength, 0.0);
+    float mu_e = mu_a + mu_s;
+
+    return sampleAttenuationNeeStepSize(mu_e, maxStep, prob, idx, dim);
+}
+
+float evalVolumeNeeStepSize(
+    const RAY ray,
+    float maxStep,
+    float stepSize
+) {
+    //fetch absorption and scattering coefficient
+    float mu_a = lookUpMediaTable1D(ABSORPTION_COEF, ray.mediumIdx, ray.wavelength, 0.0);
+    float mu_s = lookUpMediaTable1D(SCATTERING_COEF, ray.mediumIdx, ray.wavelength, 0.0);
+    float mu_e = mu_a + mu_s;
+
+    return evalAttenuationNeeStepSize(mu_e, maxStep, stepSize);
+}
+
 #endif

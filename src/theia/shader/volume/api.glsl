@@ -98,3 +98,29 @@ float volumeScatterProb(
     RAY ray,                        ///< Ray to sample
     vec3 scatteredDir               ///< Scattered direction
 );
+
+/**
+ * Samples a step size for an alternate scattering point in the range [0, maxStep].
+ * Used by backward tracer to estimate volume in-scattering contribution via
+ * next event estimation (NEE).
+ *
+ * OPTIONAL. Required for backward MIS
+*/
+float sampleVolumeNeeStepSize(
+    const RAY ray,                  ///< Ray for which to sample a step size
+    float maxStep,                  ///< Upper limit for the step size
+    out float prob,                 ///< Probability of the sample
+    uint idx, inout uint dim        ///< RNG state
+);
+
+/**
+ * Returns the probability the given step size would have been sampled by
+ * sampleVolumeNeeStepSize.
+ *
+ * OPTIONAL. Required for backward MIS
+*/
+float evalVolumeNeeStepSize(
+    const RAY ray,                  ///< Ray for which the step size was sampled
+    float maxStep,                  ///< Upper limit for the step size
+    float stepSize                  ///< Sampled step size
+);

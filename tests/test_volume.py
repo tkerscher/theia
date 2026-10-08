@@ -19,7 +19,11 @@ from theia.model import (
 )
 from theia.random import PhiloxRNG
 from theia.ray import UnpolarizedRay
-from theia.testing import VolumeInteractionSampler, VolumeScatteringSampler
+from theia.testing import (
+    VolumeInteractionSampler,
+    VolumeNeeStepSizeSampler,
+    VolumeScatteringSampler,
+)
 from theia.trace import EventResultCode
 import theia.units as u
 import theia.volume
@@ -167,6 +171,62 @@ def test_Attenuating_scatter(camera: bool):
     assert np.allclose(result["probRandom"], prob_rand, atol=5e-4)
     contrib = result["contribOut"] / result["contribIn"]
     assert np.allclose(contrib, mu_s * prob_rand, atol=5e-5)
+
+
+def test_Attenuating_NEE():
+    N = 32 * 1024
+    lam = 600.0 * u.nm
+    mu_a, mu_s = 0.02 / u.m, 0.08 / u.m
+    g = 0.7
+    maxStep = 50.0 * u.m
+
+    # create medium
+    volModel = theia.volume.Attenuating()
+    model = MediumModel(mu_a, mu_s, g)
+    medium = model.createMedium(physicModel=volModel)
+    matStore = MaterialStore([], media=[medium])
+    medIdx = matStore.media["homogenous"]
+
+    # create pipeline
+    ray = UnpolarizedRay(transient=False)
+    rng = PhiloxRNG(key=0xC0FFEE)
+    photons = ConstWavelengthSource(lam)
+    source = SphereCamera(mediumIdx=medIdx)
+    sampler = VolumeNeeStepSizeSampler(
+        N,
+        ray,
+        volModel,
+        matStore,
+        rng,
+        source,
+        photons,
+        maxStep=maxStep,
+    )
+    # run pipeline
+    pl.runPipeline(sampler.collectStages())
+
+    # check results
+    result = sampler.queue.view(0)
+    assert np.allclose(result["wavelengthRay"], lam)
+    assert np.all(result["mediumIdxRay"] == medIdx)
+    t = result["sampledStep"]
+    assert np.all((t >= 0.0) & (t <= maxStep))
+    mu_e = mu_a + mu_s
+    norm = -np.expm1(-mu_e * maxStep)
+    pdf = lambda t: mu_e * np.exp(-mu_e * t) / norm
+    assert np.allclose(result["sampledProb"], pdf(t), rtol=5e-5)
+    t_eval = result["evalStep"]
+    assert np.all((t_eval >= 0.0) & (t_eval <= maxStep))
+    assert np.allclose(result["evalProb"], pdf(t_eval), rtol=5e-5)
+    # check distribution via histogram
+    hist, edges = np.histogram(t, bins=40, range=(0.0, maxStep))
+    hist = hist / N
+    exp_hist = np.diff(-np.expm1(-mu_e * edges) / norm)
+    sigma = np.sqrt(exp_hist * (1.0 - exp_hist) / N)
+    assert np.all(np.abs(hist - exp_hist) < 3.0 * sigma + 1e-5)
+    # MC estimate of the step range length must be unbiased
+    est = 1.0 / result["sampledProb"]
+    assert abs(est.mean() - maxStep) < 3.0 * est.std() / np.sqrt(N)
 
 
 @pytest.mark.parametrize(
