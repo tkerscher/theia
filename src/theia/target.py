@@ -5,7 +5,7 @@ from hephaistos.pipeline import SourceCodeMixin
 
 from theia.camera import Camera
 from theia.compiler import loadShader
-from theia.light import LightSource, WavelengthSource
+from theia.light import LightSourceRNGDraws, LightSource, WavelengthSource
 from theia.scene import Transform
 import theia.units as u
 
@@ -1086,15 +1086,16 @@ class TargetLightSource(LightSource):
         if isinstance(target, Camera) and not target.supportDirect:
             raise ValueError("Provided target camera does not support direct mode!")
 
-        nRNG = light.nRNGBackward
+        nRNG = light.rngDraws.sampleLightBackward
         nRNG += wavelengthSource.nRNGSamples
         if isinstance(target, Camera):
             nRNG += target.nRNGDirect
         else:
             nRNG += target.nRNGSamples
+        draws = LightSourceRNGDraws(sampleLightForward=nRNG)
         super().__init__(
-            nRNGForward=nRNG,
-            wavelengthSource=wavelengthSource,
+            wavelengthSource,
+            rngDraws=draws,
         )
 
         self._light = light

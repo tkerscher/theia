@@ -17,7 +17,7 @@ from theia.material import MaterialStore, VACUUM_IDX
 from theia.model import PureWaterModel
 from theia.random import PhiloxRNG
 from theia.ray import UnpolarizedRay
-from theia.testing import BackwardLightSampler
+from theia.testing import BackwardLightSampler, BackwardLightMISSampler
 
 
 def test_HostLightSource(rng):
@@ -446,6 +446,68 @@ def test_SphericalLightSource_bwd():
     exp_contrib = budget / (4.0 * np.pi * d**2)
     # bit larger error, likely precission issues (float vs double)
     assert np.allclose(result["contrib"], exp_contrib, atol=1e-5)
+
+
+def test_SphericalLightSource_MIS():
+    N = 32 * 256
+    light_pos = (14.0, -2.0, 3.0) * u.m
+    budget = 1e6
+    max_step = 50.0 * u.m
+
+    # create pipeline
+    ray = UnpolarizedRay()
+    philox = PhiloxRNG(key=0xC0FFEE)
+    photon = theia.light.ConstWavelengthSource()
+    light = theia.light.SphericalLightSource(
+        mediumIdx=VACUUM_IDX,
+        position=light_pos,
+        timeRange=(10.0, 20.0) * u.ns,
+        budget=budget,
+    )
+    sampler = BackwardLightMISSampler(
+        N, light, ray, photon, rng=philox, maxStep=max_step
+    )
+    # run
+    runPipeline(sampler.collectStages())
+
+    # check result
+    result = sampler.queue.view(0)
+    light_pos = np.array(light_pos)
+    origin = result["origin"].astype(np.float64)
+    direction = result["direction"].astype(np.float64)
+    assert np.isfinite(origin).all()
+    assert np.allclose(np.sqrt(np.square(direction).sum(-1)), 1.0)
+    assert np.all(result["mediumIdxRay"] == VACUUM_IDX)
+    assert np.all(result["positionRay"] == light_pos)
+    assert np.all(result["wavelengthRay"] == result["wavelength"])
+    # light ray must point from the source towards the scatter point
+    scatter = origin + result["tStep"][:, None] * direction
+    exp_dir = scatter - light_pos[None, :]
+    exp_dir /= np.sqrt(np.square(exp_dir).sum(-1))[:, None]
+    assert np.allclose(result["directionRay"], exp_dir, atol=1e-5)
+    t_min, t_max = np.min(result["timeRay"]).item(), np.max(result["timeRay"]).item()
+    assert 10.0 * u.ns <= t_min <= 10.1 * u.ns
+    assert 19.9 * u.ns <= t_max <= 20.0 * u.ns
+    # equiangular sampling parameters (see util/equiangular.glsl)
+    o2t = light_pos[None, :] - origin
+    a = (o2t * direction).sum(-1)
+    r2 = np.square(o2t).sum(-1)
+    d_min = np.sqrt(np.square(np.cross(o2t, direction)).sum(-1))
+    d_min = np.maximum(d_min, 1e-6)
+    theta_range = np.arctan2(d_min * max_step, r2 - a * max_step)
+    # check sampled step size: theta(t) is uniform in [0, theta_range]
+    t = result["tSampled"]
+    assert t.min() >= 0.0 and t.max() <= max_step
+    theta = np.arctan2(d_min * t, r2 - a * t)
+    hist, _ = np.histogram(theta / theta_range, bins=20, range=(0.0, 1.0))
+    hist = hist / N
+    assert np.abs(hist - 1.0 / 20).max() < 0.01
+    # check MIS weighted contribution using the balance heuristic
+    r2_scatter = np.square(scatter - light_pos[None, :]).sum(-1)
+    res_prob = result["residualProb"]
+    weight = theta_range / (d_min + theta_range * r2_scatter * res_prob)
+    exp_contrib = budget / (4.0 * np.pi) * weight
+    assert np.allclose(result["contribRay"], exp_contrib)
 
 
 @pytest.mark.parametrize(

@@ -10,6 +10,8 @@ uniform LightParams {
 
     float contribFwd;
     float contribBwd;
+
+    float softeningRadius;
 } lightParams;
 
 #endif

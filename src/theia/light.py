@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 import scipy.constants as consts
 from scipy.integrate import quad
@@ -34,6 +36,7 @@ __all__ = [
     "HostWavelengthSource",
     "LightSampler",
     "LightSource",
+    "LightSourceRNGDraws",
     "MuonTrackLightSource",
     "ParticleCascadeLightSource",
     "PencilLightSource",
@@ -449,6 +452,16 @@ class FunctionWavelengthSource(WavelengthSource):
         self.setParams(_table=table_adr, _contrib=contrib)
 
 
+@dataclass
+class LightSourceRNGDraws:
+    """Amount of random numbers consumed by each light source function"""
+
+    sampleLightForward: int = 0
+    sampleLightBackward: int = 0
+    sampleLightNeeStepSize: int = 0
+    sampleLightMis: int = 0
+
+
 class LightSource(PipelineStage):
     """Base class for samplers producing light rays"""
 
@@ -456,15 +469,16 @@ class LightSource(PipelineStage):
 
     def __init__(
         self,
-        nRNGForward: int = 0,
-        nRNGBackward: int = 0,
         wavelengthSource: WavelengthSource | None = None,
+        *,
+        rngDraws: LightSourceRNGDraws,
+        supportsMis: bool = False,
         params: dict[str, type[Structure]] = {},
         extra: set[str] = set(),
     ) -> None:
         super().__init__(params, extra)
-        self._rngForward = nRNGForward
-        self._rngBackward = nRNGBackward
+        self.rngDraws = rngDraws
+        self._supportsMis = supportsMis
         self._wavelengthSource = wavelengthSource
 
     @property
@@ -484,14 +498,12 @@ class LightSource(PipelineStage):
         return None
 
     @property
-    def nRNGForward(self) -> int:
-        """Amount of random numbers drawn per sample in forward mode"""
-        return self._rngForward
-
-    @property
-    def nRNGBackward(self) -> int:
-        """Amount of random numbers drawn per sample in backward mode"""
-        return self._rngBackward
+    def supportsMis(self) -> bool:
+        """
+        Whether the light source provides methods required for MIS weighted NEE
+        in backward mode.
+        """
+        return self._supportsMis
 
     @property
     def wavelengthSource(self) -> WavelengthSource | None:
@@ -545,7 +557,7 @@ class LightSampler(PipelineStage):
         # check if we have RNG if needed
         if source.forwardSourceCode is None:
             raise ValueError("Light source does not support forward mode")
-        if source.nRNGForward > 0 and rng is None:
+        if source.rngDraws.sampleLightForward > 0 and rng is None:
             raise ValueError("Light source requires a RNG but none was given")
         super().__init__({"SampleParams": LightSampler.SampleParams})
         # create queue
@@ -668,6 +680,7 @@ class HostLightSource(LightSource):
         extra: set[str] = set(),
     ) -> None:
         super().__init__(
+            rngDraws=LightSourceRNGDraws(),
             params={"LightParams": HostLightSource.LightParams},
             extra=extra,
         )
@@ -845,10 +858,14 @@ class ConeLightSource(LightSource):
         emitParticles: bool = False,
     ) -> None:
         lam = wavelengthSource
+        draws = LightSourceRNGDraws(
+            sampleLightForward=0 if lam is None else lam.nRNGSamples + 3,
+            sampleLightBackward=1,
+        )
         super().__init__(
-            nRNGForward=0 if lam is None else lam.nRNGSamples + 3,
-            nRNGBackward=1,
-            wavelengthSource=wavelengthSource,
+            wavelengthSource,
+            rngDraws=draws,
+            # TODO: Implement backward MIS
             params={"LightParams": ConeLightSource.LightParams},
             extra={"budget"},
         )
@@ -957,9 +974,12 @@ class PencilLightSource(LightSource):
         budget: float = 1.0,
         emitParticles: bool = False,
     ) -> None:
+        draws = LightSourceRNGDraws(
+            sampleLightForward=wavelengthSource.nRNGSamples + 1,
+        )
         super().__init__(
-            nRNGForward=wavelengthSource.nRNGSamples + 1,
-            wavelengthSource=wavelengthSource,
+            wavelengthSource,
+            rngDraws=draws,
             params={"LightParams": PencilLightSource.LightParams},
             extra={"budget"},
         )
@@ -1021,6 +1041,9 @@ class SphericalLightSource(LightSource):
     emitParticles: bool, default=False
         Whether to emit particles instead of rays. If so, `budget` will be
         ignored.
+    softeningRadius: float, default=1mm
+        In backward tracing, to avoid infinities 1/r^2 gets softened for radii
+        below softeningRadius.
     """
 
     class LightParams(Structure):
@@ -1030,6 +1053,7 @@ class SphericalLightSource(LightSource):
             ("timeRange", vec2),
             ("_contribFwd", c_float),
             ("_contribBwd", c_float),
+            ("softeningRadius", c_float),
         ]
 
     def __init__(
@@ -1040,13 +1064,20 @@ class SphericalLightSource(LightSource):
         position: tuple[float, float, float] = (0.0, 0.0, 0.0),
         timeRange: tuple[float, float] = (0.0, 100.0) * u.ns,
         budget: float = 1.0,
+        softeningRadius: float = 1.0 * u.mm,
         emitParticles: bool = False,
     ) -> None:
         lam = wavelengthSource
+        draws = LightSourceRNGDraws(
+            sampleLightForward=0 if lam is None else lam.nRNGSamples + 3,
+            sampleLightBackward=1,
+            sampleLightNeeStepSize=1,
+            sampleLightMis=1,
+        )
         super().__init__(
-            nRNGForward=0 if lam is None else lam.nRNGSamples + 3,
-            nRNGBackward=1,
-            wavelengthSource=wavelengthSource,
+            wavelengthSource,
+            rngDraws=draws,
+            supportsMis=True,
             params={"LightParams": SphericalLightSource.LightParams},
             extra={"budget"},
         )
@@ -1059,6 +1090,7 @@ class SphericalLightSource(LightSource):
             position=position,
             mediumIdx=mediumIdx,
             timeRange=timeRange,
+            softeningRadius=softeningRadius,
         )
 
     @property
@@ -1202,10 +1234,14 @@ class CherenkovLightSource(LightSource):
             raise ValueError("Must use photon count when emitting particles")
 
         lam = wavelengthSource
+        draws = LightSourceRNGDraws(
+            sampleLightForward=0 if lam is None else lam.nRNGSamples + 2,
+            sampleLightBackward=0,
+        )
         super().__init__(
-            nRNGForward=0 if lam is None else lam.nRNGSamples + 2,
-            nRNGBackward=0,
-            wavelengthSource=wavelengthSource,
+            wavelengthSource,
+            rngDraws=draws,
+            # TODO: implement backward MIS
             params={"LightParams": CherenkovLightSource.LightParams},
         )
         # save params
@@ -1338,10 +1374,14 @@ class MuonTrackLightSource(LightSource):
             raise ValueError("Must use photon count when emitting particles")
 
         lam = wavelengthSource
+        draws = LightSourceRNGDraws(
+            sampleLightForward=0 if lam is None else lam.nRNGSamples + 3,
+            sampleLightBackward=1,
+        )
         super().__init__(
-            nRNGForward=0 if lam is None else lam.nRNGSamples + 3,
-            nRNGBackward=1,
-            wavelengthSource=wavelengthSource,
+            wavelengthSource,
+            rngDraws=draws,
+            # TODO: implement backward MIS
             params={"MuonTrackParams": MuonTrackLightSource.TrackParameters},
             extra={"muonEnergy"},
         )
@@ -1519,16 +1559,20 @@ class ParticleCascadeLightSource(LightSource):
             raise ValueError("Must use photon count when emitting particles")
 
         lam = wavelengthSource
+        # unfortunately, the amount of samples drawn is not deterministic
+        # because of the rejection algorithm used for the gamma distribution
+        # for now we just report a large amount, but this is not nice
+        # (with Philox RNG it is not really a problem if we do not shift
+        # enough)
+        # TODO: fix this
+        draws = LightSourceRNGDraws(
+            sampleLightForward=0 if lam is None else 12,
+            sampleLightBackward=10,
+        )
         super().__init__(
-            # unfortunately, the amount of samples drawn is not deterministic
-            # because of the rejection algorithm used for the gamma distribution
-            # for now we just report a large amount, but this is not nice
-            # (with Philox RNG it is not really a problem if we do not shift
-            # enough)
-            # TODO: fix this
-            nRNGForward=0 if lam is None else 12,
-            nRNGBackward=10,
-            wavelengthSource=wavelengthSource,
+            wavelengthSource,
+            rngDraws=draws,
+            # TODO: implement backward MIS
             params={"CascadeParams": ParticleCascadeLightSource.CascadeParameters},
         )
         # save params
