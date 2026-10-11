@@ -7,9 +7,9 @@ import hephaistos.pipeline as pl
 from ctypes import c_float
 from hephaistos.queue import QueueTensor, QueueBuffer
 
-from theia.camera import ConeCamera
+from theia.camera import ConeCamera, PencilCamera
 from theia.compiler import compileShader, createPreamble
-from theia.light import ConeLightSource, ConstWavelengthSource
+from theia.light import ConeLightSource, ConstWavelengthSource, PencilLightSource
 from theia.material import Material, MaterialStore, VACUUM_IDX
 from theia.material import Medium, MediumReferenceProperty
 from theia.model import BK7Model, PureWaterModel
@@ -32,7 +32,8 @@ def refract(i, n, ni, no):
     eta = ni / no
     ct = np.multiply(i, n[None, :]).sum(1)
     k = 1.0 - eta * eta * (1.0 - ct * ct)
-    return eta[:, None] * i - (eta * ct + np.sqrt(k))[:, None] * n
+    # k < 0 marks total internal reflection; clip to avoid a sqrt(nan) warning
+    return eta[:, None] * i - (eta * ct + np.sqrt(np.clip(k, 0.0, None)))[:, None] * n
 
 
 def reflectance(i, n, ni, no):
@@ -1145,3 +1146,539 @@ def test_ThinMetallicSurface(particle: bool, camera: bool, flags: str, absorb: b
                 # apply IS correction from sampling without absorption
                 c *= R + T
             assert np.allclose(result["contribOut"], c, atol=5e-4, rtol=5e-4)
+
+
+def reflect_arr(i, n):
+    ct = np.sum(i * n, axis=1)
+    return i - 2.0 * ct[:, None] * n
+
+def refract_arr(i, n, ni, no):
+    eta = ni / no
+    ct = np.sum(i * n, axis=1)
+    k = 1.0 - eta * eta * (1.0 - ct * ct)
+    # k < 0 marks total internal reflection; clip to avoid a sqrt(nan) warning
+    return eta[:, None] * i - (eta * ct + np.sqrt(np.clip(k, 0.0, None)))[:, None] * n
+
+def reflectance_arr(i, n, ni, no):
+    ci = np.abs(np.sum(i * n, axis=1))
+    si = np.sqrt(np.clip(1.0 - np.square(ci), 0.0, 1.0))
+    so = si * ni / no
+    co = np.sqrt(np.clip(1.0 - np.square(so), 0.0, 1.0))
+    rs = (ni * ci - no * co) / (ni * ci + no * co)
+    rp = (no * ci - ni * co) / (no * ci + ni * co)
+    return 0.5 * (rs * rs + rp * rp)
+
+def _sample_theta_from_pdf(theta_grid, pdf, N):
+    """Draw N polar angles by numerically integrating `pdf` on `theta_grid` into a
+    CDF and inverting it (inverse-transform sampling via a tabulated CDF)."""
+    cdf = np.cumsum(pdf)
+    cdf -= cdf[0]
+    cdf /= cdf[-1]
+    u = np.random.uniform(0.0, 1.0, N)
+    return np.interp(u, cdf, theta_grid)
+
+
+def _build_microfacet_normals(cos_theta, normals, tangential_vector, N):
+    """Rotate the surface normals by (theta, phi) with phi uniform, giving isotropic
+    micro-facet normals for a given polar-angle distribution `cos_theta`."""
+    sin_theta = np.sqrt(np.maximum(1.0 - cos_theta**2, 0.0))
+    phi = np.random.uniform(0.0, 2.0 * np.pi, N)
+    third_vectors = np.cross(normals, tangential_vector[None, :])
+    return (
+        cos_theta[:, None] * normals
+        + (sin_theta * np.cos(phi))[:, None] * tangential_vector[None, :]
+        + (sin_theta * np.sin(phi))[:, None] * third_vectors
+    )
+
+
+def sample_microfacet_normals_beckmann(normals, tangential_vector, direction, alpha, N, numSamples=8192):
+    """
+    Sample N microfacet normals from the Beckmann NDF.
+
+    Rather than copying the shader's closed-form inverse, the polar-angle pdf is built 
+    directly from the NDF as an independent ground truth,
+        p(theta) ~ D(theta) * cos(theta) * sin(theta),
+        D(theta) = exp(-tan^2(theta) / alpha^2) / (pi * alpha^2 * cos^4(theta)),
+    numerically integrated into a CDF and inverted. 
+    """
+    theta_grid = np.linspace(0.0, np.pi / 2.0, numSamples)
+    cos_t = np.cos(theta_grid)
+    sin_t = np.sin(theta_grid)
+    # guard the cos->0 singularity at grazing theta (pdf vanishes there anyway)
+    valid = cos_t > 1e-6
+    cos_safe = np.where(valid, cos_t, 1.0)
+    tan2 = (sin_t / cos_safe) ** 2
+    D = np.exp(-tan2 / alpha**2) / (np.pi * alpha**2 * cos_safe**4)
+    pdf = np.where(valid, D * cos_t * sin_t, 0.0)
+    theta = _sample_theta_from_pdf(theta_grid, pdf, N)
+    return _build_microfacet_normals(np.cos(theta), normals, tangential_vector, N)
+
+
+def sample_microfacet_normals_trowbridge_reitz(normals, tangential_vector, direction, alpha, N, numSamples=8192):
+    """
+    Sample N microfacet normals from the Trowbridge-Reitz (GGX) NDF.
+
+    Rather than copying the shader's closed-form inverse, the polar-angle pdf is built 
+    directly from the NDF as an independent ground truth,
+        p(theta) ~ D(theta) * cos(theta) * sin(theta),
+        D(theta) = alpha^2 / (pi * cos^4(theta) * (alpha^2 + tan^2(theta))^2),
+    numerically integrated into a CDF and inverted.
+    """
+    theta_grid = np.linspace(0.0, np.pi / 2.0, numSamples)
+    cos_t = np.cos(theta_grid)
+    sin_t = np.sin(theta_grid)
+    valid = cos_t > 1e-6
+    cos_safe = np.where(valid, cos_t, 1.0)
+    tan2 = (sin_t / cos_safe) ** 2
+    D = alpha**2 / (np.pi * cos_safe**4 * (alpha**2 + tan2) ** 2)
+    pdf = np.where(valid, D * cos_t * sin_t, 0.0)
+    theta = _sample_theta_from_pdf(theta_grid, pdf, N)
+    return _build_microfacet_normals(np.cos(theta), normals, tangential_vector, N)
+
+
+def sample_microfacet_normals_gaussian(normals, tangential_vector, direction, alpha, N, numSamples=4096):
+    """
+    Sample N microfacet normals from the Gaussian slope distribution used by the
+    "gaussian" model: 
+        p(theta) ~ sin(theta) * exp(-theta^2 / (2 alpha^2))
+    """
+    theta_grid = np.linspace(0.0, np.pi / 2.0, numSamples)
+    pdf = np.sin(theta_grid) * np.exp(-theta_grid**2 / (2.0 * alpha**2))
+    theta = _sample_theta_from_pdf(theta_grid, pdf, N)
+    return _build_microfacet_normals(np.cos(theta), normals, tangential_vector, N)
+
+
+def _perpendicular_to_vector(v):
+    """Unit vector perpendicular to v."""
+    s = 1.0 if v[2] >= 0.0 else -1.0
+    a = -1.0 / (s + v[2])
+    b = v[0] * v[1] * a
+    return np.array([b, s + v[1] * v[1] * a, -v[1]])
+
+
+def _perpendicular_to_pair(a, b):
+    """Normalize(cross(a, b)); falls back to _perpendicular_to_vector(a) if degenerate."""
+    c = np.cross(a, b)
+    length = np.linalg.norm(c)
+    return c / length if length >= 1e-5 else _perpendicular_to_vector(a)
+
+
+def _sample_unit_disk(N):
+    """Concentric disk sampling. Returns (N, 2) array."""
+    u = np.random.uniform(0.0, 1.0, (N, 2))
+    rng = 2.0 * u - 1.0
+    degenerate = (rng[:, 0] == 0.0) & (rng[:, 1] == 0.0)
+    cond = np.abs(rng[:, 0]) > np.abs(rng[:, 1])
+    safe_x = np.where(np.abs(rng[:, 0]) < 1e-30, 1.0, rng[:, 0])
+    safe_y = np.where(np.abs(rng[:, 1]) < 1e-30, 1.0, rng[:, 1])
+    r = np.where(cond, rng[:, 0], rng[:, 1])
+    phi = np.where(
+        cond,
+        (np.pi / 4.0) * rng[:, 1] / safe_x,
+        (np.pi / 2.0) - (np.pi / 4.0) * rng[:, 0] / safe_y,
+    )
+    px = np.where(degenerate, 0.0, r * np.cos(phi))
+    py = np.where(degenerate, 0.0, r * np.sin(phi))
+    return np.column_stack([px, py])
+
+
+def _masking_function_trowbridge_reitz(cos_n, alpha):
+    """Smith masking for Trowbridge-Reitz: 1 / (1 + Lambda)."""
+    valid = cos_n >= 1e-3
+    cos_n_safe = np.where(valid, cos_n, 1.0)
+    tan2_n = np.maximum(1.0 - cos_n_safe**2, 0.0) / (cos_n_safe**2)
+    lam = (np.sqrt(1.0 + alpha**2 * tan2_n) - 1.0) / 2.0
+    return np.where(valid, 1.0 / (1.0 + lam), 0.0)
+
+
+def sample_microfacet_normals_trowbridge_reitz_shadowed(normals, tangential_vector, direction, alpha, N):
+    """
+    Sample N microfacet normals from the VNDF for Trowbridge-Reitz.
+
+    """
+    # pencil beam: all normals identical
+    normal = normals[0]  
+
+    # Transformation matrix for local coordinate system. The surface normal is the new z-axis, and the
+    # tangential component of the incoming ray is along the new y-axis.
+    vx = _perpendicular_to_pair(normal, direction)
+    vy = np.cross(normal, vx)
+    trafo = np.column_stack([vx, vy, normal])
+
+    cos_n = float(abs(np.dot(normal, direction)))
+    sin_n = np.sqrt(max(1.0 - cos_n**2, 0.0))
+
+    # transform surface normal to hemispherical configuration
+    wh = np.array([0.0, alpha * sin_n, cos_n])
+    wh_len = np.linalg.norm(wh)
+    if wh_len > 1e-12:
+        wh /= wh_len
+
+    # Orthonormal basis for disk sampling
+    T1 = np.array([-1.0, 0.0, 0.0])
+    T2 = np.cross(wh, T1) 
+
+    # sample point on unit disk
+    p = _sample_unit_disk(N)  # (N, 2)
+    px, py = p[:, 0], p[:, 1]
+
+    # warp hemispherical projection for visible normal sampling
+    h = np.sqrt(np.maximum(1.0 - px**2, 0.0))
+    t = (1.0 + wh[2]) / 2.0
+    py_warped = h * (1.0 - t) + py * t
+
+    # Reproject to hemisphere and transform normal to ellipsoid configuration
+    pz = np.sqrt(np.maximum(0.0, 1.0 - px**2 - py_warped**2))
+
+    nh = (
+        px[:, None] * T1[None, :]
+        + py_warped[:, None] * T2[None, :]
+        + pz[:, None] * wh[None, :]
+    )
+
+    mn_local = np.column_stack([
+        alpha * nh[:, 0],
+        alpha * nh[:, 1],
+        np.maximum(1e-6, nh[:, 2]),
+    ])
+    mn_local /= np.linalg.norm(mn_local, axis=1, keepdims=True)
+
+    # transform from local to global coordinate system
+    return mn_local @ trafo.T # (N, 3)
+
+
+_ROUGH_DIELECTRIC_PARAMS = [
+    (True, False, "TR", 0),
+    (True, False, "TR", 20),
+    (True, False, "TR", 80),
+    (True, False, "T", 40),
+    (True, False, "R", 40),
+    (True, False, "DR", 40),
+    (False, True, "TR", 0),
+    (False, True, "TR", 20),
+    (False, True, "TR", 80),
+    (False, True, "T", 40),
+    (False, True, "R", 40),
+    (False, False, "TR", 0),
+    (False, False, "TR", 20),
+    (False, False, "TR", 80),
+    (False, False, "T", 40),
+    (False, False, "R", 40),
+    (False, False, "DR", 40),
+]
+
+
+def _test_rough_dielectric_surface(surface, microfacet_sampler, particle, 
+                                   camera, flags, angle, alpha=0.15, masking_function=None):
+    np.random.seed(0xABCD + 10*(1+particle+2*camera)*int(angle))
+    N = 64 * 1024
+    lam = 600.0 * u.nm
+    direction = (
+        np.array((0.8, 0.36, 0.48)) * np.cos(np.deg2rad(angle))
+        + np.array((-0.36, 0.8, 0)) * np.sin(np.deg2rad(angle)) / np.sqrt(481 / 625)
+    )
+    normal = np.array((-0.8, -0.36, -0.48)).astype(np.float32)
+    tangential_vector = np.array((-0.36, 0.8, 0)) / np.sqrt(481 / 625)
+    objectId = 10
+
+    waterModel = PureWaterModel()
+    water = waterModel.createMedium()
+    properties = {"roughness_parameter": FloatProperty(alpha)}
+    mat = Material("mat", None, water, surface, flags=flags, properties=properties)
+    matStore = MaterialStore([mat])
+    waterIdx = matStore.media["water"]
+
+    ray = UnpolarizedRay(particle=particle)
+    rng = PhiloxRNG(key=0xABBA + 10*(1+particle+camera)*int(angle))
+    photons = ConstWavelengthSource(lam)
+    if camera:
+        source = PencilCamera(rayDirection=direction, mediumIdx=waterIdx, objectId=objectId)
+    else:
+        source = PencilLightSource(
+            photons,
+            direction=direction,
+            mediumIdx=waterIdx,
+            timeRange=(0.0, 0.0),
+            emitParticles=particle,
+        )
+        photons = None
+    sampler = SurfaceInteractionSampler(
+        N, ray, surface, matStore, rng, source, photons,
+        material="mat", surfaceNormal=normal, objectId=objectId,
+        sampleTargetHit=not camera,
+    )
+    pl.runPipeline(sampler.collectStages())
+
+    result = sampler.queue.view(0)
+    assert np.all(result["positionIn"] == 0.0)
+    assert np.all(result["wavelengthIn"] == lam)
+    assert np.all(result["wavelengthOut"] == lam)
+    assert np.all(result["mediumIdxIn"] == waterIdx)
+    if not camera:
+        assert np.allclose(result["directionIn"], direction, atol=1e-6)
+        valid = result["hitSuccess"] == 1
+        assert np.all(result["wavelengthHit"][valid] == lam)
+        assert np.all(result["objectIdHit"][valid] == objectId)
+    if flags == "D":
+        assert np.all(result["hitResult"] == EventResultCode.RAY_ABSORBED)
+        return
+    absorbed = result["hitResult"] == EventResultCode.RAY_ABSORBED
+    assert np.all(result["hitResult"][~absorbed] == EventResultCode.RAY_HIT)
+
+    normals = np.tile(normal, (N, 1)).astype(np.float32)
+    cosNrm = np.multiply(result["directionOut"], normal[None, :]).sum(1).astype(np.float32)
+    trans = (cosNrm < 0.0) & ~absorbed
+    refl = (cosNrm > 0.0) & ~absorbed
+    ni = waterModel.refractive_index(lam) * np.ones(N)
+    no = np.ones(N)
+
+    # check we prevent self intersection
+    cosPos = np.multiply(result["positionOut"], normal[None, :]).sum(-1)
+    assert np.all(cosPos[trans] < 0.0)
+    assert np.all(cosPos[refl] > 0.0)
+    assert np.all(result["mediumIdxOut"][trans] == VACUUM_IDX)
+    assert np.all(result["mediumIdxOut"][refl] == waterIdx)
+
+    if not particle:
+        c = result["contribIn"]
+    if camera:
+        eta = ni / no
+        c = np.copy(result["contribIn"])
+        c[trans] = (c * eta * eta)[trans]
+
+    if microfacet_sampler is None:
+        # no sampler: geometric checks only
+        if flags == "R" or flags == "DR":
+            assert trans.sum() == 0
+        if flags == "T":
+            assert refl.sum() == 0
+        if flags == "TR":
+            assert absorbed.sum() == 0
+        return
+
+    ref_normals = microfacet_sampler(normals, tangential_vector, direction, alpha, N).astype(np.float32)
+    t = refract_arr(result["directionIn"], ref_normals, ni, no).astype(np.float32)
+    r = reflect_arr(result["directionIn"], ref_normals).astype(np.float32)
+    R = reflectance_arr(result["directionIn"], ref_normals, ni, no).astype(np.float32)
+    cos_in = np.sum(result["directionIn"] * ref_normals, axis=1).astype(np.float32)
+    cos_t = np.sum(t * normal[None, :], axis=1).astype(np.float32)
+    cos_r = np.sum(r * normal[None, :], axis=1).astype(np.float32)
+    if masking_function is not None:
+        # VNDF sampling guarantees the incoming ray hits the microfacet from the front;
+        # apply stochastic masking to the outgoing direction only.
+        u_r = np.random.uniform(0.0, 1.0, N)
+        u_t = np.random.uniform(0.0, 1.0, N)
+        mask_r = (cos_r > 0) & (masking_function(np.abs(cos_r), alpha) > u_r)
+        mask_t = (cos_t < 0) & (R < 1) & (masking_function(np.abs(cos_t), alpha) > u_t)
+    else:
+        mask_r = (cos_in < 0) & (cos_r > 0)
+        mask_t = (cos_in < 0) & (cos_t < 0) & (R < 1)
+
+    # use relative error for reflectivities / angles and absolute errors for components of
+    # directions (they can be very close to 0 for some incident angles)
+    # Note: These tolerances are not super high considering the amount of tests we run. There
+    # is a non-zero chance that some tests will fail if the RNG seed gets changed.
+    rel_err = 0.015
+    abs_err = 0.004
+
+    # Direction comparisons are only reliable when there are enough reference samples.
+    enough_t = (mask_t.sum() >= 20000) and (trans.sum() >= 20000)
+    enough_r = (mask_r.sum() >= 20000) and (refl.sum() >= 20000)
+
+    # check correct sampling of micro-facets using weighted averages
+    if (flags == "R" or flags == "DR") and not particle and enough_r:
+        microfacet_normals_shader = result["directionOut"] - result["directionIn"]
+        microfacet_normals_shader /= np.linalg.norm(microfacet_normals_shader, axis=1, keepdims=True)
+        cos_test = np.clip(np.sum(normals[mask_r] * ref_normals[mask_r], axis=1), 0.0, 1.0)
+        cos_shader = np.clip(np.sum(normals * microfacet_normals_shader, axis=1), 0.0, 1.0)
+        assert np.average(
+            np.arccos(cos_test), weights=R[mask_r]
+        ) == pytest.approx(
+            np.average(np.arccos(cos_shader[refl]), weights=result["contribOut"][refl]),
+            rel=rel_err,
+        )
+
+    # compare outgoing directions using weighted averages
+    qR = R * mask_r
+    qT = (1.0 - R) * mask_t
+    # the queue has no contribution field for particle rays
+    cO = result["contribOut"] if not particle else None
+    if enough_t and (flags == "TR" or particle):
+        assert np.mean(result["directionOut"][trans], axis=0) == pytest.approx(
+            np.average(t[mask_t], weights=(1 - R[mask_t]), axis=0), abs=abs_err
+        )
+    if enough_t and flags == "T" and not particle:
+        assert np.average(
+            result["directionOut"][trans], weights=cO[trans], axis=0
+        ) == pytest.approx(
+            np.average(t[mask_t], weights=(1 - R[mask_t]), axis=0), abs=abs_err
+        )
+    if enough_r and (flags == "TR" or particle):
+        assert np.mean(result["directionOut"][refl], axis=0) == pytest.approx(
+            np.average(r[mask_r], weights=R[mask_r], axis=0), abs=abs_err
+        )
+    if enough_r and (flags == "R" or flags == "DR") and not particle:
+        assert np.average(
+            result["directionOut"][refl], weights=cO[refl], axis=0
+        ) == pytest.approx(
+            np.average(r[mask_r], weights=R[mask_r], axis=0), abs=abs_err
+        )
+
+    if flags == "R" or flags == "DR":
+        assert trans.sum() == 0
+        if particle and enough_r:
+            assert absorbed.sum() > 0
+        elif enough_r:
+            expected = qR.mean() / (qR.mean() + qT.mean())
+            assert cO[~absorbed].sum() / N == pytest.approx(
+                expected * np.mean(c[~absorbed]), rel=rel_err
+            )
+    if flags == "T":
+        assert refl.sum() == 0
+        if particle and enough_t:
+            absorbed.sum() > 0
+        if not particle and enough_t:
+            expected = qT.mean() / (qR.mean() + qT.mean())
+            assert cO[~absorbed].sum() / N == pytest.approx(
+                expected * np.mean(c[~absorbed]), rel=rel_err
+            )
+        if not particle and not camera and enough_t:
+            # nothing is reflected back, so the detector sees everything
+            cH = result["contribHit"]
+            assert np.mean(cH[~absorbed]) == pytest.approx(
+                np.mean(c[~absorbed]), rel=rel_err
+            )
+    if flags == "TR":
+        if enough_r:
+            assert refl.sum() > 0
+        if enough_t:
+            assert trans.sum() > 0
+        assert absorbed.sum() == 0
+        if particle:
+            np.all((result["hitSuccess"] == 0) == refl)
+        else:
+            assert np.allclose(result["contribOut"], c)
+
+
+@pytest.mark.parametrize("particle,camera,flags,angle", _ROUGH_DIELECTRIC_PARAMS)
+def test_DielectricBeckmannSurface(particle: bool, camera: bool, flags: str, angle: float):
+    _test_rough_dielectric_surface(
+        theia.surface.DielectricRoughSurface(model="beckmann"),
+        sample_microfacet_normals_beckmann,
+        particle, camera, flags, angle,
+    )
+
+
+@pytest.mark.parametrize("particle,camera,flags,angle", _ROUGH_DIELECTRIC_PARAMS)
+def test_DielectricTrowbridgeReitzSurface(particle: bool, camera: bool, flags: str, angle: float):
+    _test_rough_dielectric_surface(
+        theia.surface.DielectricRoughSurface(model="trowbridge_reitz"),
+        sample_microfacet_normals_trowbridge_reitz,
+        particle, camera, flags, angle,
+    )
+
+
+@pytest.mark.parametrize("particle,camera,flags,angle", _ROUGH_DIELECTRIC_PARAMS)
+def test_DielectricTrowbridgeReitzShadowedSurface(particle: bool, camera: bool, flags: str, angle: float):
+    _test_rough_dielectric_surface(
+        theia.surface.DielectricRoughSurface(model="trowbridge_reitz_shadowed"),
+        sample_microfacet_normals_trowbridge_reitz_shadowed,
+        particle, camera, flags, angle,
+        masking_function=_masking_function_trowbridge_reitz,
+    )
+
+
+@pytest.mark.parametrize("particle,camera,flags,angle", _ROUGH_DIELECTRIC_PARAMS)
+def test_DielectricGaussianSurface(particle: bool, camera: bool, flags: str, angle: float):
+    _test_rough_dielectric_surface(
+        theia.surface.DielectricRoughSurface(model="gaussian"),
+        sample_microfacet_normals_gaussian,
+        particle, camera, flags, angle,
+    )
+
+
+# All four lobe weights must be present so their material slots are defined;
+# the shader only enables the lobe split when all of them exist.
+_LOBE_ZERO = {
+    "prob_backscatter": 0.0,
+    "prob_specularspike": 0.0,
+    "prob_specularlobe": 0.0,
+    "prob_diffuselobe": 0.0,
+}
+
+
+def _run_rough_reflection_lobe(lobe_probs, angle=30.0, alpha=0.15, N=32 * 1024):
+    """Run the Geant4 UNIFIED surface in reflection-only mode ("R") with a forced
+    reflection lobe and return the outgoing directions. Only the reflected
+    directions are of interest here, so the surface cannot transmit. The ray
+    travels in water towards vacuum.
+
+    The lobe decomposition exists only in the UNIFIED model; the other rough
+    models are a pure specular lobe."""
+    lam = 600.0 * u.nm
+    direction = (
+        np.array((0.8, 0.36, 0.48)) * np.cos(np.deg2rad(angle))
+        + np.array((-0.36, 0.8, 0)) * np.sin(np.deg2rad(angle)) / np.sqrt(481 / 625)
+    )
+    normal = np.array((-0.8, -0.36, -0.48)).astype(np.float32)
+    objectId = 10
+
+    properties = {"roughness_parameter": FloatProperty(alpha)}
+    properties.update({k: FloatProperty(v) for k, v in lobe_probs.items()})
+    water = PureWaterModel().createMedium()
+    surface = theia.surface.DielectricRoughSurface(model="unified")
+    mat = Material("mat", None, water, surface, flags="R", properties=properties)
+    matStore = MaterialStore([mat])
+    mediumIdx = matStore.media["water"]
+
+    ray = UnpolarizedRay(particle=False)
+    rng = PhiloxRNG(key=0xABBA)
+    photons = ConstWavelengthSource(lam)
+    source = PencilLightSource(
+        photons, direction=direction, mediumIdx=mediumIdx, timeRange=(0.0, 0.0)
+    )
+    sampler = SurfaceInteractionSampler(
+        N, ray, surface, matStore, rng, source, None,
+        material="mat", surfaceNormal=normal, objectId=objectId, sampleTargetHit=True,
+    )
+    pl.runPipeline(sampler.collectStages())
+
+    result = sampler.queue.view(0)
+    absorbed = result["hitResult"] == EventResultCode.RAY_ABSORBED
+    return result, np.asarray(direction), normal, absorbed
+
+
+# Make sure that enough rays get reflected for a statistical comparison
+_LOBE_DIELECTRIC_MIN_REFLECTED = 1000
+
+
+def test_DielectricRoughSurface_specularSpike():
+    # specular spike -> deterministic reflection off the macroscopic surface normal
+    result, direction, normal, absorbed = _run_rough_reflection_lobe(
+        {**_LOBE_ZERO, "prob_specularspike": 1.0}
+    )
+    assert (~absorbed).sum() > _LOBE_DIELECTRIC_MIN_REFLECTED
+    expected = reflect_arr(direction[None, :], normal[None, :])[0]
+    assert np.allclose(result["directionOut"][~absorbed], expected[None, :], atol=1e-6)
+
+
+def test_DielectricRoughSurface_backscatter():
+    # backscatter -> deterministic retro-reflection into the incoming direction
+    result, direction, normal, absorbed = _run_rough_reflection_lobe(
+        {**_LOBE_ZERO, "prob_backscatter": 1.0}
+    )
+    assert (~absorbed).sum() > _LOBE_DIELECTRIC_MIN_REFLECTED
+    assert np.allclose(result["directionOut"][~absorbed], -direction[None, :], atol=1e-6)
+
+
+def test_DielectricRoughSurface_diffuseLobe():
+    # diffuse lobe -> cosine-weighted hemisphere about the surface normal,
+    # tested exactly like the Lambertian reflecting surface
+    result, direction, normal, absorbed = _run_rough_reflection_lobe(
+        {**_LOBE_ZERO, "prob_diffuselobe": 1.0}
+    )
+    assert (~absorbed).sum() > _LOBE_DIELECTRIC_MIN_REFLECTED
+    cosNrm = np.multiply(result["directionOut"][~absorbed], normal[None, :]).sum(1)
+    assert np.all(cosNrm > 0.0)  # reflected back into the original hemisphere
+    assert cosNrm.min() > 0.0 and cosNrm.min() < 0.05
+    assert cosNrm.max() > 0.95 and cosNrm.max() <= 1.0
