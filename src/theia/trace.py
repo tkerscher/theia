@@ -19,7 +19,11 @@ from theia.compiler import (
     compileShader,
     loadShader,
 )
-from theia.device import getEnabledRayTracingFeatures, isRayTracingEnabled
+from theia.device import (
+    getEnabledRayTracingFeatures,
+    isInvocationReorderSupported,
+    isRayTracingEnabled,
+)
 from theia.light import LightSource, WavelengthSource
 from theia.material import MaterialStore
 from theia.random import RNG
@@ -1929,10 +1933,14 @@ class _SceneTargetTracer(Tracer):
         maxTime: float,
         targetGuide: TargetGuide | None,
         disableDirectLighting: bool,
+        enableInvocationReorder: bool,
     ) -> None:
         # we need ray tracing for this
         if not isRayTracingEnabled():
             raise RuntimeError("The device does not support ray tracing")
+        # if requested, check if invocation reorder is even supported
+        if enableInvocationReorder and not isInvocationReorderSupported():
+            raise RuntimeError("Device does not support invocation reorder")
         # get trace direction from type of source and check components' support
         if isinstance(source, LightSource):
             direction = "forward"
@@ -2014,6 +2022,7 @@ class _SceneTargetTracer(Tracer):
             PROXY_RAY=f"{direction.title()}Ray",
             RAY_TRACING_PIPELINE=True,
             TRACE_RNG_STRIDE=nRngLoop,
+            TRACER_REORDER_THREADS=enableInvocationReorder,
         )
         headers = {
             "callback.glsl": callback.sourceCode,
@@ -2255,6 +2264,11 @@ class SceneForwardTracer(_SceneTargetTracer):
         Whether to ignore contributions from direct lighting, i.e. paths with
         no scattering. Usefull if a dedicated tracer or estimator for direct
         light contributions is additionally used.
+    enableInvocationReorder: bool, default=False
+        Instructs the device to reorder invocations between tracing calls to
+        decrease divergence. Can drastically increase performance, but on very
+        simple scenes it can also decrease. Requires hardware support for
+        shader execution reorder.
     """
 
     name = "Scene Forward Tracer"
@@ -2276,6 +2290,7 @@ class SceneForwardTracer(_SceneTargetTracer):
         maxTime: float = float("inf"),
         targetGuide: TargetGuide | None = None,
         disableDirectLighting: bool = False,
+        enableInvocationReorder: bool = False,
     ) -> None:
         super().__init__(
             batchSize,
@@ -2293,6 +2308,7 @@ class SceneForwardTracer(_SceneTargetTracer):
             maxTime=maxTime,
             targetGuide=targetGuide,
             disableDirectLighting=disableDirectLighting,
+            enableInvocationReorder=enableInvocationReorder,
         )
         self._lightSource = source
 
@@ -2350,6 +2366,11 @@ class SceneBackwardTargetTracer(_SceneTargetTracer):
         Whether to ignore contributions from direct lighting, i.e. paths with
         no scattering. Usefull if a dedicated tracer or estimator for direct
         light contributions is additionally used.
+    enableInvocationReorder: bool, default=False
+        Instructs the device to reorder invocations between tracing calls to
+        decrease divergence. Can drastically increase performance, but on very
+        simple scenes it can also decrease. Requires hardware support for
+        shader execution reorder.
     """
 
     name = "Scene Backward Target Tracer"
@@ -2372,6 +2393,7 @@ class SceneBackwardTargetTracer(_SceneTargetTracer):
         maxTime: float = float("inf"),
         targetGuide: TargetGuide | None = None,
         disableDirectLighting: bool = False,
+        enableInvocationReorder: bool = False,
     ) -> None:
         super().__init__(
             batchSize,
@@ -2389,6 +2411,7 @@ class SceneBackwardTargetTracer(_SceneTargetTracer):
             maxTime=maxTime,
             targetGuide=targetGuide,
             disableDirectLighting=disableDirectLighting,
+            enableInvocationReorder=enableInvocationReorder,
         )
         self._camera = camera
         self._photons = wavelengthSource

@@ -7,7 +7,7 @@ import numpy as np
 from itertools import product
 
 from theia.camera import FlatCamera, PointCamera, SphereCamera
-from theia.device import isRayTracingEnabled
+from theia.device import isInvocationReorderSupported, isRayTracingEnabled
 from theia.light import PencilLightSource, SphericalLightSource, UniformWavelengthSource
 from theia.material import Material, MaterialStore, getPropertySamples, VACUUM_IDX
 from theia.model import BK7Model, DispersionFreeMedium, PureWaterModel
@@ -720,22 +720,24 @@ def test_SceneBackwardTracer(
 
 
 @pytest.mark.parametrize(
-    "particle,guide,targetId,inlineVolumeModels,disableDirect,disableScattering",
+    "particle,guide,targetId,inlineVolumeModels,disableDirect,disableScattering,enableReorder",
     [
-        (True, False, False, True, False, False),
-        (True, False, False, False, False, False),
-        (True, False, True, True, False, False),
-        (False, True, True, True, False, False),
-        (False, True, True, False, False, True),
-        (False, False, False, True, True, True),
-        (False, True, True, False, False, False),
-        (False, False, True, True, False, False),
-        (False, False, True, False, False, False),
-        (False, False, False, False, False, False),
-        (False, False, True, False, True, False),
-        (False, False, False, True, True, False),
-        (False, False, True, False, False, True),
-        (False, False, False, True, False, False),
+        (True, False, False, True, False, False, False),
+        (True, False, False, False, False, False, False),
+        (True, False, False, False, False, False, True),
+        (True, False, True, True, False, False, False),
+        (False, True, True, True, False, False, False),
+        (False, True, True, False, False, True, False),
+        (False, False, False, True, True, True, False),
+        (False, True, True, False, False, False, False),
+        (False, False, True, True, False, False, False),
+        (False, False, True, False, False, False, False),
+        (False, False, False, False, False, False, False),
+        (False, False, False, False, False, False, True),
+        (False, False, True, False, True, False, False),
+        (False, False, False, True, True, False, False),
+        (False, False, True, False, False, True, False),
+        (False, False, False, True, False, False, False),
     ],
 )
 def test_SceneForwardTracer(
@@ -745,9 +747,12 @@ def test_SceneForwardTracer(
     inlineVolumeModels: bool,
     disableDirect: bool,
     disableScattering: bool,
+    enableReorder: bool,
 ):
     if not isRayTracingEnabled():
         pytest.skip("ray tracing is not supported")
+    if enableReorder and not isInvocationReorderSupported():
+        pytest.skip("invocation reorder is not supported")
 
     N = 32 * 256
     MAX_LENGTH = 10
@@ -838,6 +843,7 @@ def test_SceneForwardTracer(
         targetId=1 if targetId else None,
         targetGuide=targetGuide if guide else None,
         disableDirectLighting=disableDirect,
+        enableInvocationReorder=enableReorder,
     )
     # run pipeline
     pl.runPipeline(tracer.collectStages())
@@ -872,21 +878,31 @@ def test_SceneForwardTracer(
         assert np.all((hits["objectId"] == 1) | (hits["objectId"] == 2))
 
 
-# TODO: Maybe a bit excessive on the amount of configs...
-@pytest.mark.parametrize("guide", [True, False])
-@pytest.mark.parametrize("targetId", [True, False])
-@pytest.mark.parametrize("inlineVolumeModels", [True, False])
-@pytest.mark.parametrize("disableDirect", [True, False])
-@pytest.mark.parametrize("disableScattering", [True, False])
+@pytest.mark.parametrize(
+    "guide,targetId,inlineVolumeModels,disableDirect,disableScattering,enableReordering",
+    [
+        (False, False, False, False, False, False),
+        (True, True, True, False, True, False),
+        (True, True, False, True, False, False),
+        (True, False, True, True, False, False),
+        (False, True, True, True, True, False),
+        (False, False, False, False, True, False),
+        (True, True, False, False, False, True),
+        (False, False, True, True, True, True),
+    ],
+)
 def test_SceneBackwardTargetTracer(
     guide: bool,
     targetId: bool,
     inlineVolumeModels: bool,
     disableDirect: bool,
     disableScattering: bool,
+    enableReordering: bool,
 ) -> None:
     if not isRayTracingEnabled():
         pytest.skip("ray tracing is not supported")
+    if enableReordering and not isInvocationReorderSupported():
+        pytest.skip("invocation reorder not supported")
 
     N = 32 * 256
     MAX_LENGTH = 10
@@ -969,6 +985,7 @@ def test_SceneBackwardTargetTracer(
         maxTime=T_MAX,
         targetGuide=targetGuide if guide else None,
         disableDirectLighting=disableDirect,
+        enableInvocationReorder=enableReordering,
     )
     # run pipeline
     pl.runPipeline(tracer.collectStages())

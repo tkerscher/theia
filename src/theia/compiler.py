@@ -5,7 +5,11 @@ import hephaistos as hp
 
 from functools import cache
 
-from theia.device import getEnabledAtomics, getEnabledFma, getEnabledRayTracingFeatures
+from theia.device import (
+    getEnabledAtomics,
+    getEnabledFma,
+    getEnabledRayTracingFeatures,
+)
 
 from collections.abc import Iterable
 from importlib.resources.abc import Traversable
@@ -116,6 +120,8 @@ def getPreamble() -> str:
     if rt_features.positionFetch:
         preamble += "#extension GL_EXT_ray_tracing_position_fetch : require\n"
         preamble += "#define POSITION_FETCH_ENABLED 1\n"
+    if rt_features.hitObjects:
+        preamble += "#extension GL_EXT_shader_invocation_reorder : require\n"
     # done
     return preamble
 

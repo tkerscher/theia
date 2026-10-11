@@ -8,8 +8,10 @@ from functools import cache
 __all__ = [
     "initializeDevice",
     "isDeviceSuitable",
+    "isInvocationReorderSupported",
     "isRayTracingEnabled",
     "getEnabledRayTracingFeatures",
+    "getEnabledRayTracingProperties",
     "selectDevice",
 ]
 
@@ -36,10 +38,21 @@ def getEnabledRayTracingFeatures() -> hp.RayTracingFeatures:
     return hp.getEnabledRayTracingFeatures()
 
 
+@cache
+def getEnabledRayTracingProperties() -> hp.RayTracingProperties:
+    """Returns a cached version of the current ray tracing properties"""
+    return hp.getRayTracingProperties()
+
+
 def isRayTracingEnabled() -> bool:
     """Returns True, if ray tracing is currently enabled"""
     # at minimum, we need ray tracing pipelines
     return getEnabledRayTracingFeatures().pipeline
+
+
+def isInvocationReorderSupported() -> bool:
+    """True, if the device supports shader execution reorder"""
+    return getEnabledRayTracingProperties().canReorder
 
 
 def isDeviceSuitable(id: int, *, requireRayTracing: bool = False) -> bool:
@@ -133,10 +146,11 @@ def initializeDevice(*, useSelectedDevice: bool = True, force: bool = False) -> 
     # reset any cached device specific properties
     getEnabledAtomics.cache_clear()
     getEnabledRayTracingFeatures.cache_clear()
+    getEnabledRayTracingProperties.cache_clear()
     getPreamble.cache_clear()
 
     # select most suitable GPU if none is specified
-    if deviceId := hp.getSelectedDeviceId() is None or not useSelectedDevice:
+    if (deviceId := hp.getSelectedDeviceId()) is None or not useSelectedDevice:
         deviceId = selectDevice()
         if deviceId is None:
             warnings.warn("No suitable device found to run theia")
@@ -179,7 +193,7 @@ def initializeDevice(*, useSelectedDevice: bool = True, force: bool = False) -> 
         pipeline=rt_supported,
         indirectDispatch=rt_supported and rt_features.indirectDispatch,
         positionFetch=rt_supported and rt_features.positionFetch,
-        hitObjects=False,  # currently not widely supported
+        hitObjects=rt_supported and rt_features.hitObjects,
     )
     hp.enableRayTracing(rt_request, force=force)
     # force init of context to see if everything went well
