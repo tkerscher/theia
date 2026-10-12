@@ -45,7 +45,7 @@ float sampleEquiAngularStepSize(
     //we use a softening kernel to avoid division by zero later
     if (D < d_eps) {
         D = softDist_comp(D, d_eps);
-        r2 = D*D + a+a; //avoid this source of rounding if not needed
+        r2 = D*D + a*a; //avoid this source of rounding if not needed
     }
     float theta_range = atan(D * maxStep, r2 - a * maxStep);
     context.theta_range = theta_range;
