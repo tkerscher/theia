@@ -27,7 +27,7 @@ VolumeProperties prepareVolume(
 
 void sampleFluorescenceWavelengthShift(
     inout ForwardRay ray,
-    uint idx, uint dim
+    uint idx, inout uint dim
 ) {
     float u = random(idx, dim);
     
