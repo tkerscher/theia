@@ -62,7 +62,8 @@ void main() {
     if (traceData.result < 0) return;
 
     //do not bother with NEE if the volume does not support it anyway
-    #ifndef VOLUME_MODEL_NO_SCATTERING
+    //or if it was handled elsewhere
+    #if !defined(VOLUME_MODEL_NO_SCATTERING) && defined(DISABLE_VOLUME_SCATTER_MIS)
     //NEE estimate to complete path
     neeEstimate(traceData.ray, traceData.dim);
     #endif

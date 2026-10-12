@@ -924,7 +924,9 @@ class VolumeBackwardTracer(Tracer):
             raise ValueError("Light source does not support MIS")
 
         # calculate max hits
-        maxHitsPerRay = 2 * (maxPathLength - 1)
+        maxHitsPerRay = maxPathLength - 1
+        if not disableVolumeScatterMIS:
+            maxHitsPerRay *= 2
         if not disableDirectLighting:
             maxHitsPerRay += 1
         # calculate number of rng samples
@@ -1356,6 +1358,8 @@ def _createVolumeProxies(
     mode: Literal["forward", "backward"],
     ray: RayModel,
     session: CompilerSession,
+    *,
+    extras: Iterable[str] = [],
 ) -> list[bytes | None]:
     """
     Creates callables used by the volume proxy. Returns an empty list if the
@@ -1377,6 +1381,7 @@ def _createVolumeProxies(
     ]
     if not ray.isParticle:
         templates.append("tracer/scene/volume/applyVolume.rcall.glsl")
+    templates.extend(extras)
 
     codes = _compileMultiTemplateShader(
         # The first one is always transparent, which will be always
@@ -1630,6 +1635,18 @@ class SceneBackwardTracer(Tracer):
         Whether to ignore contributions from direct lighting, i.e. paths with
         no scattering. Usefull if a dedicated tracer or estimator for direct
         light contributions is additionally used.
+    disableVolumeScatterMIS: bool, default=False
+        If `False`, estimates the inscattering along path segments by sampling
+        various alternate volume scatter points, connecting those to the light
+        source as next event estimate and combining their contribution using
+        multiple importance sampling. Otherwise, only at volume or surface
+        interactions a shadow ray is traced to the light source as next event
+        estimate.
+    enableInvocationReorder: bool, default=False
+        Instructs the device to reorder invocations between tracing calls to
+        decrease divergence. Can drastically increase performance, but on very
+        simple scenes it can also decrease. Requires hardware support for
+        shader execution reorder.
 
     Stage Parameters
     ----------------
@@ -1678,21 +1695,42 @@ class SceneBackwardTracer(Tracer):
         sampleCoefficient: float = float("NaN"),
         maxTime: float = float("inf"),
         disableDirectLighting: bool = False,
+        disableVolumeScatterMIS: bool = False,
+        enableInvocationReorder: bool = False,
     ) -> None:
         # we need ray tracing for this
         if not isRayTracingEnabled():
             raise RuntimeError("The device does not support ray tracing")
+        # quietly disable MIS if there is no chance for it to succeed
+        if not any(v.supportsNEE for v in scene.materials.volumeModels):
+            disableVolumeScatterMIS = True
+        # check support for required extensions
+        hitObjectSupported = getEnabledRayTracingFeatures().hitObjects
+        if not disableVolumeScatterMIS and not hitObjectSupported:
+            raise RuntimeError(
+                "Device does not support hit objects required for volume scatter MIS"
+            )
+        if enableInvocationReorder and not isInvocationReorderSupported():
+            raise RuntimeError("Device does not support invocation reorder")
         # check components support backward tracing
         if not ray.supportsBackward:
             raise ValueError("Ray model does not support backward mode")
         if source.backwardSourceCode is None:
             raise ValueError("Light source does not support backward mode")
+        if not disableVolumeScatterMIS and not source.supportsMis:
+            raise ValueError("Light source does not support MIS")
         if not disableDirectLighting and not camera.supportDirect:
             raise ValueError("Camera does not support direct mode")
         srfModels = _checkSurfaceModels(scene, "backward")
         volModels = _checkVolumeModels(scene, "backward")
 
-        maxHitsPerRay = maxPathLength - 1 if disableDirectLighting else maxPathLength
+        # calculate max hits per ray
+        maxHitsPerRay = maxPathLength - 1
+        if not disableVolumeScatterMIS:
+            # two samples for volume in-scattering + 1 for surface in-scattering
+            maxHitsPerRay *= 3
+        if not disableDirectLighting:
+            maxHitsPerRay += 1
         # calculate number RNG draws
         nRngInit = wavelengthSource.nRNGSamples
         nRngDirect = SceneDirectTracer.nRngSamples(
@@ -1706,7 +1744,10 @@ class SceneBackwardTracer(Tracer):
         nRngNee = max(self._nRngNeeCommon(source, response, v) for v in volModels)
         nRngMiss = max(self._nRngMiss(v) for v in volModels)
         nRngHit = max(self._nRngHit(s) for s in srfModels)
+        nRngInScat = max(self._nRngInScatter(source, response, v) for v in volModels)
         nRngLoop = nRngProp + max(nRngMiss, nRngHit) + nRngNee
+        if not disableVolumeScatterMIS:
+            nRngLoop += nRngInScat
         nRNG = nRngInit + maxPathLength * nRngLoop
         # init
         super().__init__(
@@ -1746,14 +1787,18 @@ class SceneBackwardTracer(Tracer):
             CAMERA_SAMPLE_RNG_DIM=cameraSampleRngDim,
             DIRECT_RAY_PAYLOAD_LOCATION=1,
             DIRECT_SAMPLING_RNG_STRIDE=nRngDirect,
+            DISABLE_VOLUME_SCATTER_MIS=disableVolumeScatterMIS,
             DISABLE_DIRECT_LIGHTING=disableDirectLighting,
             INLINE_VOLUME_MODEL=inlineVolModule,
             INDIRECT_DISPATCH=self._dispatchIndirect,
             MISS_STRIDE=1 if disableDirectLighting else 2,
             PATH_LENGTH=maxPathLength,
             PROXY_RAY="BackwardRay",
+            PROXY_STRIDE=3 if disableVolumeScatterMIS else 4,
             RAY_TRACING_PIPELINE=True,
             TRACE_RNG_STRIDE=nRngLoop,
+            TRACER_REORDER_THREADS=enableInvocationReorder,
+            VOLUME_IN_SCATTERING_MIS_DIM_STRIDE=nRngInScat,
         )
         headers = {
             "callback.glsl": callback.sourceCode,
@@ -1767,7 +1812,16 @@ class SceneBackwardTracer(Tracer):
         }
         session = CompilerSession(preamble, headers)
         # compile code
-        volumeProxies = _createVolumeProxies(scene.materials, "backward", ray, session)
+        volumeProxies = []
+        if not inlineVolModule:
+            extras = (
+                []
+                if disableVolumeScatterMIS
+                else ["tracer/scene/backward/volume.nee.rcall.glsl"]
+            )
+            volumeProxies = _createVolumeProxies(
+                scene.materials, "backward", ray, session, extras=extras
+            )
         # we start with miss shaders, as later we might inline the non transparent model
         traverse_miss_code = _compileTemplateShader(
             scene.materials.volumeModels,
@@ -1860,6 +1914,16 @@ class SceneBackwardTracer(Tracer):
         """number rng samples in miss shader"""
         n = vol.rngDraws.sampleVolumeInteraction
         n += vol.rngDraws.volumeScatterRay  # NEE
+        return n
+
+    @staticmethod
+    def _nRngInScatter(light: LightSource, resp: HitResponse, vol: VolumeModel) -> int:
+        n = 4 * vol.rngDraws.applyVolumeEffect
+        n += 2 * vol.rngDraws.volumeScatterRay
+        n += vol.rngDraws.sampleVolumeNeeStepSize
+        n += light.rngDraws.sampleLightNeeStepSize
+        n += 2 * light.rngDraws.sampleLightMis
+        n += 2 * resp.nRNGSamples
         return n
 
     @staticmethod

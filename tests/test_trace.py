@@ -588,16 +588,31 @@ def test_SceneDirectTracer(limitTime: bool):
     assert stats.absorbed > 0
 
 
-@pytest.mark.parametrize("inlineVolumeModels", [True, False])
-@pytest.mark.parametrize("disableDirect", [True, False])
-@pytest.mark.parametrize("disableScattering", [True, False])
+@pytest.mark.parametrize(
+    "inlineVolumeModels,disableDirect,disableScattering,disableVolumeMIS,enableInvocationReorder",
+    [
+        (True, False, False, False, False),
+        (False, False, False, True, False),
+        (True, True, False, True, False),
+        (False, True, False, False, False),
+        (True, False, True, False, False),
+        (False, False, True, True, False),
+        (True, True, True, False, False),
+        (False, False, False, False, True),
+        (True, False, False, False, True),
+    ],
+)
 def test_SceneBackwardTracer(
     inlineVolumeModels: bool,
     disableDirect: bool,
     disableScattering: bool,
+    disableVolumeMIS: bool,
+    enableInvocationReorder: bool,
 ) -> None:
     if not isRayTracingEnabled():
         pytest.skip("ray tracing is not supported")
+    if enableInvocationReorder and not isInvocationReorderSupported():
+        pytest.skip("invocation reorder is not supported")
 
     N = 32 * 256
     MAX_LENGTH = 8
@@ -684,6 +699,8 @@ def test_SceneBackwardTracer(
         sampleCoefficient=0.0 if disableScattering else float("NaN"),
         maxTime=T_MAX,
         disableDirectLighting=disableDirect,
+        disableVolumeScatterMIS=disableVolumeMIS,
+        enableInvocationReorder=enableInvocationReorder,
     )
     # run pipeline
     pl.runPipeline(tracer.collectStages())
@@ -692,8 +709,8 @@ def test_SceneBackwardTracer(
     assert recorder.queue is not None
     hits = recorder.queue.view(0)
 
-    if disableScattering and disableDirect:
-        # We can only connect to the light source at scatter points -> expect no hits
+    if disableScattering and disableDirect and disableVolumeMIS:
+        # this combination makes it impossible for the tracer to create hits
         assert stats.scattered == 0
         assert hits.count == 0
         return  # nothing more to test

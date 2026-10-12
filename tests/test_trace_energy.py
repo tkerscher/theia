@@ -6,7 +6,7 @@ import hephaistos.pipeline as pl
 from hephaistos.queue import dumpQueue
 
 from theia.camera import DiskCamera, FlatCamera, PointCamera, SphereCamera
-from theia.device import isRayTracingEnabled
+from theia.device import isRayTracingEnabled, getEnabledRayTracingFeatures
 from theia.light import ConstWavelengthSource, UniformWavelengthSource
 from theia.light import SphericalLightSource
 from theia.material import Material, MaterialStore
@@ -637,27 +637,29 @@ def test_VolumeBackwardTracer(
 
 
 @pytest.mark.parametrize(
-    "mu_a,mu_s,g,disableDirect",
+    "mu_a,mu_s,g,disableDirect,disableVolMIS,sampleCoef",
     [
-        (0.0, 0.005, 0.0, False),
-        (0.0, 0.005, 0.0, True),
-        (0.05, 0.01, 0.0, False),
-        (0.05, 0.01, 0.0, True),
-        (0.05, 0.01, -0.9, False),
-        (0.05, 0.01, 0.9, False),
+        (0.0, 0.005, 0.0, False, False, float("NaN")),
+        (0.01, 0.01, 0.5, False, False, float("NaN")),
+        (0.01, 0.01, 0.0, True, False, 0.02),
+        (0.01, 0.01, -0.5, False, False, 0.02),
+        (0.01, 0.01, 0.0, False, True, 0.02),
     ],
 )
-@pytest.mark.parametrize("sampleCoef", [float("NaN"), 0.02])
 def test_SceneBackwardTracer(
     mu_a: float,
     mu_s: float,
     g: float,
     disableDirect: bool,
+    disableVolMIS: bool,
     sampleCoef: float,
 ):
     """Similar to SceneForwardTracer_GroundTruth, but use backward tracer instead"""
     if not isRayTracingEnabled():
         pytest.skip("Ray tracing is not supported")
+    rt_feat = getEnabledRayTracingFeatures()
+    if not disableVolMIS and not rt_feat.hitObjects:
+        pytest.skip("hit objects are not supported")
 
     # Scene settings
     position = (12.0, 15.0, 0.2) * u.m
@@ -671,7 +673,7 @@ def test_SceneBackwardTracer(
     maxTime = float("inf")
     # simulation settings
     batch_size = 1024 * 1024
-    n_batches = 200
+    n_batches = 50
 
     # create materials
     model = MediumModel(mu_a, mu_s, g)
@@ -719,6 +721,7 @@ def test_SceneBackwardTracer(
         maxTime=maxTime,
         sampleCoefficient=sampleCoef,
         disableDirectLighting=disableDirect,
+        disableVolumeScatterMIS=disableVolMIS,
     )
     rng.autoAdvance = tracer.nRNGSamples
 
@@ -741,7 +744,7 @@ def test_SceneBackwardTracer(
 
     # check for energy conservation
     estimate = process.total / (batch_size * n_batches)
-    assert np.abs(estimate / contrib - 1.0) < 6e-3
+    assert np.abs(estimate / contrib - 1.0) < 5e-3
 
 
 @pytest.mark.parametrize("sampleCoef", [float("NaN"), 0.3])

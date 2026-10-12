@@ -79,10 +79,12 @@ struct ApplyData{
 };
 layout(location = 1) callableDataEXT ApplyData applyData;
 
+#ifndef PROXY_STRIDE
 #ifdef RAY_PARTICLE
 #define PROXY_STRIDE 2
 #else
 #define PROXY_STRIDE 3
+#endif
 #endif
 
 float sampleInteractionLength_proxy(

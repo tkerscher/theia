@@ -62,12 +62,14 @@ class VolumeModel(ABC):
         rngDraws: VolumeRNGDraws,
         # sbtRecord: bytes | None = None,
         supportsNEE: bool = False,
+        supportsMIS: bool = False,
         supportsParticle: bool = False,
         requiredMediumProperties: set[str] = set(),
     ) -> None:
         self.rngDraws = rngDraws
         # self.sbtRecord = sbtRecord
         self.supportsNEE = supportsNEE
+        self.supportsMIS = supportsMIS
         self.supportsParticle = supportsParticle
         self.requiredMediumProperties = frozenset(requiredMediumProperties)
 
@@ -138,6 +140,7 @@ class Attenuating(VolumeModel, name="attenuating"):
         super().__init__(
             rngDraws=rngDraws,
             supportsNEE=True,
+            supportsMIS=True,
             supportsParticle=True,
             requiredMediumProperties={
                 "absorption_coef",

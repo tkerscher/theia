@@ -15,7 +15,7 @@ void traceNee(
     inout uint dim
 ) {
     //is there even a chance for successfull connection?
-    if (ray.mediumIdx != ray.mediumIdx) return;
+    if (ray.mediumIdx != source.mediumIdx) return;
 
     float dist = distance(ray.position, source.position);
     //trace shadow ray
