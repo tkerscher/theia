@@ -323,8 +323,9 @@ def uploadTables(data: list[NDArray]) -> tuple[hp.Tensor, list[int]]:
         pad = align_pad(adr, Table.ALIGNMENT)
         adr += pad
         ptr += pad
+        assert (adr & (Table.ALIGNMENT - 1)) == 0, "wrong alignment"
         adr_list.append(adr)
-        n = table.copy(ptr)
+        n = table.copy(ptr, unsafe=True)  # we copy to buffer -> skip checks
         adr += n
         ptr += n
 

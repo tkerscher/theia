@@ -184,12 +184,12 @@ class TableProperty(Property, ext="table"):
             return 0
         elif self.table.constant:
             # we can store the constant directly in the property table
-            self.data = unpack("<Q", pack("<If", 0xF, self.table.samples.item()))[0]
             self.data = Table.createConstantValuePtr(self.table.samples.item())
             return 0
         else:
             self.data = address
-            return self.table.copy(ptr)
+            assert (address & (Table.ALIGNMENT - 1)) == 0, "wrong alignment"
+            return self.table.copy(ptr, unsafe=True)  # we copy to buffer -> skip checks
 
     def save(self, file) -> None:
         if self.table is not None:
@@ -302,14 +302,17 @@ class PropertyTable:
         tableSize = 1 + len(self._slots) * len(self._entries)
         nbytes = tableSize * 8
         align = lambda o, a: (a - (o % a)) % a  # (offset, alignment) -> padding
+        maxAlign = 8  # align to largest requirement to make offsets easier
         for slot, entry in product(self._slots, self._entries.values()):
             if slot in entry:
                 prop = entry[slot]
-                nbytes += align(nbytes, prop.alignment)
-                nbytes += prop.nbytes
+                if prop.nbytes > 0:  # only pad if there is actual data
+                    nbytes += align(nbytes, prop.alignment)
+                    nbytes += prop.nbytes
+                    maxAlign = max(maxAlign, prop.alignment)
         # allocate memory
         buffer = hp.Buffer(nbytes)
-        self._tensor = hp.Tensor(nbytes)
+        self._tensor = hp.Tensor(nbytes, alignment=maxAlign)
 
         # skip table for now, we first want to write the additional data
         ptr = buffer.address
@@ -318,7 +321,8 @@ class PropertyTable:
         for slot, entry in product(self._slots, self._entries.values()):
             if slot in entry:
                 prop = entry[slot]
-                offset += align(ptr + offset, prop.alignment)
+                if prop.nbytes > 0:  # only pad if there is actual data written
+                    offset += align(adr + offset, prop.alignment)
                 offset += prop.write(ptr + offset, adr + offset)
         assert offset == nbytes  # boundary check
         # write table itself at the beginning of buffer
