@@ -99,13 +99,9 @@ ResultCode updateRayIS(
             // -> we need to divide by the scatter coef if we did not hit anything
             ray.lin_contrib /= params.sampleCoefficient;
         }
-
-        //apply volume effects
-        applyVolume(ray, dist, hit, idx, dim);
     }
-    //If sampleCoefficient is zero, we didn't do any importance sampling
-    // -> do nothing
-    return RESULT_CODE_SUCCESS;
+    //apply volume effects
+    return applyVolume(ray, dist, hit, idx, dim);
 }
 
 ResultCode propagate(
@@ -197,8 +193,10 @@ ResultCode propagateSampled(
     ResultCode code = propagateRay(ray, dist);
     if (code < 0) return code;
     //apply volume effects
-    code = updateRayIS(ray, dist, hit, params, idx, dim);
-    if (code < 0) return code;
+    if (ray.mediumIdx != VACUUM_MEDIUM_IDX) {
+        code = updateRayIS(ray, dist, hit, params, idx, dim);
+        if (code < 0) return code;
+    }
 
     //boundary check
     return checkBoundary(ray, params);

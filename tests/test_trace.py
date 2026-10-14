@@ -5,15 +5,22 @@ import hephaistos.pipeline as pl
 import numpy as np
 
 from itertools import product
+import warnings
 
 from theia.camera import FlatCamera, PointCamera, SphereCamera
 from theia.device import isInvocationReorderSupported, isRayTracingEnabled
-from theia.light import PencilLightSource, SphericalLightSource, UniformWavelengthSource
+from theia.light import ConstWavelengthSource, UniformWavelengthSource
+from theia.light import PencilLightSource, SphericalLightSource
 from theia.material import Material, MaterialStore, getPropertySamples, VACUUM_IDX
 from theia.model import BK7Model, DispersionFreeMedium, PureWaterModel
 from theia.random import PhiloxRNG
 from theia.ray import UnpolarizedRay
-from theia.response import EmptyResponse, HitRecorder
+from theia.response import (
+    EmptyResponse,
+    HitRecorder,
+    IntegratingHitResponse,
+    UniformValueResponse,
+)
 from theia.scene import MeshStore, RectBBox, Scene, Transform
 from theia.surface import AbsorbingSurface, BorderSurface, DielectricSurface
 from theia.target import SphereTarget, SphereTargetGuide
@@ -1100,3 +1107,82 @@ def test_rayOffset(dist: float):
     assert stats.mismatch == 0
     assert stats.volume == 2 * N
     assert stats.absorbed == N
+
+
+@pytest.mark.parametrize("sampleCoef", [float("NaN"), 0.0, 0.05])
+def test_SceneForwardTracer_sampleCoef(sampleCoef: float) -> None:
+    """regression test checking correct implementation of sampleCoef
+
+    There are three different regimes of sampleCoefs that dictate how the tracer
+    samples step sizes:
+     - NaN or negative: Importance sample volume ("classic")
+     - Positive:        Use a fixed exponential distribution ~exp(-sampleCoef*d)
+     - Zero:            Disable sampling volume scatter points
+
+    Each case needs to carefully adjust the ray weight to give an unbiased
+    estimate. This test checks for that.
+    """
+    if not isRayTracingEnabled():
+        pytest.skip("ray tracing is not supported")
+
+    # scene settings
+    r_outer = 10.0 * u.m
+    r_inner = 5.0 * u.m
+    mu_a = 0.1 / u.m
+    light_pos = (-40.0, 0.3, -0.7) * u.m
+    lam = 400.0 * u.nm
+    # simulation settings
+    batch_size = 1024 * 1024
+    n_batches = 4
+
+    # create materials
+    model = DispersionFreeMedium(mu_a=mu_a)
+    with warnings.catch_warnings(action="ignore"):
+        medium = model.createMedium(physicModel=Attenuating())
+    border = Material("border", medium, None, BorderSurface())
+    detMat = Material("det", None, medium, AbsorbingSurface(), flags="DB")
+    matStore = MaterialStore([border, detMat])
+    # create scene
+    meshStore = MeshStore({"cube": "assets/cube.ply"})
+    outer = meshStore.createInstance("cube", "border", Transform.Scale(r_outer))
+    inner = meshStore.createInstance("cube", "det", Transform.Scale(r_inner))
+    scene = Scene([outer, inner], matStore)
+
+    # create tracer
+    ray = UnpolarizedRay()
+    rng = PhiloxRNG(key=0xC0FFEE)
+    photons = ConstWavelengthSource(lam)
+    light = PencilLightSource(
+        photons,
+        mediumIdx=VACUUM_IDX,
+        position=light_pos,
+        direction=(1.0, 0.0, 0.0),
+        timeRange=(0.0, 0.0),
+    )
+    response = IntegratingHitResponse(UniformValueResponse())
+    tracer = theia.trace.SceneForwardTracer(
+        batch_size,
+        ray,
+        light,
+        response,
+        rng,
+        scene,
+        sampleCoefficient=sampleCoef,
+    )
+    rng.autoAdvance = tracer.nRNGSamples
+    # create pipeline + scheduler
+    results = []
+    process = lambda c, b, a: results.append(np.copy(response.result(c)))
+    pipeline = pl.Pipeline(tracer.collectStages())
+    scheduler = pl.PipelineScheduler(pipeline, processFn=process)
+    # run batches
+    scheduler.schedule([{}] * n_batches)
+    scheduler.wait()
+    # destroy scheduler to allow for freeing resources
+    scheduler.destroy()
+    hp.checkCurrentDeviceHealth()
+
+    # check estimate
+    est = np.sum(results) / (batch_size * n_batches)
+    exp = np.exp(-mu_a * (r_outer - r_inner))
+    assert abs(est / exp - 1.0) < 5e-3
