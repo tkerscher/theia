@@ -243,7 +243,7 @@ class Fluorescent(VolumeModel, name="fluorescent"):
             requiredMediumProperties={
                 # LUTs
                 "absorption_coef",
-                "fluorescent_coef",
+                "fluorescence_coef",
                 "scattering_coef",
                 "log_phase_function",
                 "phase_sampling",
