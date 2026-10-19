@@ -10,9 +10,11 @@ from theia.light import SphericalLightSource, UniformWavelengthSource
 from theia.material import MaterialStore
 from theia.model import PureWaterModel
 from theia.random import PhiloxRNG
+from theia.ray import UnpolarizedRay
 from theia.response import HistogramHitResponse, UniformValueResponse
 from theia.target import SphereTarget
 from theia.trace import VolumeForwardTracer
+from theia.volume import Attenuating
 
 
 def test_ConvergeHistogramTask():
@@ -41,30 +43,32 @@ def test_ConvergeHistogramTask():
     rtol = 5e-4
 
     # create medium
-    medium = PureWaterModel().createMedium()
+    medium = PureWaterModel().createMedium(physicModel=Attenuating())
     store = MaterialStore([], media=[medium])
+    medIdx = store.media["water"]
     # create pipeline
+    ray = UnpolarizedRay()
     rng = PhiloxRNG(key=0xC0FFEE)
     photons = UniformWavelengthSource(lambdaRange=lambda_range)
-    light = SphericalLightSource()  # we will pass light params through the task
+    # we will pass light params through the task
+    light = SphericalLightSource(photons, mediumIdx=medIdx)
     target = SphereTarget(position=target_pos, radius=radius)
     response = HistogramHitResponse(
-        UniformValueResponse(), nBins=n_bins, binSize=bin_size, t0=bin_t0
+        UniformValueResponse(), binCount=n_bins, binSize=bin_size, t0=bin_t0
     )
     tracer = VolumeForwardTracer(
         batch_size,
+        ray,
         light,
         target,
-        photons,
         response,
         rng,
-        medium="water",
-        materials=store,
+        store,
+        volume="water",
         maxTime=maxTime,
-        nScattering=max_length,
-        scatterCoefficient=scatter_coef,
+        maxPathLength=max_length,
+        sampleCoefficient=scatter_coef,
     )
-    rng.autoAdvance = tracer.nRNGSamples
     # create pipeline + scheduler
     pipeline = pl.Pipeline(tracer.collectStages())
     scheduler = pl.DynamicTaskScheduler(pipeline)

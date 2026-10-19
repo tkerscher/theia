@@ -74,14 +74,12 @@ class ConvergeHistogramTask(DynamicTask):
         rtol: float = 5e-5,
         finishedCallback: Callable[[ConvergeHistogramTask], None] | None = None,
     ) -> None:
-        super().__init__(params, pipeline, initialBatchCount=initialBatchCount)
         # check arguments
-        if not response.retrieve:
-            raise ValueError("Task requires response to retrieve results!")
         if initialBatchCount < 2:
             raise ValueError("initialBatchCount must be at least 2!")
         if extraBatchCount < 1:
             raise ValueError("extraBatchCount must be at least1!")
+        super().__init__(params, pipeline, initialBatchCount=initialBatchCount)
         # save params
         self._response = response
         self._extraCount = extraBatchCount
@@ -93,7 +91,7 @@ class ConvergeHistogramTask(DynamicTask):
         self._callback = finishedCallback
 
         # allocate variables for result
-        self._result = np.zeros(response.nBins)
+        self._result = np.zeros(response.binCount)
         self._totalPhotonsMean = 0.0
         self._sumSquareErr = 0.0
 
