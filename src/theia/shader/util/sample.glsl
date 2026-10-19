@@ -21,8 +21,14 @@ vec3 sphericalToCartessian(float phi, float cos_theta) {
 */
 vec3 sampleDirectionCone(float cos_opening, vec2 rng) {
     float phi = TWO_PI * rng.x;
-    float cos_theta = (1.0 - rng.y) + cos_opening * rng.y;
-    return sphericalToCartessian(phi, cos_theta);
+    float t = max(1.0 - cos_opening, 0.0) * rng.y;
+    float cos_theta = 1.0 - t;
+    float sin_theta = sqrt(t * (2.0 - t));
+    return vec3(
+        sin_theta * sin(phi),
+        sin_theta * cos(phi),
+        cos_theta
+    );
 }
 
 /**
@@ -58,7 +64,12 @@ vec3 sampleUnitDisk(vec2 rng) {
 vec3 sampleHemisphere(vec2 rng) {
     float phi = TWO_PI * rng.x;
     float cos_theta = 1.0 - rng.y; //exclude 0.0
-    return sphericalToCartessian(phi, cos_theta);
+    float sin_theta = sqrt(rng.y * (2.0 - rng.y));
+    return vec3(
+        sin_theta * sin(phi),
+        sin_theta * cos(phi),
+        cos_theta
+    );
 }
 
 /**
@@ -85,6 +96,16 @@ vec3 sampleUnitSphere(vec2 rng) {
     float phi = TWO_PI * rng.x;
     float cos_theta = 2.0 * rng.y - 1.0;
     return sphericalToCartessian(phi, cos_theta);
+}
+
+/**
+ * Implements the Box-Muller method to sample two independent normal distributed
+ * numbers.
+*/
+vec2 sampleGaussian2D(vec2 rng) {
+    float r = sqrt(-2.0 * log(1.0 - rng.x));
+    float theta = TWO_PI * rng.y;
+    return vec2(r * cos(theta), r * sin(theta));
 }
 
 #endif

@@ -42,8 +42,13 @@ CompressedTargetSample checkIntersect(vec3 observer, vec3 direction, TargetSampl
     CompressedTargetSample c = checkSample(observer, ts);
 
     //additionally check direction
+    //for small distances, switch to distance check instead to avoid large
+    //rounding errors caused by float
+    vec3 delta = ts.position - observer;
+    float t = dot(delta, direction);
+    float perp = length(delta - t * direction);
     vec3 sampleDir = normalize(ts.position - observer);
-    c.error += (int(length(sampleDir - direction) > 5e-5) << 3);
+    c.error += (int(t < 0.0 || perp > max(1e-5, 5e-5 * abs(t))) << 3);
 
     return c;
 }

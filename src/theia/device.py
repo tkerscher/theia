@@ -10,6 +10,8 @@ __all__ = [
     "isDeviceSuitable",
     "isInvocationReorderSupported",
     "isRayTracingEnabled",
+    "getEnabledFloatControl",
+    "getEnabledFma",
     "getEnabledRayTracingFeatures",
     "getEnabledRayTracingProperties",
     "selectDevice",
@@ -24,6 +26,12 @@ def __dir__():
 def getEnabledAtomics() -> set[hp.Atomics]:
     """Returns a cached version of currently enabled atomics"""
     return hp.getEnabledAtomics()
+
+
+@cache
+def getEnabledFloatControl() -> hp.FloatControlSupport:
+    """Returns a cached version of currently supported float controls"""
+    return hp.getFloatControlSupport()
 
 
 @cache
@@ -145,6 +153,8 @@ def initializeDevice(*, useSelectedDevice: bool = True, force: bool = False) -> 
 
     # reset any cached device specific properties
     getEnabledAtomics.cache_clear()
+    getEnabledFloatControl.cache_clear()
+    getEnabledFma.cache_clear()
     getEnabledRayTracingFeatures.cache_clear()
     getEnabledRayTracingProperties.cache_clear()
     getPreamble.cache_clear()
@@ -183,6 +193,21 @@ def initializeDevice(*, useSelectedDevice: bool = True, force: bool = False) -> 
             "Some features might not be available."
         )
     hp.enableAtomics(requestedAtomics)
+
+    # float control and fma
+    supportedFloatControl = hp.getFloatControlSupport(deviceId)
+    if not supportedFloatControl.roundingModeRTEFloat32:
+        warnings.warn(
+            "Selected device does not guarantee support for rounding "
+            "to even (RTE) mode. Some calculations may produce larger "
+            "errors."
+        )
+    supportedFma = hp.getFmaSupport(deviceId)
+    if not supportedFma.float32:
+        warnings.warn(
+            "Selected device does not guarantee fused fma support. "
+            "Correct error calculations can thus not be guaranteed."
+        )
 
     # query ray tracing support
     rt_features = hp.getRayTracingFeatures(deviceId)
