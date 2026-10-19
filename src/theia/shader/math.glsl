@@ -1,6 +1,8 @@
 #ifndef _MATH_INCLUDE
 #define _MATH_INCLUDE
 
+#include "util/float.glsl"
+
 #define PI_OVER_FOUR 0.7853981633974483096
 #define PI_OVER_TWO 1.570796326794896619
 #define PI 3.141592653589793238
@@ -33,8 +35,8 @@ float copySignBit(float f, float s) {
 //catastrophic cancelation. See PBRTv4: B.2.9
 float prodDiff(float a, float b, float c, float d) {
     precise float cd = c * d;
-    precise float diff = fma(a, b, -cd);
-    precise float err = fma(-c, d, cd);
+    precise float diff = fmaKHR(a, b, -cd);
+    precise float err = fmaKHR(-c, d, cd);
     return diff + err;
 }
 

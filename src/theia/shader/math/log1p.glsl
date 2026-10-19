@@ -32,6 +32,8 @@
 #ifndef _INCLUDE_MATH_LOGP1
 #define _INCLUDE_MATH_LOGP1
 
+#include "util/float.glsl"
+
 //calculates log(1.0+a). Max ulp error 0.87168
 float log1p(float a) {
     const float LOG_TWO = 0.693147182;     // 0x1.62e430p-1
@@ -44,21 +46,21 @@ float log1p(float a) {
     e = (floatBitsToInt(u) - floatBitsToInt(0.75)) & int(0xff800000);
     m = intBitsToFloat(floatBitsToInt(a) - e);
     s = intBitsToFloat(floatBitsToInt(4.0) - e); // s' in [2**-126,2**26]
-    m = m + fma(0.25, s, -1.0);
+    m = m + fmaKHR(0.25, s, -1.0);
     // approximate log(1+m) on [-0.25, 0.5]
     s = m * m;
-    r =           -4.54559326e-2;       // -0x1.746000p-5
-    t =            1.05529785e-1;       //  0x1.b04000p-4
-    r = fma(r, s, -1.32279143e-1);      // -0x1.0ee85ep-3
-    t = fma(t, s,  1.44911006e-1);      //  0x1.28c71ap-3
-    r = fma(r, s, -1.66416913e-1);      // -0x1.54d264p-3
-    t = fma(t, s,  1.99886635e-1);      //  0x1.995e2ap-3
-    r = fma(r, s, -2.50001878e-1);      // -0x1.00007ep-2
-    r = fma(t, m, r);
-    r = fma(r, m,  3.33335280e-1);      //  0x1.5555d8p-2
-    r = fma(r, m, -5.00000000e-1);      // -0x1.000000p-1
-    r = fma(r, s, m);
-    r = fma(float(e), LOG_TWO * TWO_TO_M23, r);
+    r =              -4.54559326e-2;       // -0x1.746000p-5
+    t =               1.05529785e-1;       //  0x1.b04000p-4
+    r = fmaKHR(r, s, -1.32279143e-1);      // -0x1.0ee85ep-3
+    t = fmaKHR(t, s,  1.44911006e-1);      //  0x1.28c71ap-3
+    r = fmaKHR(r, s, -1.66416913e-1);      // -0x1.54d264p-3
+    t = fmaKHR(t, s,  1.99886635e-1);      //  0x1.995e2ap-3
+    r = fmaKHR(r, s, -2.50001878e-1);      // -0x1.00007ep-2
+    r = fmaKHR(t, m, r);
+    r = fmaKHR(r, m,  3.33335280e-1);      //  0x1.5555d8p-2
+    r = fmaKHR(r, m, -5.00000000e-1);      // -0x1.000000p-1
+    r = fmaKHR(r, s, m);
+    r = fmaKHR(float(e), LOG_TWO * TWO_TO_M23, r);
 
     // special cases: a <= -1, +inf, NaN
     bool  ok = (a > -1.0) && (a < INF_F);
