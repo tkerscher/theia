@@ -23,7 +23,7 @@ void main() {
     //call model function
     applyData.result = applyVolume(
         applyData.ray,
-        applyData.dist,
+        dist,
         hit,
         gl_LaunchIDEXT.x,
         applyData.dim
