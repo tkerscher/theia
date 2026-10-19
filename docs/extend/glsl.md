@@ -459,14 +459,50 @@ have to use it in other components. The following functions can be assumed to
 be always available:
 
 ```GLSL
-//normal ones advances i
-float random(uint stream, inout uint i);
-vec2 random2D(uint stream, inout uint i);
-//static ones do not advance i
-float random_s(uint stream, uint i);
-vec2 random2D_s(uint stream, uint i);
+//normal ones return floats in [0,1) and advance dim by one
+float random(uint stream, inout uint dim);
+vec2 random2D(uint stream, inout uint dim);
+vec3 random3D(uint stream, inout uint dim);
+vec4 random4D(uint stream, inout uint dim);
+//static ones (_s) do not advance dim
+float random_s(uint stream, uint dim);
+vec2 random2D_s(uint stream, uint dim);
+vec3 random3D_s(uint stream, uint dim);
+vec4 random4D_s(uint stream, uint dim);
+//binary ones (_b, _bs) return the raw 32 bit words instead
+uint random_b(uint stream, inout uint dim);
+uvec2 random2D_b(uint stream, inout uint dim);
+uvec3 random3D_b(uint stream, inout uint dim);
+uvec4 random4D_b(uint stream, inout uint dim);
+uint random_bs(uint stream, uint dim);
+uvec2 random2D_bs(uint stream, uint dim);
+uvec3 random3D_bs(uint stream, uint dim);
+uvec4 random4D_bs(uint stream, uint dim);
 ```
 
 All of these functions take the same arguments that are usually passed to the
-components and either return a single `float` or a `vec2`. You normally use the
-version without `_s` to automatically advance the stream.
+components. You normally use the version without `_s` to automatically advance
+the stream. Note that each call consumes exactly one dimension regardless of
+how many numbers it returns, i.e. `random2D` advances `dim` by one, not two.
+Draw numbers that belong together, e.g. the two coordinates of a sampled
+direction, with a single multidimensional call: quasi-random generators like
+`SobolQRNG` only stratify the numbers within one call.
+
+The number of dimensions a component consumes per call must be reported on the
+Python side (e.g. `nRNGSamples` or the various `rngDraws` fields) so that
+tracers can assign each component its own range of dimensions. Count each call
+as one, take the maximum over all code paths, and include the draws of any
+helper function you pass `idx, dim` to.
+
+If you implement your own generator, you only need to provide the four `_bs`
+functions and include `random/rng_polyfill.glsl` afterwards, which defines all
+other variants on top of them:
+
+```GLSL
+uint random_bs(uint stream, uint dim);
+uvec2 random2D_bs(uint stream, uint dim);
+uvec3 random3D_bs(uint stream, uint dim);
+uvec4 random4D_bs(uint stream, uint dim);
+
+#include "random/rng_polyfill.glsl"
+```

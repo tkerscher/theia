@@ -21,7 +21,7 @@ uniform SobolParams {
  //Based on the implementation by Blender Foundation (2011-2022) licensed under
  //Apache-2.0 and the supplementary code of the above paper
 
-const uint sobolDirections[2][32] = {
+const uint sobolDirections[4][32] = {
     {
         0x80000000, 0x40000000, 0x20000000, 0x10000000,
         0x08000000, 0x04000000, 0x02000000, 0x01000000,
@@ -41,7 +41,7 @@ const uint sobolDirections[2][32] = {
         0x88008800, 0xCC00CC00, 0xAA00AA00, 0xFF00FF00,
         0x80808080, 0xC0C0C0C0, 0xA0A0A0A0, 0xF0F0F0F0,
         0x88888888, 0xCCCCCCCC, 0xAAAAAAAA, 0xFFFFFFFF
-    }/*,
+    },
     {
         0x80000000, 0xC0000000, 0x60000000, 0x90000000,
         0xE8000000, 0x5C000000, 0x8E000000, 0xC5000000,
@@ -61,7 +61,7 @@ const uint sobolDirections[2][32] = {
         0xA0858800, 0x914E5400, 0xDBE79E00, 0x25DB6D00,
         0x58800080, 0xE54000C0, 0x79E00020, 0xB6D00050,
         0x800800F8, 0xC00C0074, 0x200200A2, 0x50050093
-    },
+    }/*,
     {
         0x80000000, 0x40000000, 0x20000000, 0xB0000000,
         0xF8000000, 0xDC000000, 0x7A000000, 0x9D000000,
@@ -143,42 +143,60 @@ uint nestedScramble(uint x, uint seed) {
     x = bitfieldReverse(x);
     return x;
 }
-float scrambledSobol(uint scrambled_index, uint dim, uint seed) {
+uint scrambledSobol(uint scrambled_index, uint dim, uint seed) {
     uint bits = sobolBits(scrambled_index, dim);
     seed = combineHash(seed, dim);
-    bits = nestedScramble(bits, seed);
-    return normalizeUint(bits);
+    return nestedScramble(bits, seed);
 }
 
 //theia random API
 
-float random_s(uint a, uint dim) {
-    //creates derivative seed using dimension to decorrelate dimensions
+//random comes in four flavors as denoted by their suffix:
+// - no suffix: returns random float in [0,1) and advances i by one
+// - _s suffix: static version; i will stay the same
+// - _b suffix: returns the binary 32bit word instead of float
+// - _bs suffix: Combination of _b and _s
+//Additionally, one can draw up to 4 numbers in one go (marked as 2D, 3D, 4D).
+//They all advance i by only 1 regardless
+
+uint random_bs(uint stream, uint dim) {
+    stream += sobolParams.offset;
     uint seed = combineHash(sobolParams.seed, hp_mix32(dim));
-    uint index = nestedScramble(a, seed); //scrambled index into Sobol sequence
-    
+    uint index = nestedScramble(stream, seed);
     return scrambledSobol(index, 0, seed);
 }
-float random(uint a, inout uint dim) {
-    float result = random_s(a, dim);
-    dim += 1;
-    return result;
-}
-
-vec2 random2D_s(uint a, uint dim) {
-    //creates derivative seed using dimension to decorrelate dimensions
+uvec2 random2D_bs(uint stream, uint dim) {
+    stream += sobolParams.offset;
     uint seed = combineHash(sobolParams.seed, hp_mix32(dim));
-    uint index = nestedScramble(a, seed); //scrambled index into Sobol sequence
-
-    return vec2(
+    uint index = nestedScramble(stream, seed);
+    return uvec2(
         scrambledSobol(index, 0, seed),
         scrambledSobol(index, 1, seed)
     );
 }
-vec2 random2D(uint a, inout uint dim) {
-    vec2 result = random2D_s(a, dim);
-    dim += 2;
-    return result;
+uvec3 random3D_bs(uint stream, uint dim) {
+    stream += sobolParams.offset;
+    uint seed = combineHash(sobolParams.seed, hp_mix32(dim));
+    uint index = nestedScramble(stream, seed);
+    return uvec3(
+        scrambledSobol(index, 0, seed),
+        scrambledSobol(index, 1, seed),
+        scrambledSobol(index, 2, seed)
+    );
 }
+uvec4 random4D_bs(uint stream, uint dim) {
+    stream += sobolParams.offset;
+    uint seed = combineHash(sobolParams.seed, hp_mix32(dim));
+    uint index = nestedScramble(stream, seed);
+    return uvec4(
+        scrambledSobol(index, 0, seed),
+        scrambledSobol(index, 1, seed),
+        scrambledSobol(index, 2, seed),
+        scrambledSobol(index, 3, seed)
+    );
+}
+
+//the other functions are based on _bs and can be polyfilled
+#include "random/rng_polyfill.glsl"
 
 #endif

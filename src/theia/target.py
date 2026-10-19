@@ -71,7 +71,7 @@ class Target(SourceCodeMixin):
 
     @property
     def nRNGSamples(self) -> int:
-        """Amount of random numbers drawn per sample"""
+        """Number of RNG calls per sample"""
         return self._nRNGSamples
 
 
@@ -117,7 +117,7 @@ class SphereTarget(Target):
         position: tuple[float, float, float] = (0.0, 0.0, 0.0),
         radius: float = 1.0 * u.m,
     ) -> None:
-        super().__init__(nRNGSamples=2, params={"TargetParams": self.TargetParams})
+        super().__init__(nRNGSamples=1, params={"TargetParams": self.TargetParams})
         # save params
         self.setParams(
             position=position,
@@ -181,7 +181,7 @@ class InnerSphereTarget(Target):
         position: tuple[float, float, float] = (0.0, 0.0, 0.0),
         radius: float = 1.0 * u.m,
     ) -> None:
-        super().__init__(nRNGSamples=2, params={"TargetParams": self.TargetParams})
+        super().__init__(nRNGSamples=1, params={"TargetParams": self.TargetParams})
         # save params
         self.setParams(position=position, radius=radius)
 
@@ -278,7 +278,7 @@ class FlatTarget(Target):
         up: tuple[float, float, float] = (0.0, 1.0, 0.0),
     ) -> None:
         super().__init__(
-            nRNGSamples=2,
+            nRNGSamples=1,
             params={"TargetParams": self.TargetParams},
             extra={"direction", "up"},
         )
@@ -384,7 +384,7 @@ class DiskTarget(Target):
         up: tuple[float, float, float] | None = None,
     ) -> None:
         super().__init__(
-            nRNGSamples=2,
+            nRNGSamples=1,
             params={"TargetParams": self.TargetParams},
             extra={"normal", "up"},
         )
@@ -467,7 +467,7 @@ class TargetGuide(SourceCodeMixin):
 
     @property
     def nRNGSamples(self) -> int:
-        """Amount of random numbers drawn per sample"""
+        """Number of RNG calls per sample"""
         return self._nRNGSamples
 
 
@@ -501,7 +501,6 @@ class SphereTargetGuide(TargetGuide):
         _fields_ = [
             ("position", vec3),
             ("radius", c_float),
-            ("_prob", c_float),
         ]
 
     def __init__(
@@ -511,7 +510,7 @@ class SphereTargetGuide(TargetGuide):
         radius: float = 1.0 * u.m,
     ) -> None:
         super().__init__(
-            nRNGSamples=2,
+            nRNGSamples=1,
             params={"TargetGuideParams": self.TargetGuideParams},
         )
         # save params
@@ -523,11 +522,6 @@ class SphereTargetGuide(TargetGuide):
     @property
     def sourceCode(self) -> str:
         return loadShader("target_guide/sphere.glsl")
-
-    def _finishParams(self, i):
-        r = self.getParam("radius")
-        area = 2.0 * np.pi * r**2
-        self.setParam("_prob", 1.0 / area)
 
 
 class FlatTargetGuide(TargetGuide):
@@ -596,7 +590,7 @@ class FlatTargetGuide(TargetGuide):
         up: tuple[float, float, float] = (0.0, 1.0, 0.0),
     ) -> None:
         super().__init__(
-            nRNGSamples=2,
+            nRNGSamples=1,
             params={"TargetGuideParams": self.TargetGuideParams},
             extra={"normal", "up"},
         )
@@ -692,7 +686,7 @@ class DiskTargetGuide(TargetGuide):
         normal: tuple[float, float, float] = (0.0, 0.0, 1.0),
     ) -> None:
         super().__init__(
-            nRNGSamples=2,
+            nRNGSamples=1,
             params={"TargetGuideParams": self.TargetGuideParams},
             extra={"normal"},
         )
@@ -771,7 +765,7 @@ class LightSourceTarget(SourceCodeMixin):
 
     @property
     def nRNGSamples(self) -> int:
-        """Amount of random numbers drawn per sample"""
+        """Number of RNG calls per sample"""
         return self._nRNGSamples
 
 
@@ -833,7 +827,7 @@ class DiskLightSourceTarget(LightSourceTarget):
         up: tuple[float, float, float] | None = None,
     ) -> None:
         super().__init__(
-            nRNGSamples=2,
+            nRNGSamples=1,
             params={"LightTargetParams": self.LightTargetParams},
             extra={"normal", "up"},
         )
@@ -949,7 +943,7 @@ class FlatLightSourceTarget(LightSourceTarget):
         up: tuple[float, float, float] = (0.0, 1.0, 0.0),
     ) -> None:
         super().__init__(
-            nRNGSamples=2,
+            nRNGSamples=1,
             params={"LightTargetParams": self.LightTargetParams},
             extra={"normal", "up"},
         )

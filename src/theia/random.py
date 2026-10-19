@@ -12,7 +12,6 @@ from theia.compiler import compileShader, createPreamble, loadShader
 
 
 __all__ = [
-    "Counter",
     "Key",
     "PhiloxRNG",
     "RNG",
@@ -61,8 +60,7 @@ class RNGBufferSink(PipelineStage):
     baseCount: int, default=0
         Offset into each stream
     sampleDim: int, default=1
-        Dimensionality of the drawn samples. Currently only one and two
-        dimensions supported
+        Dimensionality of the drawn samples. Supports up to four dimensions.
     blockSize: (float, float, float), default=(32, 4, 16)
         Dimension of a single work group in the shape of
         (STREAMS, BATCHES, DRAWS PER BATCH)
@@ -116,7 +114,7 @@ class RNGBufferSink(PipelineStage):
     ) -> None:
         super().__init__({"Params": self.Params})
         # check params
-        if not 1 <= sampleDim <= 2:
+        if not 1 <= sampleDim <= 4:
             raise ValueError("Unsupported sample dimension requested!")
         # save params
         capacity = streams * samples * sampleDim
@@ -212,49 +210,37 @@ class Key(Structure):
         self.hi = value >> 32 & 0xFFFFFFFF
 
 
-class Counter(Structure):
-    _fields_ = [("word", c_uint32 * 4)]
-
-    @property
-    def value(self) -> int:
-        return sum(self.word[i] << (32 * i) for i in range(4))
-
-    @value.setter
-    def value(self, value: int) -> None:
-        for i in range(4):
-            self.word[i] = value >> (32 * i) & 0xFFFFFFFF
-
-
 class PhiloxRNG(RNG):
     """
-    Philox 4x32 RNG
+    Philox 4x32-10 counter-based random number generator.
 
     Parameters
     ----------
     key: int | None, default=None
-        Base key used by the random number generator. Consecutive streams
-        increment the key by one
+        64 bit seed. Different seeds produce independent sequences.
+        If `None`, a random seed is drawn.
     offset: int, default=0
-        Offset into each stream. Can be used to advance the generator.
-    autoAdvance: int, default=0
-        Amount the offset gets incremented with each update call.
+        64 bit run index selecting an independent set of random streams.
+        Advancing by one is enough to ensure no duplicate streams.
+    autoAdvance: int, default=1
+        Amount the offset gets incremented after each update call, i.e. the
+        first update uses the offset as given.
 
     Stage Parameters
     ----------------
-    key: int | None, default=None
-        Base key used by the random number generator. Consecutive streams
-        increment the key by one
-    offset: int, default=0
-        Offset into each stream. Can be used to advance the generator.
-    autoAdvance: int, default=0
-        Amount the offset gets incremented with each update call.
+    key: int
+        64 bit RNG seed
+    offset: int
+        64 bit run index used by the next update
+    autoAdvance: int
+        Amount the offset gets incremented after each update call.
     """
 
     class PhiloxParams(Structure):
-        _fields_ = [("key", Key), ("offset", Counter)]
+        _fields_ = [("key", Key), ("offset", Key)]
 
     def __init__(
-        self, *, key: int | None = None, offset: int = 0, autoAdvance: int = 0
+        self, *, key: int | None = None, offset: int = 0, autoAdvance: int = 1
     ) -> None:
         super().__init__({"PhiloxParams": self.PhiloxParams}, {"autoAdvance"})
         # save params
@@ -265,7 +251,7 @@ class PhiloxRNG(RNG):
 
     @property
     def autoAdvance(self) -> int:
-        """Amount the offset gets incremented with each update call."""
+        """Amount the offset gets incremented after each update call."""
         return self._autoAdvance
 
     @autoAdvance.setter
@@ -276,11 +262,12 @@ class PhiloxRNG(RNG):
     def sourceCode(self) -> str:
         return loadShader("random/philox.glsl")
 
-    def _finishParams(self, i: int) -> None:
+    def update(self, i: int) -> None:
+        super().update(i)
+        # advance after uploading so the first run uses the offset as given
         if self.autoAdvance != 0:
             offset = self.getParam("offset")
             self.setParam("offset", offset + self.autoAdvance)
-        super()._finishParams(i)
 
 
 class SobolQRNG(RNG):

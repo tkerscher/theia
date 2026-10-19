@@ -4,7 +4,7 @@
 #define ONE_MINUS_EPSILON uintBitsToFloat(0x3F7FFFFFu)
 #define EPSILON uintBitsToFloat(0x2F800000u)
 
-//converts the given 32bit unsigned int to a float in the open interval [0,1)
+//converts the given 32bit unsigned int to a float in the half-open interval [0,1)
 float normalizeUint(uint i) {
     return min(ONE_MINUS_EPSILON, i * EPSILON);
 

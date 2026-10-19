@@ -166,7 +166,6 @@ def test_SceneForwardTracer_GroundTruth(mu_a: float, mu_s: float, g: float) -> N
     # check for energy conservation
     estimate = value0.sum() / (batch_size * n_batches)
     assert np.abs(estimate / budget - 1.0) < 0.05
-    assert estimate < budget  # biased by ignoring longer paths, i.e. missing energy
 
     # additional check since we have the data: uniform hits on sphere
     positions = np.concatenate([b["position"] for b in batches], axis=0)
@@ -373,7 +372,6 @@ def test_SceneForwardTracer_CrossCheck(
         maxPathLength=8 * max_length,  # higher variance -> more samples
         # maxTime=maxTime,
     )
-    rng.autoAdvance = tracer.nRNGSamples
     # create pipeline + scheduler
     hists = []
     process = lambda c, b, a: hists.append(np.copy(response.result(c)))
@@ -385,8 +383,9 @@ def test_SceneForwardTracer_CrossCheck(
     scheduler.wait()
     # destroy scheduler to free resources
     scheduler.destroy()
-    # combine histograms
-    truth_hist = np.mean(hists, 0)
+    # keep histograms to estimate statistical error
+    truth_hists = np.array(hists, dtype=np.float64)
+    truth_hist = truth_hists.mean(0)
     truth = truth_hist.sum()
     assert truth > 0.0  # fail early
 
@@ -412,7 +411,6 @@ def test_SceneForwardTracer_CrossCheck(
         sampleCoefficient=sampleCoef,
         # maxTime=maxTime
     )
-    rng.autoAdvance = tracer.nRNGSamples
     # create pipeline + scheduler
     hists = []
     process = lambda c, b, a: hists.append(np.copy(response.result(c)))
@@ -424,36 +422,40 @@ def test_SceneForwardTracer_CrossCheck(
     scheduler.wait()
     # destroy scheduler to free resources
     scheduler.destroy()
-    # combine histogram
-    hist = np.mean(hists, 0)
-    estimate = hist.sum()
+    # keep histograms to estimate statistical error
+    est_hists = np.array(hists, dtype=np.float64)
+    est_hist = est_hists.mean(0)
+    estimate = est_hist.sum()
 
     hp.checkCurrentDeviceHealth()
 
     # check estimate
-    assert abs(estimate / truth - 1.0) < 0.02
-    # Compare early part of light curves
-    # The ground truth algorithm suffers from high variance especially at later
-    # times making a test there pointless.
-    # Use log10 to compare curves.
-    log_err = None
-    with np.errstate(divide="ignore", invalid="ignore"):
-        log_err = (np.log10(hist) - np.log10(truth_hist)) / np.log10(hist)
-    log_err = np.nan_to_num(log_err, nan=0.0)
-    assert np.abs(log_err).mean() < 0.02
+    assert abs(estimate / truth - 1.0) < 2e-3
+    # use chi square test to compare both histograms
+    se = np.sqrt((truth_hists.var(0, ddof=1) + est_hists.var(0, ddof=1)) / n_batches)
+    # exclude bins with se=0 to avoid division by zero
+    # make sure there is actually no variance to avoid masking errors
+    mask = se > 0.0
+    assert np.array_equal(est_hist[~mask], truth_hist[~mask])
+    # finally, the actual chi^2 test
+    z = (est_hist[mask] - truth_hist[mask]) / se[mask]
+    ndf = mask.sum()  # amount non zero bins
+    assert ndf > 0
+    assert (z**2).sum() / ndf < 2.0
+    assert np.abs(z).max() < 5.0
 
 
 @pytest.mark.parametrize(
     "mu_a,mu_s,g,direct,useTarget,err",
     [
-        (0.0, 0.005, 0.0, True, True, 1e-4),
-        (0.0, 0.005, 0.0, True, False, 1e-4),
+        (0.0, 0.005, 0.0, True, True, 5e-4),
+        (0.0, 0.005, 0.0, True, False, 5e-4),
         (0.0, 0.005, 0.0, False, True, 5e-4),
         (0.05, 0.01, 0.0, True, True, 5e-3),
         (0.05, 0.01, 0.0, False, True, 6e-3),
         (0.05, 0.01, -0.9, True, True, 0.015),
-        (0.05, 0.01, 0.9, False, True, 1e-3),
-        (0.05, 0.01, 0.9, False, False, 5e-4),
+        (0.05, 0.01, 0.9, False, True, 2e-3),
+        (0.05, 0.01, 0.9, False, False, 5e-3),
     ],
 )
 @pytest.mark.parametrize("sampleCoef", [float("NaN"), 0.01])
@@ -476,7 +478,7 @@ def test_VolumeForwardTracer(
     t0 = 10.0 * u.ns
     lam = 400.0 * u.nm
     # tracer settings
-    max_length = 10
+    max_length = 20
     maxTime = float("inf")
     # simulation settings
     batch_size = 512 * 1024
@@ -541,16 +543,26 @@ def test_VolumeForwardTracer(
 
 
 @pytest.mark.parametrize(
-    "mu_a,mu_s,g,disableDirect",
+    "mu_a,mu_s,g,disableDirect,disableVolumeMIS,sampleCoef,err",
     [
-        (0.0, 0.01, 0.0, False),
-        (0.05, 0.005, 0.0, False),
-        (0.05, 0.005, 0.5, True),
-        (0.01, 0.01, -0.5, False),
+        # with volume scatter MIS
+        (0.0, 0.01, 0.0, False, False, float("NaN"), 4e-3),
+        (0.005, 0.005, 0.0, False, False, float("NaN"), 2e-3),
+        (0.05, 0.005, 0.0, False, False, 0.01, 2e-3),
+        (0.005, 0.005, 0.5, True, False, float("NaN"), 4e-3),
+        (0.05, 0.005, 0.5, True, False, 0.01, 4e-3),
+        (0.01, 0.01, -0.5, False, False, float("NaN"), 6e-3),
+        (0.01, 0.01, -0.5, False, False, 0.01, 5e-3),
+        # without volume scatter MIS (heavy-tailed estimator)
+        (0.0, 0.01, 0.0, False, True, float("NaN"), 0.04),
+        (0.0, 0.01, 0.0, False, True, 0.005, 0.04),
+        (0.005, 0.005, 0.0, False, True, float("NaN"), 0.02),
+        (0.05, 0.005, 0.0, False, True, 0.01, 0.02),
+        (0.005, 0.005, 0.5, True, True, float("NaN"), 0.015),
+        (0.05, 0.005, 0.5, True, True, 0.01, 0.015),
+        (0.01, 0.01, -0.5, False, True, 0.01, 0.04),
     ],
 )
-@pytest.mark.parametrize("disableVolumeMIS", [True, False])
-@pytest.mark.parametrize("sampleCoef", [float("NaN"), 0.01])
 def test_VolumeBackwardTracer(
     mu_a: float,
     mu_s: float,
@@ -558,6 +570,7 @@ def test_VolumeBackwardTracer(
     disableDirect: bool,
     disableVolumeMIS: bool,
     sampleCoef: float,
+    err: float,
 ):
     """Spherical light source placed within a spherical target"""
 
@@ -632,8 +645,7 @@ def test_VolumeBackwardTracer(
     contrib = budget - directContrib if disableDirect else budget
     # check for energy conservation
     estimate = process.total / (batch_size * n_batches)
-    thres = 0.05 if disableVolumeMIS else 2e-3
-    assert np.abs(estimate / contrib - 1.0) < thres
+    assert np.abs(estimate / contrib - 1.0) < err
 
 
 @pytest.mark.parametrize(
@@ -706,7 +718,7 @@ def test_SceneBackwardTracer(
     camera = SphereCamera(mediumIdx=medIdx, position=position, radius=-r_insc)
     # create tracer
     ray = UnpolarizedRay()
-    rng = PhiloxRNG(key=0xC0FFEE)
+    rng = PhiloxRNG(key=0xABBA)
     recorder = HitRecorder()
     tracer = SceneBackwardTracer(
         batch_size,

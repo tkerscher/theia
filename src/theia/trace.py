@@ -441,7 +441,7 @@ class Tracer(PipelineStage):
 
     @property
     def nRNGSamples(self) -> int:
-        """Amount of random numbers drawn per ray"""
+        """Number of RNG calls per ray"""
         return self._nRNGSamples
 
     @property
@@ -503,7 +503,7 @@ def _getVolumeForwardRNGStride(
     response: HitResponse,
     target: Target | None = None,
 ) -> int:
-    """util func calculating number of rng draws per volume tracing"""
+    """util func calculating number of RNG calls per volume tracing step"""
     result = 0
     result += max(1, volume.rngDraws.sampleInteractionLength)
     result += volume.rngDraws.applyVolumeEffect
@@ -536,7 +536,7 @@ def _getVolumeBackwardRNGStride(
     else:
         result += light.rngDraws.sampleLightNeeStepSize
         result += volume.rngDraws.sampleVolumeNeeStepSize
-        result += 2 * light.rngDraws.sampleLightBackward
+        result += 2 * light.rngDraws.sampleLightMis
         result += 2 * volume.rngDraws.volumeScatterRay
         result += 4 * volume.rngDraws.applyVolumeEffect
         result += 2 * response.nRNGSamples
@@ -667,7 +667,7 @@ class VolumeForwardTracer(Tracer):
             maxHitsPerRay = 1
         # NEE extends path length by one -> reduce path length by one
         pathLength = maxPathLength if disableTargetSampling else maxPathLength - 1
-        # calculate amount of random numbers needed
+        # calculate amount of RNG calls needed
         rngInit = source.rngDraws.sampleLightForward
         if not disableDirectLighting:
             rngInit += volume.rngDraws.applyVolumeEffect
@@ -929,7 +929,7 @@ class VolumeBackwardTracer(Tracer):
             maxHitsPerRay *= 2
         if not disableDirectLighting:
             maxHitsPerRay += 1
-        # calculate number of rng samples
+        # calculate number of RNG calls
         rngInit = wavelengthSource.nRNGSamples + camera.nRNGSamples
         rngStride = _getVolumeBackwardRNGStride(
             volume, response, source, disableVolumeScatterMIS
@@ -939,6 +939,7 @@ class VolumeBackwardTracer(Tracer):
             nRNG += wavelengthSource.nRNGSamples
             nRNG += camera.nRNGDirect
             nRNG += source.rngDraws.sampleLightBackward
+            nRNG += volume.rngDraws.applyVolumeEffect
             nRNG += response.nRNGSamples
         super().__init__(
             batchSize,
@@ -1465,9 +1466,9 @@ class SceneDirectTracer(Tracer):
             raise ValueError("Camera does not support direct mode")
         _checkVolumeModels(scene, "backward")
 
-        # calculate number of rng samples drawn
+        # calculate number of RNG calls
         nRNG = self.nRngSamples(
-            wavelengthSource, source, camera, scene.materials.volumeModels
+            wavelengthSource, source, camera, response, scene.materials.volumeModels
         )
         super().__init__(
             batchSize,
@@ -1559,12 +1560,14 @@ class SceneDirectTracer(Tracer):
         wavelengthSource: WavelengthSource,
         source: LightSource,
         camera: Camera,
+        response: HitResponse,
         volModels: Iterable[VolumeModel],
     ) -> int:
         n = wavelengthSource.nRNGSamples
         n += source.rngDraws.sampleLightBackward
         n += camera.nRNGDirect
         n += max(v.rngDraws.applyVolumeEffect for v in volModels)
+        n += response.nRNGSamples
         return n
 
     def _collectStages(self) -> list[tuple[str, PipelineStage]]:
@@ -1731,10 +1734,10 @@ class SceneBackwardTracer(Tracer):
             maxHitsPerRay *= 3
         if not disableDirectLighting:
             maxHitsPerRay += 1
-        # calculate number RNG draws
+        # calculate number of RNG calls
         nRngInit = wavelengthSource.nRNGSamples
         nRngDirect = SceneDirectTracer.nRngSamples(
-            wavelengthSource, source, camera, scene.materials.volumeModels
+            wavelengthSource, source, camera, response, scene.materials.volumeModels
         )
         if not disableDirectLighting:
             nRngInit += nRngDirect
@@ -1896,14 +1899,14 @@ class SceneBackwardTracer(Tracer):
 
     @staticmethod
     def _nRngProp(vol: VolumeModel) -> int:
-        """number rng samples drawn before surface hit"""
+        """number of RNG calls before surface hit"""
         n = max(1, vol.rngDraws.sampleInteractionLength)
         n += vol.rngDraws.applyVolumeEffect
         return n
 
     @staticmethod
     def _nRngNeeCommon(light: LightSource, resp: HitResponse, vol: VolumeModel) -> int:
-        """number rng samples drawn per next event estimate"""
+        """number of RNG calls per next event estimate"""
         n = vol.rngDraws.applyVolumeEffect
         n += light.rngDraws.sampleLightBackward
         n += resp.nRNGSamples
@@ -1911,7 +1914,7 @@ class SceneBackwardTracer(Tracer):
 
     @staticmethod
     def _nRngMiss(vol: VolumeModel) -> int:
-        """number rng samples in miss shader"""
+        """number of RNG calls in miss shader"""
         n = vol.rngDraws.sampleVolumeInteraction
         n += vol.rngDraws.volumeScatterRay  # NEE
         return n
@@ -1928,7 +1931,7 @@ class SceneBackwardTracer(Tracer):
 
     @staticmethod
     def _nRngHit(srf: SurfaceModel) -> int:
-        """number rng samples in hit shader"""
+        """number of RNG calls in hit shader"""
         n = srf.rngDraws.prepareSurface
         n += srf.rngDraws.sampleSurfaceInteraction
         n += srf.rngDraws.surfaceScatterRay  # NEE
@@ -2020,21 +2023,21 @@ class _SceneTargetTracer(Tracer):
                 raise ValueError("Ray model does not support backward mode")
             if lamSource is None:
                 raise ValueError("No wavelength source specified")
-            nRngInit = source.nRNGSamples
+            nRngInit = lamSource.nRNGSamples + source.nRNGSamples
             source_sourceCode = source.sourceCode
         else:
             raise ValueError("source type is not supported!")
         srfModels = _checkSurfaceModels(scene, direction)
         volModels = _checkVolumeModels(scene, direction)
 
-        # calculate number RNG draws
+        # calculate number of RNG calls
         if targetGuide is None:
             nRngNee = None
         else:
-            nRngNee = self._nRngNee(scene.materials)
+            nRngNee = self._nRngNee(scene.materials, response)
             nRngInit += nRngNee
-        nHitLoop = self._nRngHit(scene.materials, targetGuide, nRngNee)
-        nMissLoop = self._nRngMiss(scene.materials, targetGuide)
+        nHitLoop = self._nRngHit(scene.materials, response, targetGuide, nRngNee)
+        nMissLoop = self._nRngMiss(scene.materials, targetGuide, nRngNee)
         nRngLoop = max(nHitLoop, nMissLoop)
         nTraces = maxPathLength if targetGuide is None else maxPathLength - 1
         nRNG = nRngInit + nTraces * nRngLoop
@@ -2195,18 +2198,21 @@ class _SceneTargetTracer(Tracer):
             raise ValueError("Wavelength source must be defined by light source")
 
     @staticmethod
-    def _nRngNee(mats: MaterialStore) -> int:
-        """Calculates max amount of numbers drawn per NEE ray"""
+    def _nRngNee(mats: MaterialStore, response: HitResponse) -> int:
+        """Calculates max amount of RNG calls per NEE ray"""
         maxProp = max(m.rngDraws.applyVolumeEffect for m in mats.volumeModels)
         nSrf = lambda m: m.rngDraws.prepareSurface + m.rngDraws.processSurfaceTargetHit
         maxSrf = max(nSrf(m) for m in mats.surfaceModels)
-        return maxProp + maxSrf
+        return maxProp + maxSrf + response.nRNGSamples
 
     @staticmethod
     def _nRngHit(
-        mats: MaterialStore, guide: TargetGuide | None, nNEE: int | None
+        mats: MaterialStore,
+        response: HitResponse,
+        guide: TargetGuide | None,
+        nNEE: int | None,
     ) -> int:
-        """Calculates max amount of numbers drawn per surface hit"""
+        """Calculates max amount of RNG calls per surface hit"""
         lv = lambda m: m.rngDraws.sampleInteractionLength + m.rngDraws.applyVolumeEffect
         nProb = max(lv(m) for m in mats.volumeModels)
         if guide:
@@ -2230,14 +2236,17 @@ class _SceneTargetTracer(Tracer):
                 + m.rngDraws.sampleSurfaceInteraction
             )
             nSrf = max(ls(m) for m in mats.surfaceModels)
-            return nProb + nSrf + nNEE
+            # without NEE, responses are created in the hit shader
+            return nProb + nSrf + nNEE + response.nRNGSamples
 
     @staticmethod
-    def _nRngMiss(mats: MaterialStore, guide: TargetGuide | None) -> int:
-        """Calculates max amount of numbers drawn per miss"""
-        nSrf = lambda m: m.rngDraws.prepareSurface + m.rngDraws.processSurfaceTargetHit
+    def _nRngMiss(
+        mats: MaterialStore, guide: TargetGuide | None, nNEE: int | None
+    ) -> int:
+        """Calculates max amount of RNG calls per miss"""
         if guide:
-            nNee = max(nSrf(m) for m in mats.surfaceModels)
+            if nNEE is None:
+                raise ValueError("nNEE must be provided if a guide is given")
             nVPerModel = (
                 lambda m: m.rngDraws.sampleInteractionLength
                 + m.rngDraws.applyVolumeEffect
@@ -2246,7 +2255,7 @@ class _SceneTargetTracer(Tracer):
                 + m.rngDraws.sampleVolumeInteraction
             )
             nVol = max(nVPerModel(m) for m in mats.volumeModels)
-            return nVol + 2 * nNee + guide.nRNGSamples
+            return nVol + 2 * nNEE + guide.nRNGSamples
         else:
             nVPerModel = (
                 lambda m: m.rngDraws.sampleInteractionLength

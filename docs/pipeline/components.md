@@ -138,11 +138,14 @@ Random number generators are responsible for creating the random numbers
 necessary in Monte Carlo simulations. They of course are purely deterministic
 only appearing to be random and will always return the same number for the same
 parameters. Within a single batch of the simulation each light path has its own
-stream of random numbers advanced by a common index. In order for the next batch
-to get fresh numbers this index must be advanced through the `offset` parameter.
-This can be done automatically by the RNG via setting the `autoAdvance`
-parameter accordingly. Usually one uses here the tracer's `nRNGSamples` property
-that tells how many random numbers per stream and batch are used by the tracer.
+stream of random numbers indexed by a dimension that advances by one with each
+draw. The tracer's `nRNGSamples` property tells how many dimensions per stream
+and batch it consumes. In order for the next batch to get fresh numbers, the
+generator must be advanced between batches:
 
-- `PhiloxRNG`
-- `SobolQRNG`
+- `PhiloxRNG`: The `offset` parameter selects an independent set of streams.
+  By default it gets incremented by one after each update (`autoAdvance=1`),
+  so every batch automatically gets fresh numbers.
+- `SobolQRNG`: Setting `advanceSeed` re-scrambles the sequence with a new seed
+  after each update. Alternatively, `offset` can be advanced by the batch size
+  to continue the sequence.

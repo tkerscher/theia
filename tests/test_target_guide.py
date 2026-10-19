@@ -5,7 +5,7 @@ from hephaistos.pipeline import runPipeline
 
 import theia.target
 from theia.random import PhiloxRNG
-from theia.scene import Transform
+from theia.scene import RectBBox, Transform
 from theia.testing import TargetGuideSampler
 import theia.units as u
 
@@ -40,11 +40,12 @@ def test_sphereTargetGuide():
     # params
     pos = (12.0, -5.0, 3.2)
     radius = 4.0 * u.m
+    bbox = RectBBox((-25.0, -25.0, -25.0), (25.0, 25.0, 25.0))
 
     # create guide and sampler
     guide = theia.target.SphereTargetGuide(position=pos, radius=radius)
     philox = PhiloxRNG(key=0xC0FFEE)
-    sampler = TargetGuideSampler(N, guide, rng=philox)
+    sampler = TargetGuideSampler(N, guide, rng=philox, sampleBBox=bbox)
     # run
     runPipeline(sampler.collectStages())
 
@@ -58,7 +59,7 @@ def test_sphereTargetGuide():
     assert np.all((r["sampleProb"] > 0.0) == valid)
     t1, t2, hit = intersectSphere(pos, radius, r["observer"], r["sampleDir"])
     assert np.all(r["sampleDist"][valid] >= t2[valid])
-    assert np.allclose(np.square(r["sampleDir"]).sum(-1), 1.0)
+    assert np.allclose(np.square(r["sampleDir"][valid]).sum(-1), 1.0)
     sinOpening = radius / d
     cosMin = 1.0 - np.sqrt(1.0 - sinOpening**2)  # double should have suffice precision
     prob = 1.0 / (2.0 * np.pi * cosMin)

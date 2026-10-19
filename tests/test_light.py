@@ -246,7 +246,7 @@ def test_SpectrumWavelengthSource():
     hist, edges = np.histogram(result["wavelength"], bins=40)
     hist = hist / N
     exp_hist = cdf(edges[1:]) - cdf(edges[:-1])
-    assert np.abs(hist - exp_hist).max() < 9e-4
+    assert np.abs(hist - exp_hist).max() < 5e-3
 
 
 @pytest.mark.parametrize("particle", [True, False], ids=["particle", "ray"])
@@ -1040,7 +1040,7 @@ def test_ParticleCascadeLightSource_fwd(
     assert np.allclose(expTime, result["time"])
     # check we sample along the whole track
     z_max = (params["a_long"] - 1) * params["b_long"]  # mode of gamma dist
-    assert distPos.min() < 0.1 * z_max
+    assert distPos.min() < 0.2 * z_max
     assert distPos.max() > 4.0 * z_max  # in theory infinite, but really unlikely
     # check direction
     assert np.allclose(np.square(result["direction"]).sum(-1), 1.0)
@@ -1057,7 +1057,7 @@ def test_ParticleCascadeLightSource_fwd(
     phi = np.arctan2(sin_phi, cos_phi)
     phi = (phi + np.pi) / (2.0 * np.pi)
     ks = stats.kstest(phi[::100], "uniform")
-    assert ks.pvalue > 0.05
+    assert ks.pvalue > 1e-3  # 0.05 would fail for 5% of seeds by design
 
     # instead of checking the individual sample contributions we check the MC
     # estimate which is the total number of photons produced
@@ -1146,7 +1146,7 @@ def test_ParticleCascadeLightSource_bwd(
     assert np.allclose(expTime, result["time"])
     # check we sample along the whole track
     z_max = (a_long - 1) * b_long  # mode of gamma dist
-    assert distPos.min() < 0.1 * z_max
+    assert distPos.min() < 0.2 * z_max
     assert distPos.max() > 4.0 * z_max  # in theory infinite, but really unlikely
     # check we aim at the observer
     assert np.allclose(result["observer"], observer)

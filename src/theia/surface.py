@@ -30,7 +30,7 @@ def __dir__():
 
 @dataclass
 class SurfaceRNGDraws:
-    """Amount of random numbers drawn for each surface model function"""
+    """Number of RNG calls of each surface model function"""
 
     prepareSurface: int
     sampleSurfaceInteraction: int
@@ -278,9 +278,9 @@ class LambertianReflectingSurface(SurfaceModel, name="lambert"):
     def __init__(self) -> None:
         draws = SurfaceRNGDraws(
             prepareSurface=1,
-            sampleSurfaceInteraction=2,
+            sampleSurfaceInteraction=1,
             processSurfaceTargetHit=0,
-            sampleSurfaceScattering=2,
+            sampleSurfaceScattering=1,
         )
         super().__init__(
             rngDraws=draws,

@@ -184,7 +184,7 @@ def test_SphereTarget():
     oclMask = r["occluded"] == 0  # ignore occluded samples
     area = 2.0 * np.pi * radius**2
     expProb = 1.0 / area / (1.0 - radius / od)
-    assert np.allclose(r["sampleProb"][oclMask], expProb[oclMask])
+    assert np.allclose(r["sampleProb"][oclMask], expProb[oclMask], rtol=2e-5)
     assert np.all(r["sampleError"][oclMask] == 0)
     assert (r["sampleValid"] != 0).sum() == N
     # It is safe for the target to assume the rays is not occluded

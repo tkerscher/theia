@@ -3,32 +3,18 @@
 
 #include "random/util.glsl"
 
+#ifndef PHILOX_ITERATION
 #define PHILOX_ITERATION 10
+#endif
 
 uniform PhiloxParams {
     uvec2 key;
-    uvec4 baseCount;
+    uvec2 offset; //64 bit run index
 } philoxParams;
 
-vec4 philoxBuffer = vec4(0.0);
-uint philoxBufferIndex = 0xFFFFFFFFu;
-//since we will divide dim by 4, we will never reach this value
-//-> marks uninitialized buffer
-
-uvec4 philox(uint stream, uint i) {
-    //add index to base count
-    uint carry = i; //reuse carry
-    uvec4 state = philoxParams.baseCount;
-    state.x = uaddCarry(state.x, carry, carry);
-    state.y = uaddCarry(state.y, carry, carry);
-    state.z = uaddCarry(state.z, carry, carry);
-    state.w = uaddCarry(state.w, carry, carry);
-    state.x += carry; //rollover
-    //get stream
+uvec4 philox(uint stream, uint dim) {
+    uvec4 state = uvec4(dim, stream, philoxParams.offset);
     uvec2 key = philoxParams.key;
-    key.x = uaddCarry(key.x, stream, carry);
-    key.y = uaddCarry(key.y, carry, carry);
-    key.x += carry; //rollover
 
     //create random number
     uint hi0, lo0, hi1, lo1;
@@ -39,52 +25,42 @@ uvec4 philox(uint stream, uint i) {
         umulExtended(M0, state.x, hi0, lo0);
         umulExtended(M1, state.z, hi1, lo1);
         state = uvec4(
-            hi1^state.y^key.x, lo1,
-            hi0^state.w^key.y, lo0
+            hi1 ^ state.y ^ key.x, lo1,
+            hi0 ^ state.w ^ key.y, lo0
         );
         //bump key
-        key.x += 0x9E3779B9u;
-        key.y += 0xBB67AE85u;
+        key += uvec2(0x9E3779B9u, 0xBB67AE85u);
     }
     
     return state;
 }
 
-float random_s(uint stream, uint i) {
-    //philox produces four numbers at once
-    //-> use lower 2 bits as index into vec4
-    uint idx = i & 0x03;
-    i >>= 2;
+//Every draw pulls a new fresh block and only uses the amount of numbers it
+//needs. Philox is fine with skipping numbers so that causes no problem.
+//Testing showed this approach to be faster than caching.
 
-    //check whether we need to update the buffer
-    //since we expect most invocations to be at the same position inside their
-    //streams, we use subgroup operations to skip divergent code paths.
-    bool update = i != philoxBufferIndex;
-    if (subgroupAll(update)) {
-        philoxBuffer = normalizeUint(philox(stream, i));
-    }
-    else if (subgroupAny(update)) {
-        if (update) philoxBuffer = normalizeUint(philox(stream, i));
-    }
+//random comes in four flavors as denoted by their suffix:
+// - no suffix: returns random float in [0,1) and advances i by one
+// - _s suffix: static version; i will stay the same
+// - _b suffix: returns the binary 32bit word instead of float
+// - _bs suffix: Combination of _b and _s
+//Additionally, one can draw up to 4 numbers in one go (marked as 2D, 3D, 4D).
+//They all advance i by only 1 regardless
 
-    //return value
-    return philoxBuffer[idx];
+uint random_bs(uint stream, uint dim) {
+    return philox(stream, dim).x;
+}
+uvec2 random2D_bs(uint stream, uint dim) {
+   return philox(stream, dim).xy; 
+}
+uvec3 random3D_bs(uint stream, uint dim) {
+    return philox(stream, dim).xyz;
+}
+uvec4 random4D_bs(uint stream, uint dim) {
+    return philox(stream, dim);
 }
 
-vec2 random2D_s(uint stream, uint i) {
-    return vec2(random_s(stream, i), random_s(stream, i+1));
-}
-
-float random(uint stream, inout uint i) {
-    float result = random_s(stream, i);
-    i += 1;
-    return result;
-}
-
-vec2 random2D(uint stream, inout uint i) {
-    vec2 result = random2D_s(stream, i);
-    i += 2;
-    return result;
-}
+//the other functions are based on _bs and can be polyfilled
+#include "random/rng_polyfill.glsl"
 
 #endif

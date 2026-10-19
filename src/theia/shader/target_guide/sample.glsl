@@ -16,16 +16,15 @@ uniform SamplerParams {
 };
 
 void main() {
+    uint dim = 0;
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= queueSize) return;
 
     //sample observer and direction
-    vec3 u = vec3(random_s(idx, 0), random_s(idx, 1), random_s(idx, 2));
-    vec3 observer = mix(minObserver, maxObserver, u);
-    vec3 direction = sampleUnitSphere(random2D_s(idx, 3));
+    vec3 observer = mix(minObserver, maxObserver, random3D(idx, dim));
+    vec3 direction = sampleUnitSphere(random2D(idx, dim));
 
     //sample target guide
-    uint dim = 4;
     TargetGuideSample target_sample = sampleTargetGuide(observer, idx, dim);
     TargetGuideSample target_eval = evalTargetGuide(observer, direction);
 

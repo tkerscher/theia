@@ -73,7 +73,7 @@ class WavelengthSource(SourceCodeMixin):
 
     @property
     def nRNGSamples(self) -> int:
-        """Amount of random numbers drawn per sample"""
+        """Number of RNG calls per sample"""
         return self._nRNGSamples
 
 
@@ -454,7 +454,7 @@ class FunctionWavelengthSource(WavelengthSource):
 
 @dataclass
 class LightSourceRNGDraws:
-    """Amount of random numbers consumed by each light source function"""
+    """Number of RNG calls in each light source function"""
 
     sampleLightForward: int = 0
     sampleLightBackward: int = 0
@@ -859,7 +859,7 @@ class ConeLightSource(LightSource):
     ) -> None:
         lam = wavelengthSource
         draws = LightSourceRNGDraws(
-            sampleLightForward=0 if lam is None else lam.nRNGSamples + 3,
+            sampleLightForward=0 if lam is None else lam.nRNGSamples + 2,
             sampleLightBackward=1,
         )
         super().__init__(
@@ -1069,7 +1069,7 @@ class SphericalLightSource(LightSource):
     ) -> None:
         lam = wavelengthSource
         draws = LightSourceRNGDraws(
-            sampleLightForward=0 if lam is None else lam.nRNGSamples + 3,
+            sampleLightForward=0 if lam is None else lam.nRNGSamples + 2,
             sampleLightBackward=1,
             sampleLightNeeStepSize=1,
             sampleLightMis=1,
@@ -1375,7 +1375,7 @@ class MuonTrackLightSource(LightSource):
 
         lam = wavelengthSource
         draws = LightSourceRNGDraws(
-            sampleLightForward=0 if lam is None else lam.nRNGSamples + 3,
+            sampleLightForward=0 if lam is None else lam.nRNGSamples + 2,
             sampleLightBackward=1,
         )
         super().__init__(
@@ -1559,15 +1559,9 @@ class ParticleCascadeLightSource(LightSource):
             raise ValueError("Must use photon count when emitting particles")
 
         lam = wavelengthSource
-        # unfortunately, the amount of samples drawn is not deterministic
-        # because of the rejection algorithm used for the gamma distribution
-        # for now we just report a large amount, but this is not nice
-        # (with Philox RNG it is not really a problem if we do not shift
-        # enough)
-        # TODO: fix this
         draws = LightSourceRNGDraws(
-            sampleLightForward=0 if lam is None else 12,
-            sampleLightBackward=10,
+            sampleLightForward=0 if lam is None else lam.nRNGSamples + 34,
+            sampleLightBackward=33,
         )
         super().__init__(
             wavelengthSource,

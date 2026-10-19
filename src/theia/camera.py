@@ -60,12 +60,12 @@ class Camera(SourceCodeMixin):
 
     @property
     def nRNGDirect(self) -> int:
-        """Number of random numbers drawn per sample for direct lighting"""
+        """Number of RNG calls per sample for direct lighting"""
         return self._nRNGDirect
 
     @property
     def nRNGSamples(self) -> int:
-        """Amount of random numbers drawn per sample"""
+        """Number of RNG calls per sample"""
         return self._nRNGSamples
 
     @property
@@ -458,8 +458,8 @@ class FlatCamera(Camera):
         objectId: int = -1,
     ) -> None:
         super().__init__(
-            nRNGSamples=4,
-            nRNGDirect=2,
+            nRNGSamples=2,
+            nRNGDirect=1,
             supportDirect=True,
             params={"CameraParams": self.CameraParams},
             extra={"direction", "up"},
@@ -579,8 +579,8 @@ class DiskCamera(Camera):
         objectId: int = -1,
     ) -> None:
         super().__init__(
-            nRNGSamples=4,
-            nRNGDirect=2,
+            nRNGSamples=2,
+            nRNGDirect=1,
             supportDirect=True,
             params={"CameraParams": self.CameraParams},
             extra={"direction", "up"},
@@ -677,7 +677,7 @@ class ConeCamera(Camera):
         objectId: int = -1,
     ) -> None:
         super().__init__(
-            nRNGSamples=2,
+            nRNGSamples=1,
             nRNGDirect=0,
             supportDirect=True,
             params={"CameraParams": self.CameraParams},
@@ -756,8 +756,8 @@ class SphereCamera(Camera):
         objectId: int = -1,
     ) -> None:
         super().__init__(
-            nRNGSamples=4,
-            nRNGDirect=2,
+            nRNGSamples=2,
+            nRNGDirect=1,
             supportDirect=True,
             params={"CameraParams": self.CameraParams},
         )
@@ -827,7 +827,7 @@ class PointCamera(Camera):
         objectId: int = -1,
     ) -> None:
         super().__init__(
-            nRNGSamples=2,
+            nRNGSamples=1,
             supportDirect=False,
             params={"CameraParams": self.CameraParams},
         )
@@ -907,8 +907,8 @@ class MeshCamera(Camera):
         inward: bool = False,
     ) -> None:
         super().__init__(
-            nRNGSamples=5,
-            nRNGDirect=3,
+            nRNGSamples=3,
+            nRNGDirect=2,
             supportDirect=True,
             params={"CameraParams": self.CameraParams},
             extra={"inward", "mesh"},

@@ -94,7 +94,7 @@ class HitResponse(SourceCodeMixin):
 
     @property
     def nRNGSamples(self) -> int:
-        """Number of random numbers drawn per generated hit"""
+        """Number of RNG calls per generated hit"""
         return self._nRNGSamples
 
     def prepare(self, config: TraceConfig, ray: RayModel) -> None:
@@ -340,7 +340,7 @@ class ValueResponse(SourceCodeMixin):
 
     @property
     def nRNGSamples(self) -> int:
-        """Number of random numbers drawn per hit"""
+        """Number of RNG calls per hit"""
         return self._nRNGSamples
 
     def prepare(self, config: TraceConfig, ray: RayModel) -> None:
@@ -382,7 +382,7 @@ class CustomValueResponse(ValueResponse):
     code: str
         User provided source code (GLSL).
     nRNGSamples: int, default=0
-        Number of random numbers drawn per hit.
+        Number of RNG calls per hit.
     """
 
     def __init__(self, code: str, *, nRNGSamples: int = 0) -> None:

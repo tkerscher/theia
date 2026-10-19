@@ -26,7 +26,7 @@ def __dir__():
 
 @dataclass
 class VolumeRNGDraws:
-    """Amount of random numbers needed for each volume model function"""
+    """Number of RNG calls in each volume model function"""
 
     sampleInteractionLength: int = 0
     applyVolumeEffect: int = 0
@@ -133,7 +133,7 @@ class Attenuating(VolumeModel, name="attenuating"):
             sampleInteractionLength=1,
             applyVolumeEffect=0,
             sampleVolumeInteraction=2,
-            sampleVolumeScattering=2,
+            sampleVolumeScattering=1,
             volumeScatterRay=0,
             sampleVolumeNeeStepSize=1,
         )
@@ -233,8 +233,8 @@ class Fluorescent(VolumeModel, name="fluorescent"):
             sampleInteractionLength=1,
             applyVolumeEffect=0,
             sampleVolumeInteraction=4 if timeModel == "delta" else 5,
-            sampleVolumeScattering=3 if timeModel == "delta" else 4,
-            volumeScatterRay=1,
+            sampleVolumeScattering=2,
+            volumeScatterRay=2 if timeModel == "delta" else 3,
         )
         super().__init__(
             rngDraws=rngDraws,

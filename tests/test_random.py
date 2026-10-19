@@ -20,6 +20,16 @@ vec2 random2D_s(uint stream, uint dim) {
     float v = 1e4 * stream + dim;
     return vec2(v, -v);
 }
+
+vec3 random3D_s(uint stream, uint dim) {
+    float v = 1e4 * stream + dim;
+    return vec3(v, -v, 2.0 * v);
+}
+
+vec4 random4D_s(uint stream, uint dim) {
+    float v = 1e4 * stream + dim;
+    return vec4(v, -v, 2.0 * v, -2.0 * v);
+}
 """
 
 
@@ -34,24 +44,11 @@ class DebugRNG(theia.random.RNG):
         return shader
 
 
-def test_rngSink():
-    gen = DebugRNG()
-    sink = theia.random.RNGBufferSink(gen, 250, 800, baseStream=12, baseCount=316)
-    ret = pl.RetrieveTensorStage(sink.tensor)
-    pl.runPipeline([gen, sink, ret])
-
-    samples = ret.view(0).reshape(sink.shape).squeeze()
-    streams = (np.arange(250) + 12) * 10000.0
-    counts = np.arange(800) + 316
-    expected = streams[:, None] + counts[None:,]
-
-    assert np.all(samples == expected)
-
-
-def test_rngSink_2D():
+@pytest.mark.parametrize("sampleDim", [1, 2, 3, 4])
+def test_rngSink(sampleDim: int):
     gen = DebugRNG()
     sink = theia.random.RNGBufferSink(
-        gen, 250, 800, baseStream=12, baseCount=316, sampleDim=2
+        gen, 250, 800, baseStream=12, baseCount=316, sampleDim=sampleDim
     )
     retr = pl.RetrieveTensorStage(sink.tensor)
     pl.runPipeline([gen, sink, retr])
@@ -59,15 +56,18 @@ def test_rngSink_2D():
     samples = retr.view(0).reshape(sink.shape)
     streams = (np.arange(250) + 12) * 10000.0
     counts = np.arange(800) + 316
-    expected = streams[:, None] + counts[None:,]
-    expected = np.stack((expected, -expected), -1)
+    expected = streams[:, None] + counts[None, :]
+    # components as returned by the DebugRNG shader
+    factors = [1.0, -1.0, 2.0, -2.0][:sampleDim]
+    expected = np.stack([f * expected for f in factors], -1)
 
     assert np.all(samples == expected)
 
 
-def test_philox():
+@pytest.mark.parametrize("sampleDim", [1, 2, 3, 4])
+def test_philox(sampleDim: int):
     philox = theia.random.PhiloxRNG(key=0xC0FFEE)
-    generator = theia.random.RNGBufferSink(philox, 4096, 8192)
+    generator = theia.random.RNGBufferSink(philox, 4096, 8192, sampleDim=sampleDim)
     retrieve = pl.RetrieveTensorStage(generator.tensor)
 
     pl.runPipeline([philox, generator, retrieve])
@@ -76,18 +76,33 @@ def test_philox():
     # let's check for uniform instead
     # NOTE: a simple linear increase would also pass this
 
-    data = retrieve.view(0)
-    hist = np.histogram(data, bins=20)[0]
-    max_dev = np.abs((hist * 20.0 / generator.capacity) - 1.0).max()
-    assert max_dev < 0.005  # TODO: What is a reasonable value here?
+    data = retrieve.view(0).reshape(generator.shape)
+    for d in range(sampleDim):
+        hist = np.histogram(data[..., d], bins=20)[0]
+        max_dev = np.abs((hist * 20.0 * sampleDim / generator.capacity) - 1.0).max()
+        assert max_dev < 0.005  # TODO: What is a reasonable value here?
 
-    # test auto advance
+    # test auto advance: first run used the given offset, then advanced by one
     offset = philox.getParam("offset")
-    assert offset == 0
+    assert offset == 1
     advance = 128
     philox.setParam("autoAdvance", advance)
     philox.update(0)
     assert philox.getParam("offset") - offset == advance
+
+
+def test_philox_offset():
+    # same offset must reproduce the same numbers, a different one must not
+    def draw(offset: int) -> np.ndarray:
+        philox = theia.random.PhiloxRNG(key=0xC0FFEE, offset=offset)
+        sink = theia.random.RNGBufferSink(philox, 256, 256)
+        retrieve = pl.RetrieveTensorStage(sink.tensor)
+        pl.runPipeline([philox, sink, retrieve])
+        return retrieve.view(0).copy()
+
+    a, b, c = draw(5), draw(5), draw(6)
+    assert np.all(a == b)
+    assert np.mean(a == c) < 1e-3
 
 
 @pytest.mark.parametrize("alpha,gamma", [(1.0, 1.0), (0.5, 2.2), (4.8, 0.6)])
@@ -119,7 +134,8 @@ def test_gamma(alpha: float, gamma: float):
 
     # check result
     test = kstest(buffer.numpy(), "gamma", args=(alpha, 0.0, 1.0 / gamma))
-    assert test.pvalue < 0.05
+    # null hypothesis: samples follow the gamma distribution
+    assert test.pvalue > 0.05
 
 
 # helper test to make debugging easier

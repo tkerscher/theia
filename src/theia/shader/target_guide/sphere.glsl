@@ -17,24 +17,17 @@ TargetGuideSample sampleTargetGuide(vec3 observer, uint idx, inout uint dim) {
     float d = distance(targetGuideParams.position, observer);
     vec3 viewDir = normalize(targetGuideParams.position - observer);
     float sinMax = targetGuideParams.radius / d;
-    float sin2Max = sinMax * sinMax;
-    float cosMin = 1.0 - sqrt(max(1.0 - sin2Max, 0.0));
-    //for narrow cones we run out of numerical precision (around 1)
-    //causing cosMin to always be zero
-    // -> use taylor approximation instead
-    if (sin2Max < 0.00068523f /* sin^2(1.5 deg) */) {
-        //sqrt(1-x^2) ~= 1 - x^2/2 + O(x^4)
-        // -> 1 - sqrt(1-x^2) ~= x^2/2
-        cosMin = 0.5 * sin2Max;
-    }
+    float cosMin = sinMax * sinMax / (1.0 + sqrt(max((1.0 - sinMax) * (1.0 + sinMax), 0.0)));
     float prob = 1.0 / (TWO_PI * cosMin);
     //mark sample as invalid (prob = 0) if we're inside the sphere
     prob *= float(d > targetGuideParams.radius);
 
     //sample cone
-    float cosTheta = 1.0 - cosMin * random(idx, dim);
-    float sinTheta = sqrt(max(1.0 - cosTheta*cosTheta, 0.0));
-    float phi = TWO_PI * random(idx, dim);
+    vec2 u = random2D(idx, dim);
+    float t = cosMin * u.x;
+    float cosTheta = 1.0 - t;
+    float sinTheta = sqrt(max(t * (2.0 - t), 0.0));
+    float phi = TWO_PI * u.y;
     vec3 dir = createLocalCOSY(viewDir) * vec3(
         sinTheta * sin(phi),
         sinTheta * cos(phi),
@@ -55,26 +48,17 @@ TargetGuideSample evalTargetGuide(vec3 observer, vec3 direction) {
     float d = distance(targetGuideParams.position, observer);
     vec3 viewDir = normalize(targetGuideParams.position - observer);
     float sinMax = targetGuideParams.radius / d;
-    float sin2Max = sinMax * sinMax;
-    float cosMin = 1.0 - sqrt(max(1.0 - sin2Max, 0.0));
-    //for narrow cones we run out of numerical precision (around 1)
-    //causing cosMin to always be zero
-    // -> use taylor approximation instead
-    if (sin2Max < 0.00068523f /* sin^2(1.5 deg) */) {
-        //sqrt(1-x^2) ~= 1 - x^2/2 + O(x^4)
-        // -> 1 - sqrt(1-x^2) ~= x^2/2
-        cosMin = 0.5 * sin2Max;
-    }
+    float cosMin = sinMax * sinMax / (1.0 + sqrt(max((1.0 - sinMax) * (1.0 + sinMax), 0.0)));
     float prob = 1.0 / (TWO_PI * cosMin);
     //mark sample as invalid (prob = 0) if we're inside the sphere
-    prob *= float(d > targetGuideParams.radius);
+    prob = d > targetGuideParams.radius ? prob : 0.0;
 
     //again as distance d + r suffice
     float dist = d + targetGuideParams.radius;
 
     //check if direction is within cone
-    float cosDir = dot(viewDir, direction);
-    prob *= float(cosMin >= 1.0 - cosDir);
+    vec3 diff = viewDir - direction;
+    prob = dot(diff, diff) <= 2.0 * cosMin ? prob : 0.0;
 
     //return sample
     return TargetGuideSample(direction, dist, prob);

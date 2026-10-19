@@ -430,7 +430,7 @@ def test_Fluorescent_scattering(upshift: bool):
     # create medium
     volModel = theia.volume.Fluorescent(allowWavelengthUpShift=upshift)
     model = FluorescentTestMediumModel(mu_a, mu_s, mu_f, g, qe, delta_t)
-    medium = model.createMedium(physicModel=volModel)
+    medium = model.createMedium(physicModel=volModel, numSamples=16384)
     matStore = MaterialStore([], media=[medium])
     medIdx = matStore.media["fluorescent"]
 
@@ -473,16 +473,16 @@ def test_Fluorescent_scattering(upshift: bool):
     mu_f_r = model.fluorescence_coef(result["wavelengthIn"]) * qe
     p_scatter = mu_s / (mu_s + mu_f_r) * np.exp(model.log_phase_function(ct_sampled))
     prob_sampled = p_scatter + mu_f_r / (mu_s + mu_f_r) / (4.0 * np.pi)
-    assert np.allclose(result["probEval"], prob_sampled, atol=2e-3)
+    assert np.allclose(result["probEval"], prob_sampled, atol=2e-4)
     p_scatter_r = mu_s / (mu_s + mu_f_r) * np.exp(model.log_phase_function(ct_rand))
     prob_rand = p_scatter_r + mu_f_r / (mu_s + mu_f_r) / (4.0 * np.pi)
-    assert np.allclose(result["probRandom"], prob_rand, atol=5e-4)
+    assert np.allclose(result["probRandom"], prob_rand, atol=2e-4)
     contrib = result["contribOut"] / result["contribIn"]
     contrib_exp = np.ones_like(contrib)
     contrib_exp *= mu_s + mu_f_r
     contrib_exp[f_mask] *= 1.0 / (4.0 * np.pi)
     contrib_exp[~f_mask] *= np.exp(model.log_phase_function(ct_rand[~f_mask]))
-    assert np.allclose(contrib, contrib_exp, atol=5e-5)
+    assert np.allclose(contrib, contrib_exp, atol=5e-6)
 
 
 def test_Fluorescent_exponentialDecay():

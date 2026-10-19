@@ -219,7 +219,7 @@ def test_FlatCamera_direct():
 
 
 def test_DiskCamera():
-    N = 32 * 1024
+    N = 128 * 1024
 
     # params
     lam = 450.0 * u.nm

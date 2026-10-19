@@ -1169,7 +1169,6 @@ def test_SceneForwardTracer_sampleCoef(sampleCoef: float) -> None:
         scene,
         sampleCoefficient=sampleCoef,
     )
-    rng.autoAdvance = tracer.nRNGSamples
     # create pipeline + scheduler
     results = []
     process = lambda c, b, a: results.append(np.copy(response.result(c)))
