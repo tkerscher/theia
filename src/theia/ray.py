@@ -89,6 +89,16 @@ class RayModel(ABC):
         """Source code of the ray model."""
         pass
 
+    def waveItem(self) -> type[Structure]:
+        """
+        Structure describing the fields and memory layout of the trace state a
+        tracer with wavefront compaction stores between waves. Unlike `forwardItem`
+        this has to hold everything needed to RESUME a path, not just to record it.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support wavefront compaction"
+        )
+
 
 class UnpolarizedRay(RayModel):
     """
@@ -166,6 +176,27 @@ class UnpolarizedRay(RayModel):
     @property
     def hitItem(self) -> type[Structure]:
         return self._hitItem
+
+    def waveItem(self) -> type[Structure]:
+        # must stay in sync with saveWaveRay()/loadWaveRay() in
+        # shader/ray/unpolarized.glsl.
+        fields = [
+            ("position", c_float * 3),
+            ("direction", c_float * 3),
+            ("wavelength", c_float),
+            ("mediumIdx", c_uint32),
+        ]
+        if self.isTransient:
+            fields.append(("time", c_float))
+        if not self.isParticle:
+            # kept separate on purpose: folding them into a single contribution
+            # like `forwardItem` does can underflow over hundreds of iterations
+            fields.append(("lin_contrib", c_float))
+            fields.append(("log_contrib", c_float))
+        fields.append(("idx", c_uint32))  # path id: RNG stream + attribution
+        fields.append(("dim", c_uint32))  # position in the RNG sequence
+        fields.append(("pathLength", c_uint32))  # iterations done so far
+        return createCType("WaveItem", fields)
 
     @property
     def sourceCode(self) -> str:

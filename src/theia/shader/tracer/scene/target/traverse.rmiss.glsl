@@ -28,12 +28,12 @@ void traceNEE(
 ) {
     //scatter ray into new direction
     ResultCode result = volumeScatterRay(
-        ray, newDir, gl_LaunchIDEXT.x, dim
+        ray, newDir, traceData.idx, dim
     );
     if (result < 0) return;
 
     //trace nee
-    traceNEE(ray, dist, weight, params.tlas, dim);
+    traceNEE(ray, dist, weight, params.tlas, traceData.idx, dim);
 }
 
 //MIS is a sampling method that combines multiple distributions using weights
@@ -60,10 +60,10 @@ void sampleTargetMIS(TRACE_RAY ray, inout uint dim) {
 
     //sample volume scattering
     float pPP;
-    vec3 dirPhase = sampleVolumeScattering(ray, pPP, gl_LaunchIDEXT.x, dim);
+    vec3 dirPhase = sampleVolumeScattering(ray, pPP, traceData.idx, dim);
     TargetGuideSample phaseSample = evalTargetGuide(ray.position, dirPhase);
     //sample target guide
-    TargetGuideSample targetSample = sampleTargetGuide(ray.position, gl_LaunchIDEXT.x, dim);
+    TargetGuideSample targetSample = sampleTargetGuide(ray.position, traceData.idx, dim);
     vec3 dirTarget = targetSample.dir;
     float pTT = targetSample.prob;
     //calculate cross probabilities
@@ -90,7 +90,7 @@ void main() {
         gl_RayTmaxEXT,
         false,
         params.propagation,
-        gl_LaunchIDEXT.x, dim
+        traceData.idx, dim
     );
     if (traceData.result < 0) return;
 
@@ -102,7 +102,7 @@ void main() {
     //sample volume interaction
     traceData.result = sampleVolumeInteraction(
         traceData.ray,
-        gl_LaunchIDEXT.x,
+        traceData.idx,
         dim
     );
 }

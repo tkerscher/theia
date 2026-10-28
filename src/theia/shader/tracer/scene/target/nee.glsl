@@ -9,13 +9,16 @@
 
 layout(location = 1) rayPayloadEXT NeeData neeData;
 
-void traceNEE(TRACE_RAY ray, float dist, float weight, uvec2 tlas, inout uint dim) {
+void traceNEE(
+    TRACE_RAY ray, float dist, float weight, uvec2 tlas, uint idx, inout uint dim
+) {
     //don't bother tracing if we don't expect any contribution
     if (weight == 0) return;
 
     //prepare payload
     neeData.ray = ray;
     neeData.weight = weight;
+    neeData.idx = idx;
     neeData.dim = dim;
 
     //give some leeway on the distance to account for numerical precission errors
@@ -41,11 +44,11 @@ void traceNEE(TRACE_RAY ray, float dist, float weight, uvec2 tlas, inout uint di
     dim = neeData.dim;
 }
 
-void traceNEE(TRACE_RAY ray, uvec2 tlas, inout uint dim) {
+void traceNEE(TRACE_RAY ray, uvec2 tlas, uint idx, inout uint dim) {
     //check if we have a chance to hit target
     TargetGuideSample guideSample = evalTargetGuide(ray.position, ray.direction);
     if (guideSample.prob == 0) return;
-    traceNEE(ray, guideSample.dist, 1.0, tlas, dim);
+    traceNEE(ray, guideSample.dist, 1.0, tlas, idx, dim);
 }
 
 #endif

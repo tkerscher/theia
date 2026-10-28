@@ -42,14 +42,14 @@ void main() {
         hit.rayNrm,
         false,
         params.propagation,
-        gl_LaunchIDEXT.x, dim
+        neeData.idx, dim
     );
     if (result < 0) return;
 
     //if the surface model requests it, prepare interaction
     #ifdef SurfaceProperties
     SurfaceProperties props = prepareSurface(
-        neeData.ray, hit, gl_LaunchIDEXT.x, dim
+        neeData.ray, hit, neeData.idx, dim
     );
     #endif
 
@@ -63,11 +63,11 @@ void main() {
         #endif
         objectId,
         item,
-        gl_LaunchIDEXT.x, dim
+        neeData.idx, dim
     );
     item.contrib *= neeData.weight;
     //process hit item if successful
     if (success && item.contrib > 0.0) {
-        response(item, gl_LaunchIDEXT.x, dim);
+        response(item, neeData.idx, dim);
     }
 }

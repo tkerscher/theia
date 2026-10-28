@@ -7,11 +7,12 @@
 
 struct LengthData{
     PROXY_RAY ray;
+    uint idx;
     uint dim;
     float dist;
 };
 layout(location = 0) callableDataInEXT LengthData lengthData;
 
 void main() {
-    lengthData.dist = sampleInteractionLength(lengthData.ray, gl_LaunchIDEXT.x, lengthData.dim);
+    lengthData.dist = sampleInteractionLength(lengthData.ray, lengthData.idx, lengthData.dim);
 }

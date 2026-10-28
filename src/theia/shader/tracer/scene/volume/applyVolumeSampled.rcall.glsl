@@ -10,6 +10,7 @@
 struct ApplyData{
     PROXY_RAY ray;
     float dist;
+    uint idx;
     uint dim;
     ResultCode result;
 };
@@ -25,7 +26,7 @@ void main() {
         applyData.ray,
         dist,
         hit,
-        gl_LaunchIDEXT.x,
+        applyData.idx,
         applyData.dim
     );
 }

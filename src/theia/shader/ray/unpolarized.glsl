@@ -426,6 +426,160 @@ ForwardRay loadForwardRay(uvec2 queueAdr, uint queueSize, uint idx) {
     );
 }
 
+/**
+ * Serialization of the complete trace state of a ForwardRay, used by the
+ * wavefront tracer to hand paths that survived a wave over to the next one.
+ *
+ * Deliberately not saveForwardRay(): resuming a path needs more than recording
+ * it does. lin_contrib and log_contrib stay separate, and the loop state - path
+ * id, position in the RNG sequence, number of iterations already done - is
+ * stored as well.
+ *
+ * MUST stay in sync with `UnpolarizedRay.waveItem()` in ray.py, which describes
+ * the same layout for the host side.
+ */
+void saveWaveRay(
+    uvec2 queueAdr, uint queueSize, uint slot,
+    const ForwardRay ray, uint rayIdx, uint dim, uint pathLength
+) {
+    FloatBuffer floats = FloatBuffer(queueAdr);
+    UIntBuffer uints = UIntBuffer(queueAdr);
+    IntBuffer ints = IntBuffer(queueAdr);
+    uint idx = slot; //the save macros consume and advance this
+
+    _saveVec3(ray.position);
+    _saveVec3(ray.direction);
+    _saveFloat(ray.wavelength);
+    _saveUInt(ray.mediumIdx);
+
+    #ifdef RAY_TRANSIENT
+    _saveFloat(ray.time);
+    #endif
+
+    #ifndef RAY_PARTICLE
+    _saveFloat(ray.lin_contrib);
+    _saveFloat(ray.log_contrib);
+    #endif
+
+    _saveUInt(rayIdx);
+    _saveUInt(dim);
+    _saveUInt(pathLength);
+}
+
+void loadWaveRay(
+    uvec2 queueAdr, uint queueSize, uint slot,
+    out ForwardRay ray, out uint rayIdx, out uint dim, out uint pathLength
+) {
+    FloatBuffer floats = FloatBuffer(queueAdr);
+    UIntBuffer uints = UIntBuffer(queueAdr);
+    IntBuffer ints = IntBuffer(queueAdr);
+    uint idx = slot; //the load macros consume and advance this
+
+    vec3 position = _loadVec3;
+    vec3 direction = _loadVec3;
+    float wavelength = _loadFloat;
+    uint mediumIdx = _loadUInt;
+
+    #ifdef RAY_TRANSIENT
+    float time = _loadFloat;
+    #endif
+
+    #ifndef RAY_PARTICLE
+    float lin_contrib = _loadFloat;
+    float log_contrib = _loadFloat;
+    #endif
+
+    rayIdx = _loadUInt;
+    dim = _loadUInt;
+    pathLength = _loadUInt;
+
+    ray = ForwardRay(
+        position,
+        direction,
+        wavelength,
+        mediumIdx
+        #ifdef RAY_TRANSIENT
+        ,time
+        #endif
+        #ifndef RAY_PARTICLE
+        ,lin_contrib
+        ,log_contrib
+        #endif
+    );
+}
+
+#ifndef RAY_PARTICLE
+
+/**
+ * Same as above for a BackwardRay. Its layout is the one of a ForwardRay wave:
+ * a BackwardRay always carries a contribution.
+ */
+void saveWaveRay(
+    uvec2 queueAdr, uint queueSize, uint slot,
+    const BackwardRay ray, uint rayIdx, uint dim, uint pathLength
+) {
+    FloatBuffer floats = FloatBuffer(queueAdr);
+    UIntBuffer uints = UIntBuffer(queueAdr);
+    IntBuffer ints = IntBuffer(queueAdr);
+    uint idx = slot; //the save macros consume and advance this
+
+    _saveVec3(ray.position);
+    _saveVec3(ray.direction);
+    _saveFloat(ray.wavelength);
+    _saveUInt(ray.mediumIdx);
+
+    #ifdef RAY_TRANSIENT
+    _saveFloat(ray.time);
+    #endif
+
+    _saveFloat(ray.lin_contrib);
+    _saveFloat(ray.log_contrib);
+
+    _saveUInt(rayIdx);
+    _saveUInt(dim);
+    _saveUInt(pathLength);
+}
+
+void loadWaveRay(
+    uvec2 queueAdr, uint queueSize, uint slot,
+    out BackwardRay ray, out uint rayIdx, out uint dim, out uint pathLength
+) {
+    FloatBuffer floats = FloatBuffer(queueAdr);
+    UIntBuffer uints = UIntBuffer(queueAdr);
+    IntBuffer ints = IntBuffer(queueAdr);
+    uint idx = slot; //the load macros consume and advance this
+
+    vec3 position = _loadVec3;
+    vec3 direction = _loadVec3;
+    float wavelength = _loadFloat;
+    uint mediumIdx = _loadUInt;
+
+    #ifdef RAY_TRANSIENT
+    float time = _loadFloat;
+    #endif
+
+    float lin_contrib = _loadFloat;
+    float log_contrib = _loadFloat;
+
+    rayIdx = _loadUInt;
+    dim = _loadUInt;
+    pathLength = _loadUInt;
+
+    ray = BackwardRay(
+        position,
+        direction,
+        wavelength,
+        mediumIdx,
+        #ifdef RAY_TRANSIENT
+        time,
+        #endif
+        lin_contrib,
+        log_contrib
+    );
+}
+
+#endif
+
 void saveHitItem(uvec2 queueAdr, uint queueSize, uint idx, const HitItem hit) {
     FloatBuffer floats = FloatBuffer(queueAdr);
     IntBuffer ints = IntBuffer(queueAdr);

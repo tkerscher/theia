@@ -46,7 +46,7 @@ void traceNEE(
         props,
         #endif
         newDir,
-        gl_LaunchIDEXT.x, dim
+        traceData.idx, dim
     );
     if (result < 0) return;
 
@@ -54,7 +54,7 @@ void traceNEE(
     ray.lin_contrib *= abs(dot(newDir, hit.rayNrm));
 
     //trace NEE
-    traceNEE(ray, dist, weight, params.tlas, dim);
+    traceNEE(ray, dist, weight, params.tlas, traceData.idx, dim);
 }
 
 //MIS is a sampling method that combines multiple distributions using weights
@@ -94,11 +94,11 @@ void sampleTargetMIS(
         props,
         #endif
         pPP,
-        gl_LaunchIDEXT.x, dim
+        traceData.idx, dim
     );
     TargetGuideSample phaseSample = evalTargetGuide(ray.position, dirPhase);
     //sample target guide
-    TargetGuideSample targetSample = sampleTargetGuide(ray.position, gl_LaunchIDEXT.x, dim);
+    TargetGuideSample targetSample = sampleTargetGuide(ray.position, traceData.idx, dim);
     vec3 dirTarget = targetSample.dir;
     float pTT = targetSample.prob;
     //calculate cross probabilities
@@ -157,14 +157,14 @@ void main() {
         hit.worldPos,
         hit.rayNrm,
         params.propagation,
-        gl_LaunchIDEXT.x, dim
+        traceData.idx, dim
     );
     if (traceData.result < 0) return;
 
     //if the surface model requests it, prepare interaction
     #ifdef SurfaceProperties
     SurfaceProperties props = prepareSurface(
-        traceData.ray, hit, gl_LaunchIDEXT.x, dim
+        traceData.ray, hit, traceData.idx, dim
     );
     #endif
 
@@ -187,10 +187,10 @@ void main() {
             #endif
             objectId,
             item,
-            gl_LaunchIDEXT.x, dim
+            traceData.idx, dim
         );
         if (success) {
-            response(item, gl_LaunchIDEXT.x, dim);
+            response(item, traceData.idx, dim);
         }
     }
     #endif
@@ -220,13 +220,13 @@ void main() {
         #ifdef SurfaceProperties
         props,
         #endif
-        gl_LaunchIDEXT.x, dim
+        traceData.idx, dim
     );
     if (traceData.result < 0) return;
 
     //if we have a specular surface, we can still do NEE by extending the
     //already processed ray to the target guide
     #if defined(SURFACE_MODEL_SPECULAR) && !defined(DISABLE_NEE)
-    traceNEE(traceData.ray, params.tlas, dim);
+    traceNEE(traceData.ray, params.tlas, traceData.idx, dim);
     #endif
 }

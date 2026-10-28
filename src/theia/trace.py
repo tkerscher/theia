@@ -5,6 +5,7 @@ from itertools import repeat
 
 import hephaistos as hp
 from hephaistos.pipeline import PipelineStage, SourceCodeMixin
+from hephaistos.queue import QueueTensor
 
 from ctypes import Structure, c_float, c_int32, c_uint32, c_uint64
 from ctypes import addressof, memset, sizeof
@@ -1962,6 +1963,156 @@ class SceneBackwardTracer(Tracer):
             return [self._pipeline.traceRays(self.capacity, 1, 1, **self._sbt)]
 
 
+class _WaveState:
+    """
+    Device state and command sequence of the scene target tracer with wavefront
+    compaction, see `SceneForwardTracer`.
+
+    Holds the two queues the paths still alive are compacted into, one indirect
+    launch counter per wave, and the per-dispatch parameter block. The queues
+    ping-pong: wave `w` reads `queues[(w - 1) % 2]` and appends to
+    `queues[w % 2]`.
+
+    Parameters
+    ----------
+    schedule: int[]
+        Number of trace iterations each dispatch performs.
+    maxPathLength: int
+        Maximum number of iterations of the whole path.
+    ray: RayModel
+        Model describing the trace state to store between waves.
+    capacity: int
+        Maximum number of paths a wave can hold.
+    """
+
+    class _IndirectRayCount(Structure):
+        """
+        Launch dimensions `traceRaysIndirect()` fetches from device memory, i.e.
+        Vulkan's VkTraceRaysIndirectCommandKHR. Only `width` is ever written by a
+        shader - it doubles as the atomic counter of a wave queue - while the other
+        two stay at one.
+        """
+
+        _fields_ = [("width", c_uint32), ("height", c_uint32), ("depth", c_uint32)]
+
+
+    class _WaveParams(Structure):
+        _fields_ = [
+            ("srcQueue", buffer_reference),
+            ("dstQueue", buffer_reference),
+            ("dstCounter", buffer_reference),
+            ("iterations", c_uint32),
+            ("capacity", c_uint32),
+            ("firstWave", c_uint32),
+        ]
+
+    def __init__(
+        self,
+        schedule: Sequence[int],
+        maxPathLength: int,
+        ray: RayModel,
+        capacity: int,
+    ) -> None:
+        # Normalize the schedule: never trace beyond maxPathLength, and cover any
+        # remainder with a final wave.
+        waves: list[int] = []
+        total = 0
+        for k in schedule:
+            k = int(k)
+            if k < 1:
+                raise ValueError("wave lengths must be positive!")
+            k = min(k, maxPathLength - total)
+            if k < 1:
+                break
+            waves.append(k)
+            total += k
+        if total < maxPathLength:
+            waves.append(maxPathLength - total)
+        self._schedule = waves
+
+        # Trace state handed from one wave to the next, as a structure of arrays.
+        self._item = ray.waveItem()
+        self._queues = [
+            QueueTensor(self._item, capacity, skipCounter=True) for _ in range(2)
+        ]
+        # Wave w is launched with counters[w - 1] rays and fills counters[w]. The
+        # last one is written but never read.
+        n = len(waves)
+        self._counters = hp.ArrayTensor(self._IndirectRayCount, n)
+        self._reset = hp.ArrayBuffer(self._IndirectRayCount, n)
+        for c in self._reset:
+            c.width, c.height, c.depth = 0, 1, 1
+        # Per dispatch parameters. These are static, so upload them once here.
+        self._params = []
+        for w, k in enumerate(waves):
+            p = self._WaveParams()
+            p.srcQueue.value = self._queues[(w - 1) % 2]  # unused by the first
+            p.dstQueue.value = self._queues[w % 2]
+            p.dstCounter.value = self._counters.address + w * sizeof(self._IndirectRayCount)
+            p.iterations = k
+            p.capacity = capacity
+            p.firstWave = 1 if w == 0 else 0
+            self._params.append(hp.Tensor(sizeof(p), addr=addressof(p)))
+
+    @property
+    def item(self) -> type[Structure]:
+        """Structure describing the trace state stored between waves"""
+        return self._item
+
+    @property
+    def schedule(self) -> list[int]:
+        """Number of trace iterations each dispatch performs"""
+        return list(self._schedule)
+
+    def counts(self) -> list[int]:
+        """
+        Number of paths that survived each wave in the batch that ran last, i.e.
+        the launch size of the following wave.
+
+        Retrieves the counters from the device and thus must not be called while
+        a batch is still in flight.
+        """
+        buffer = hp.ArrayBuffer(self._IndirectRayCount, len(self._schedule))
+        hp.execute(hp.retrieveTensor(self._counters, buffer))
+        return [c.width for c in buffer]
+
+    def run(
+        self,
+        pipeline: hp.RayTracingPipeline,
+        sbt: dict,
+        traceParams: hp.Tensor,
+        batchSizeOffset: int,
+    ) -> list[hp.Command]:
+        """Records the wave chain of a single batch."""
+        # all counters start at (0, 1, 1)
+        cmds: list[hp.Command] = [hp.updateTensor(self._reset, self._counters)]
+        for w in range(len(self._schedule)):
+            # The parameters differ per dispatch, and a command snapshots the
+            # bindings it was created with, so rebind before recording each wave.
+            pipeline.bindParams(WaveParams=self._params[w])
+            if w == 0:
+                # The first wave samples the light source and is sized by the
+                # batch size in the trace params.
+                cmds.append(
+                    pipeline.traceRaysIndirect(
+                        traceParams, offset=batchSizeOffset, **sbt
+                    )
+                )
+            else:
+                # ... every later one by the number of survivors of its
+                # predecessor. The barrier covers the queue contents; the one for
+                # the indirect read itself comes with the command.
+                cmds.append(hp.flushMemory())
+                cmds.append(
+                    pipeline.traceRaysIndirect(
+                        self._counters,
+                        offset=(w - 1) * sizeof(self._IndirectRayCount),
+                        **sbt,
+                    )
+                )
+        return cmds
+
+
 class _SceneTargetTracer(Tracer):
     """
     Common base class for `SceneForwardTracer` and `SceneBackwardTargetTracer`
@@ -2000,6 +2151,7 @@ class _SceneTargetTracer(Tracer):
         maxTime: float,
         targetGuide: TargetGuide | None,
         disableDirectLighting: bool,
+        wavefrontCompactionSchedule: Sequence[int] | None = None,
         enableInvocationReorder: bool,
     ) -> None:
         # we need ray tracing for this
@@ -2079,10 +2231,26 @@ class _SceneTargetTracer(Tracer):
         # inline the volume module and skip unnecessary creation of callables
         inlineVolModule = len(volModels) <= 2
         self._dispatchIndirect = getEnabledRayTracingFeatures().indirectDispatch
+        # optionally split the trace loop over several dispatches, compacting the
+        # paths still alive in between (see SceneForwardTracer)
+        self._wave: _WaveState | None = None
+        if wavefrontCompactionSchedule is not None:
+            if not self._dispatchIndirect:
+                raise RuntimeError(
+                    "Wavefront compaction needs indirect dispatch, which this "
+                    "device does not support"
+                )
+            self._wave = _WaveState(
+                wavefrontCompactionSchedule,
+                nTraces,
+                ray,
+                self.capacity,
+            )
         preamble = createPreamble(
             DISABLE_DIRECT_LIGHTING=disableDirectLighting,
             DISABLE_NEE=targetGuide is None,
             DISPATCH_INDIRECT=self._dispatchIndirect,
+            WAVEFRONT_COMPACTION=self._wave is not None,
             INLINE_VOLUME_MODEL=inlineVolModule,
             PATH_LENGTH=nTraces,
             TRACE_DIRECTION=f"TRACE_DIRECTION_{direction.upper()}",
@@ -2278,12 +2446,45 @@ class _SceneTargetTracer(Tracer):
         # some stages may be None -> remove them
         return [s for s in stages if s[1] is not None]
 
+    @property
+    def waveState(self) -> _WaveState | None:
+        """
+        State of the wavefront compaction, or `None` if the trace loop runs in a
+        single dispatch. See `SceneForwardTracer`.
+        """
+        return self._wave
+
+    @property
+    def wavefrontCompactionSchedule(self) -> list[int] | None:
+        """
+        Normalized number of trace iterations each dispatch performs, or `None`
+        if wavefront compaction is disabled.
+        """
+        return None if self._wave is None else self._wave.schedule
+
+    def waveCounts(self) -> list[int]:
+        """
+        Number of paths each wave AFTER the first was launched with in the batch
+        that ran last, i.e. how many paths survived each wave.
+
+        Retrieves the counters from the device and thus must not be called while
+        a batch is still in flight. Note that the counters are reset at the start
+        of every batch, so this describes the last batch only. Requires wavefront
+        compaction to be enabled.
+        """
+        if self._wave is None:
+            raise RuntimeError("Wavefront compaction is not enabled!")
+        return self._wave.counts()
+
     def run(self, i: int) -> list[hp.Command]:
         for _, stage in self.collectStages():
             stage.bindParams(self._pipeline, i)
+        offset = _SceneTargetTracer.TraceParams._batchSize.offset
+        if self._wave is not None:
+            tensor = self._getParamsTensor("TraceParams", i)
+            return self._wave.run(self._pipeline, self._sbt, tensor, offset)
         if self._dispatchIndirect:
             tensor = self._getParamsTensor("TraceParams", i)
-            offset = _SceneTargetTracer.TraceParams._batchSize.offset
             return [
                 self._pipeline.traceRaysIndirect(tensor, offset=offset, **self._sbt)
             ]
@@ -2337,11 +2538,24 @@ class SceneForwardTracer(_SceneTargetTracer):
         Whether to ignore contributions from direct lighting, i.e. paths with
         no scattering. Usefull if a dedicated tracer or estimator for direct
         light contributions is additionally used.
+    wavefrontCompactionSchedule: Sequence[int] | None, default=None
+        If not None, splits the trace loop over several dispatches ("waves"),
+        compacting the paths that are still alive in between. Each entry is the
+        number of trace iterations the corresponding dispatch performs. Entries
+        are clipped so that the total never exceeds `maxPathLength`, and a final
+        wave covering the remainder is appended if needed - the traced path
+        length is therefore the same as without compaction, regardless of the
+        schedule. If None, the whole trace loop runs in a single dispatch.
     enableInvocationReorder: bool, default=False
         Instructs the device to reorder invocations between tracing calls to
         decrease divergence. Can drastically increase performance, but on very
         simple scenes it can also decrease. Requires hardware support for
         shader execution reorder.
+
+    Note
+    ----
+    Wavefront compaction requires the device to support indirect dispatch, i.e.
+    `getEnabledRayTracingFeatures().indirectDispatch` must be `True`.
     """
 
     name = "Scene Forward Tracer"
@@ -2363,6 +2577,7 @@ class SceneForwardTracer(_SceneTargetTracer):
         maxTime: float = float("inf"),
         targetGuide: TargetGuide | None = None,
         disableDirectLighting: bool = False,
+        wavefrontCompactionSchedule: Sequence[int] | None = None,
         enableInvocationReorder: bool = False,
     ) -> None:
         super().__init__(
@@ -2381,6 +2596,7 @@ class SceneForwardTracer(_SceneTargetTracer):
             maxTime=maxTime,
             targetGuide=targetGuide,
             disableDirectLighting=disableDirectLighting,
+            wavefrontCompactionSchedule=wavefrontCompactionSchedule,
             enableInvocationReorder=enableInvocationReorder,
         )
         self._lightSource = source
@@ -2439,11 +2655,24 @@ class SceneBackwardTargetTracer(_SceneTargetTracer):
         Whether to ignore contributions from direct lighting, i.e. paths with
         no scattering. Usefull if a dedicated tracer or estimator for direct
         light contributions is additionally used.
+    wavefrontCompactionSchedule: Sequence[int] | None, default=None
+        If not None, splits the trace loop over several dispatches ("waves"),
+        compacting the paths that are still alive in between. Each entry is the
+        number of trace iterations the corresponding dispatch performs. Entries
+        are clipped so that the total never exceeds `maxPathLength`, and a final
+        wave covering the remainder is appended if needed - the traced path
+        length is therefore the same as without compaction, regardless of the
+        schedule. If None, the whole trace loop runs in a single dispatch.
     enableInvocationReorder: bool, default=False
         Instructs the device to reorder invocations between tracing calls to
         decrease divergence. Can drastically increase performance, but on very
         simple scenes it can also decrease. Requires hardware support for
         shader execution reorder.
+
+    Note
+    ----
+    Wavefront compaction requires the device to support indirect dispatch, i.e.
+    `getEnabledRayTracingFeatures().indirectDispatch` must be `True`.
     """
 
     name = "Scene Backward Target Tracer"
@@ -2466,6 +2695,7 @@ class SceneBackwardTargetTracer(_SceneTargetTracer):
         maxTime: float = float("inf"),
         targetGuide: TargetGuide | None = None,
         disableDirectLighting: bool = False,
+        wavefrontCompactionSchedule: Sequence[int] | None = None,
         enableInvocationReorder: bool = False,
     ) -> None:
         super().__init__(
@@ -2484,6 +2714,7 @@ class SceneBackwardTargetTracer(_SceneTargetTracer):
             maxTime=maxTime,
             targetGuide=targetGuide,
             disableDirectLighting=disableDirectLighting,
+            wavefrontCompactionSchedule=wavefrontCompactionSchedule,
             enableInvocationReorder=enableInvocationReorder,
         )
         self._camera = camera

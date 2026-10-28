@@ -744,24 +744,29 @@ def test_SceneBackwardTracer(
 
 
 @pytest.mark.parametrize(
-    "particle,guide,targetId,inlineVolumeModels,disableDirect,disableScattering,enableReorder",
+    "particle,guide,targetId,inlineVolumeModels,disableDirect,disableScattering,"
+    "wavefrontCompactionSchedule,enableReorder",
     [
-        (True, False, False, True, False, False, False),
-        (True, False, False, False, False, False, False),
-        (True, False, False, False, False, False, True),
-        (True, False, True, True, False, False, False),
-        (False, True, True, True, False, False, False),
-        (False, True, True, False, False, True, False),
-        (False, False, False, True, True, True, False),
-        (False, True, True, False, False, False, False),
-        (False, False, True, True, False, False, False),
-        (False, False, True, False, False, False, False),
-        (False, False, False, False, False, False, False),
-        (False, False, False, False, False, False, True),
-        (False, False, True, False, True, False, False),
-        (False, False, False, True, True, False, False),
-        (False, False, True, False, False, True, False),
-        (False, False, False, True, False, False, False),
+        (True, False, False, True, False, False, None, False),
+        (True, False, False, False, False, False, None, False),
+        (True, False, False, False, False, False, None, True),
+        (True, False, True, True, False, False, None, False),
+        (True, False, False, True, False, False, [1, 2, 3], False),
+        (False, True, True, True, False, False, None, False),
+        (False, True, True, False, False, True, None, False),
+        (False, False, False, True, True, True, None, False),
+        (False, True, True, False, False, False, None, False),
+        (False, False, True, True, False, False, None, False),
+        (False, False, True, False, False, False, None, False),
+        (False, False, False, False, False, False, None, False),
+        (False, False, False, False, False, False, None, True),
+        (False, False, True, False, True, False, None, False),
+        (False, False, False, True, True, False, None, False),
+        (False, False, True, False, False, True, None, False),
+        (False, False, False, True, False, False, None, False),
+        (False, False, True, False, True, False, [4, 8], False),
+        (False, True, True, True, False, False, [1, 2, 3], False),
+        (False, True, False, False, False, False, [4, 8], False),
     ],
 )
 def test_SceneForwardTracer(
@@ -771,6 +776,7 @@ def test_SceneForwardTracer(
     inlineVolumeModels: bool,
     disableDirect: bool,
     disableScattering: bool,
+    wavefrontCompactionSchedule: list[int] | None,
     enableReorder: bool,
 ):
     if not isRayTracingEnabled():
@@ -867,6 +873,7 @@ def test_SceneForwardTracer(
         targetId=1 if targetId else None,
         targetGuide=targetGuide if guide else None,
         disableDirectLighting=disableDirect,
+        wavefrontCompactionSchedule=wavefrontCompactionSchedule,
         enableInvocationReorder=enableReorder,
     )
     # run pipeline
@@ -891,6 +898,23 @@ def test_SceneForwardTracer(
     else:
         assert stats.scattered > 0
 
+    # check wavefront compaction
+    if wavefrontCompactionSchedule is None:
+        assert tracer.wavefrontCompactionSchedule is None
+    else:
+        schedule = tracer.wavefrontCompactionSchedule
+        assert schedule is not None
+        # clipped / extended to cover exactly the whole path
+        # (NEE takes up the last segment, so one trace iteration less)
+        assert sum(schedule) == (MAX_LENGTH - 1 if guide else MAX_LENGTH)
+        counts = tracer.waveCounts()
+        assert len(counts) == len(schedule)
+        # survivors of a wave are a subset of those of the previous one
+        assert counts[0] <= N
+        assert all(a >= b for a, b in zip(counts, counts[1:]))
+        # the last wave reaches the max path length -> no survivors
+        assert counts[-1] == 0
+
     r_hits = np.sqrt(np.square(hits["position"]).sum(-1))
     assert np.all((r_hits <= 1.0) & (r_hits >= r_scale))
     assert np.allclose(np.square(hits["normal"]).sum(-1), 1.0)
@@ -903,16 +927,19 @@ def test_SceneForwardTracer(
 
 
 @pytest.mark.parametrize(
-    "guide,targetId,inlineVolumeModels,disableDirect,disableScattering,enableReordering",
+    "guide,targetId,inlineVolumeModels,disableDirect,disableScattering,"
+    "wavefrontCompactionSchedule,enableReordering",
     [
-        (False, False, False, False, False, False),
-        (True, True, True, False, True, False),
-        (True, True, False, True, False, False),
-        (True, False, True, True, False, False),
-        (False, True, True, True, True, False),
-        (False, False, False, False, True, False),
-        (True, True, False, False, False, True),
-        (False, False, True, True, True, True),
+        (False, False, False, False, False, None, False),
+        (True, True, True, False, True, None, False),
+        (True, True, False, True, False, None, False),
+        (True, False, True, True, False, None, False),
+        (False, True, True, True, True, None, False),
+        (False, False, False, False, True, None, False),
+        (True, True, False, False, False, None, True),
+        (False, False, True, True, True, None, True),
+        (False, False, False, False, False, [1, 2, 3], False),
+        (True, True, True, False, False, [4, 8], False),
     ],
 )
 def test_SceneBackwardTargetTracer(
@@ -921,6 +948,7 @@ def test_SceneBackwardTargetTracer(
     inlineVolumeModels: bool,
     disableDirect: bool,
     disableScattering: bool,
+    wavefrontCompactionSchedule: list[int] | None,
     enableReordering: bool,
 ) -> None:
     if not isRayTracingEnabled():
@@ -1009,6 +1037,7 @@ def test_SceneBackwardTargetTracer(
         maxTime=T_MAX,
         targetGuide=targetGuide if guide else None,
         disableDirectLighting=disableDirect,
+        wavefrontCompactionSchedule=wavefrontCompactionSchedule,
         enableInvocationReorder=enableReordering,
     )
     # run pipeline
@@ -1032,6 +1061,23 @@ def test_SceneBackwardTargetTracer(
         assert stats.scattered == 0
     else:
         assert stats.scattered > 0
+
+    # check wavefront compaction
+    if wavefrontCompactionSchedule is None:
+        assert tracer.wavefrontCompactionSchedule is None
+    else:
+        schedule = tracer.wavefrontCompactionSchedule
+        assert schedule is not None
+        # clipped / extended to cover exactly the whole path
+        # (NEE takes up the last segment, so one trace iteration less)
+        assert sum(schedule) == (MAX_LENGTH - 1 if guide else MAX_LENGTH)
+        counts = tracer.waveCounts()
+        assert len(counts) == len(schedule)
+        # survivors of a wave are a subset of those of the previous one
+        assert counts[0] <= N
+        assert all(a >= b for a, b in zip(counts, counts[1:]))
+        # the last wave reaches the max path length -> no survivors
+        assert counts[-1] == 0
 
     r_hits = np.sqrt(np.square(hits["position"]).sum(-1))
     assert np.all((r_hits <= 1.0) & (r_hits >= r_scale))
