@@ -69,7 +69,8 @@ SurfaceProperties prepareSurface(
         weight *= 1 - q_forbidden          accept with q_allowed/(1 - q_forbidden)
 
     which leaves both the emitted mass q_allowed and the continuation mass
-    1 - q_R - q_T of the loop untouched.
+    1 - q_R - q_T of the loop untouched. This is also used for detectors that allow
+    neither direction.
 
     Particles cannot carry a weight, so they always take the plain
     reflect-and-transmit decision; sampleSurfaceInteraction() then absorbs the
@@ -80,17 +81,11 @@ SurfaceProperties prepareSurface(
     bool weightReflect = false;
     bool weightTransmit = false;
 #else
-    bool weightReflect = canReflect && !canTransmit;
-    bool weightTransmit = !canReflect && canTransmit;
+    bool weightReflect = !canTransmit && canReflect;
+    bool weightTransmit = !canReflect && (canTransmit || isDetector);
 #endif
     //check if we have to compute both reflection and transmission
     bool bothChannels = weightReflect || weightTransmit;
-
-    //nothing may leave the surface at all
-    if (!canReflect && !canTransmit) {
-        props.weight = 0.0;
-        return props;
-    }
 
     //compute the facet-independent micro-facet parameters once
     MicrofacetParams mfParams = prepareMicrofacet(ray.direction, hit);
@@ -99,7 +94,6 @@ SurfaceProperties prepareSurface(
     //Sample micro-facets until one is accepted; in most cases the first one is.
     //The extra iteration is the fall-back after 20 failed attempts: an unrotated
     //facet (the surface normal), accepted as long as any channel can take it.
-    bool valid = false;
     vec3 acceptedNormal = hit.rayNrm;
     for (uint i = 0; i <= 20; i++) {
         bool last = (i == 20);
@@ -173,18 +167,13 @@ SurfaceProperties prepareSurface(
                 accepted = props.weight <= 0.0 || u * survive < qT
                     || (last && qT > 0.0);
             }
+            if (last && !accepted)
+                props.weight = 0.0;
         }
 
-        if (accepted) {
-            valid = true;
+        if (accepted)
             break;
-        }
     }
-
-    //can only happen if the unrotated facet accepts no channel at all
-    if (!valid)
-        props.weight = 0.0;
-
     //Only the picked channel's direction was computed, but a transmit-hit
     //detector reads the transmitted one regardless of what the ray does.
     if (transmitHit && props.doReflect && !bothChannels)
@@ -204,7 +193,7 @@ bool processSurfaceTargetHit(
     //if requested, transmit ray before detecting
     //(this does not change ray contribution)
     bool transmitHit = (hit.flags & MATERIAL_TRANSMIT_HIT_BIT) != 0;
-    if (transmitHit) {
+    if (transmitHit && props.dirTransmitted != vec3(0.0)) {
         transmitRay(ray, hit, props.dirTransmitted);
     }
 
@@ -224,11 +213,9 @@ bool processSurfaceTargetHit(
 
     #else
 
-    //We have a local copy of the ray. Attenuate before detecting: what is not
-    //reflected back is what enters the detector. sampleSurfaceInteraction()
-    //passes props.weight on to the reflected ray, so the complement is exactly
-    //what the surface does not send back.
-    ray.lin_contrib *= (1.0 - (props.doReflect ? props.weight : 0.0));
+    //We have a local copy of the ray. Attenuate before detecting: The weight is
+    //the contribution of the chosen direction.
+    ray.lin_contrib *= props.doReflect ? 1.0 - props.weight : props.weight;
     item = createHit(
         ray,
         hit.objPos,

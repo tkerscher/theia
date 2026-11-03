@@ -1423,6 +1423,7 @@ _ROUGH_DIELECTRIC_PARAMS = [
     (True, False, "T", 40),
     (True, False, "R", 40),
     (True, False, "DR", 40),
+    (True, False, "D", 40),
     (False, True, "TR", 0),
     (False, True, "TR", 20),
     (False, True, "TR", 80),
@@ -1434,6 +1435,7 @@ _ROUGH_DIELECTRIC_PARAMS = [
     (False, False, "T", 40),
     (False, False, "R", 40),
     (False, False, "DR", 40),
+    (False, False, "D", 40),
 ]
 
 
@@ -1489,8 +1491,8 @@ def _test_rough_dielectric_surface(surface, microfacet_sampler, particle,
         assert np.all(result["wavelengthHit"][valid] == lam)
         assert np.all(result["objectIdHit"][valid] == objectId)
     if flags == "D":
+        # neither reflect nor transmit flag -> absorb, but still detect
         assert np.all(result["hitResult"] == EventResultCode.RAY_ABSORBED)
-        return
     absorbed = result["hitResult"] == EventResultCode.RAY_ABSORBED
     assert np.all(result["hitResult"][~absorbed] == EventResultCode.RAY_HIT)
 
@@ -1605,18 +1607,18 @@ def _test_rough_dielectric_surface(surface, microfacet_sampler, particle,
     if flags == "T":
         assert refl.sum() == 0
         if particle and enough_t:
-            absorbed.sum() > 0
+            assert absorbed.sum() > 0
         if not particle and enough_t:
             expected = qT.mean() / (qR.mean() + qT.mean())
             assert cO[~absorbed].sum() / N == pytest.approx(
                 expected * np.mean(c[~absorbed]), rel=rel_err
             )
-        if not particle and not camera and enough_t:
-            # nothing is reflected back, so the detector sees everything
+        if not particle and not camera:
+            # the detector sees what the surface does transmits
             cH = result["contribHit"]
-            assert np.mean(cH[~absorbed]) == pytest.approx(
-                np.mean(c[~absorbed]), rel=rel_err
-            )
+            assert np.allclose(cH[~absorbed], cO[~absorbed])
+        if particle:
+            assert np.all(result["hitSuccess"][trans] == 1)
     if flags == "TR":
         if enough_r:
             assert refl.sum() > 0
@@ -1624,9 +1626,31 @@ def _test_rough_dielectric_surface(surface, microfacet_sampler, particle,
             assert trans.sum() > 0
         assert absorbed.sum() == 0
         if particle:
-            np.all((result["hitSuccess"] == 0) == refl)
+            assert np.all((result["hitSuccess"] == 0) == refl)
         else:
             assert np.allclose(result["contribOut"], c)
+        if not particle and not camera:
+            # unweighted -> the sampled decision alone decides about detection
+            cH = result["contribHit"]
+            assert np.allclose(cH[trans], c[trans])
+            assert np.all(cH[refl] == 0.0)
+    if flags == "DR":
+        if particle:
+            # reflected particles never reached the detector, everything else did
+            assert np.all((result["hitSuccess"] == 0) == refl)
+        else:
+            # the detector sees exactly what is not reflected
+            cH = result["contribHit"]
+            assert np.allclose((cH + cO)[~absorbed], c[~absorbed])
+    if flags == "D" and mask_t.sum() >= 20000:
+        # nothing leaves the surface, but the detector still sees the fraction
+        # that would nhave been transmitted
+        expected = qT.mean() / (qR.mean() + qT.mean())
+        if particle:
+            detected = np.mean(result["hitSuccess"] == 1)
+        else:
+            detected = np.mean(result["contribHit"]) / np.mean(c)
+        assert detected == pytest.approx(expected, rel=rel_err)
 
 
 @pytest.mark.parametrize("particle,camera,flags,angle", _ROUGH_DIELECTRIC_PARAMS)

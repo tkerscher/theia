@@ -24,7 +24,6 @@ The facets always come from the Gaussian slope-angle distribution.
 struct SurfaceProperties {
     vec3 dirOut;        ///< direction in which the walk left the micro surface
     bool doReflect;     ///< true if the walk left on the side it came from
-    bool valid;         ///< false if the walk failed and the ray is absorbed
 };
 
 //tell tracer we want to do some prep work
@@ -42,7 +41,6 @@ SurfaceProperties prepareSurface(
     SurfaceProperties props;
     props.dirOut = vec3(0.0);
     props.doReflect = false;
-    props.valid = false;
 
     //Which reflection lobe to use is drawn at every reflection event.
     //
@@ -93,7 +91,7 @@ SurfaceProperties prepareSurface(
             vec3 dirRefracted = refract(dir, microfacetNormal, nIn / nOut);
             //A zero direction marks total internal reflection, which the Fresnel
             //coin above should have excluded. Due to finite numerical precision
-            //that edge is a bit fuzzy -> mark as absorbed.
+            //that edge is a bit fuzzy. They ray will be marked as absorbed later.
             if (dirRefracted == vec3(0.0))
                 return props;
             //the ray went through the facet and is now on the other side
@@ -102,10 +100,8 @@ SurfaceProperties prepareSurface(
         }
 
         //the walk ends as soon as the direction leaves the micro surface
-        if (dot(dir, farSide ? -hit.rayNrm : hit.rayNrm) > 0.0) {
-            props.valid = true;
+        if (dot(dir, farSide ? -hit.rayNrm : hit.rayNrm) > 0.0)
             break;
-        }
     }
 
     props.dirOut = dir;
@@ -123,28 +119,23 @@ bool processSurfaceTargetHit(
     out HitItem item,
     uint idx, inout uint dim
 ) {
-    /*
-    A walk that continues as a reflection never reached the detector, everything
-    else did: a transmission, or an outcome the flags absorb.
-    */
-    bool canReflect = (hit.flags & NO_REFLECT_BIT) == 0;
-    if (props.valid && props.doReflect && canReflect)
-        return false;
-
     //if requested, transmit ray before detecting
     //(this does not change ray contribution)
     bool transmitHit = (hit.flags & MATERIAL_TRANSMIT_HIT_BIT) != 0;
-    if (transmitHit && props.valid && !props.doReflect) {
+    if (transmitHit && !props.doReflect && props.dirOut != vec3(0.0)) {
         transmitRay(ray, hit, props.dirOut);
     }
-    item = createHit(
-        ray,
-        hit.objPos,
-        hit.objNrm,
-        objectId,
-        hit.worldToObj
-    );
-    return true;
+
+    if (!props.doReflect) {
+        item = createHit(
+            ray,
+            hit.objPos,
+            hit.objNrm,
+            objectId,
+            hit.worldToObj
+        );
+    }
+    return !props.doReflect;
 }
 
 ResultCode sampleSurfaceInteraction(
@@ -153,9 +144,6 @@ ResultCode sampleSurfaceInteraction(
     const SurfaceProperties props,
     uint idx, inout uint dim
 ) {
-    if (!props.valid)
-        return RESULT_CODE_RAY_ABSORBED;
-
     //fetch material flags
     bool isDetector = (hit.flags & MATERIAL_DETECTOR_BIT) != 0;
     bool canReflect = (hit.flags & NO_REFLECT_BIT) == 0;
@@ -170,7 +158,9 @@ ResultCode sampleSurfaceInteraction(
         result = reflectRay(ray, hit, props.dirOut);
     }
     else {
-        if (!canTransmit)
+        //due to finite numerical precision we might run into total internal
+        //reflection -> mark as absorbed
+        if (!canTransmit || props.dirOut == vec3(0.0))
             return RESULT_CODE_RAY_ABSORBED;
         result = transmitRay(ray, hit, props.dirOut);
     }
