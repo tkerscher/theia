@@ -1,6 +1,8 @@
 //only specular scattering
 #define SURFACE_MODEL_SPECULAR
 
+#include "surface/fresnel.glsl"
+
 struct SurfaceProperties {
     float reflectance;
     float n_i;
@@ -20,17 +22,9 @@ SurfaceProperties prepareSurface(
     float n_i = lookUpMediaTable1D(REFRACTIVE_INDEX, ray.mediumIdx, ray.wavelength, 1.0);
     float n_o = lookUpMediaTable1D(REFRACTIVE_INDEX, hit.otherMediumIdx, ray.wavelength, 1.0);
 
-    //calculate outgoing angle (Snell's law)
+    //evaluate Fresnel reflectance at the surface normal
     float cos_i = abs(dot(ray.direction, hit.rayNrm));
-    float sin_i = sqrt(max(1.0 - cos_i*cos_i, 0.0));
-    float sin_o = sin_i * n_i / n_o;
-    //by clamping cos_o to 0.0 we accurately handle total internal reflection
-    float cos_o = sqrt(max(1.0 - sin_o*sin_o, 0.0));
-
-    //evaluate Fresnel terms for reflectance
-    float r_s = (n_i * cos_i - n_o * cos_o) / (n_i * cos_i + n_o * cos_o);
-    float r_p = (n_o * cos_i - n_i * cos_o) / (n_o * cos_i + n_i * cos_o);
-    float r = 0.5 * (r_s*r_s + r_p*r_p);
+    float r = fresnelReflectance(cos_i, n_i, n_o);
 
     //especially for particles it is important to make the same decision in
     //processSurfaceTargetHit() and sampleSurfaceInteraction() to ensure we
